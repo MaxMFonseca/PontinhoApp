@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pontinho</string>
+    <string name="home_title">Início</string>
+    <string name="home_placeholder">O marcador manual está pronto.</string>
+</resources>
