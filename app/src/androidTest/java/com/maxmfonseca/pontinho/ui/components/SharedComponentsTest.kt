@@ -1,0 +1,285 @@
+package com.maxmfonseca.pontinho.ui.components
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.test.platform.app.InstrumentationRegistry
+import com.maxmfonseca.pontinho.R
+import com.maxmfonseca.pontinho.settings.ThemePreference
+import com.maxmfonseca.pontinho.ui.theme.Coral
+import com.maxmfonseca.pontinho.ui.theme.Emerald
+import com.maxmfonseca.pontinho.ui.theme.EmeraldLight
+import com.maxmfonseca.pontinho.ui.theme.Navy
+import com.maxmfonseca.pontinho.ui.theme.NavySurface
+import com.maxmfonseca.pontinho.ui.theme.OffWhite
+import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
+import com.maxmfonseca.pontinho.ui.theme.SkyBlue
+import com.maxmfonseca.pontinho.ui.theme.WarmYellow
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+
+class SharedComponentsTest {
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    @Test
+    fun roundStatusesExposeSymbolsAndLocalizedDescriptions() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent {
+            androidx.compose.foundation.layout.Column {
+                RoundStatus(RoundStatusKind.WINNER)
+                RoundStatus(RoundStatusKind.LOSS)
+                RoundStatus(RoundStatusKind.PENDING)
+                RoundStatus(RoundStatusKind.NOT_PARTICIPATING)
+            }
+        }
+
+        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_winner)).assertTextEquals("✓")
+        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_loss)).assertTextEquals("×")
+        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_pending)).assertTextEquals("◷")
+        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_not_participating)).assertTextEquals("−")
+    }
+
+    @Test
+    fun pontinhoThemesExposeOnlyApprovedPaletteColors() {
+        var lightColors = emptyList<Int>()
+        var darkColors = emptyList<Int>()
+        composeRule.setContent {
+            Column {
+                PontinhoTheme(themePreference = ThemePreference.LIGHT) {
+                    val scheme = MaterialTheme.colorScheme
+                    SideEffect { lightColors = scheme.visibleRoleColors() }
+                    RoundStatus(RoundStatusKind.PENDING)
+                }
+                PontinhoTheme(themePreference = ThemePreference.DARK) {
+                    val scheme = MaterialTheme.colorScheme
+                    SideEffect { darkColors = scheme.visibleRoleColors() }
+                    RoundStatus(RoundStatusKind.NOT_PARTICIPATING)
+                }
+            }
+        }
+
+        val approved = setOf(
+            Emerald,
+            EmeraldLight,
+            WarmYellow,
+            Coral,
+            SkyBlue,
+            OffWhite,
+            Navy,
+            NavySurface,
+        ).mapTo(mutableSetOf()) { it.toArgb() }
+        composeRule.runOnIdle {
+            assertTrue("Light scheme leaked colors: ${lightColors.filterNot(approved::contains)}", lightColors.all(approved::contains))
+            assertTrue("Dark scheme leaked colors: ${darkColors.filterNot(approved::contains)}", darkColors.all(approved::contains))
+        }
+    }
+
+    @Test
+    fun pendingRoundStatusRendersTheConfiguredPaletteSurfaceVariant() {
+        var lightExpected = 0
+        var darkExpected = 0
+        composeRule.setContent {
+            Column {
+                PontinhoTheme(themePreference = ThemePreference.LIGHT) {
+                    val expected = MaterialTheme.colorScheme.surfaceVariant.toArgb()
+                    SideEffect { lightExpected = expected }
+                    RoundStatus(RoundStatusKind.PENDING, Modifier.testTag("light_pending_status"))
+                }
+                PontinhoTheme(themePreference = ThemePreference.DARK) {
+                    val expected = MaterialTheme.colorScheme.surfaceVariant.toArgb()
+                    SideEffect { darkExpected = expected }
+                    RoundStatus(RoundStatusKind.PENDING, Modifier.testTag("dark_pending_status"))
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("light_pending_status").assert(
+            SemanticsMatcher.expectValue(RoundStatusContainerColorKey, lightExpected),
+        )
+        composeRule.onNodeWithTag("dark_pending_status").assert(
+            SemanticsMatcher.expectValue(RoundStatusContainerColorKey, darkExpected),
+        )
+    }
+
+    @Test
+    fun playerIdentityAndActionStayOutsideScrollableRoundHistory() {
+        composeRule.setContent {
+            PlayerCard(
+                playerName = "Ana",
+                total = 42,
+                isDealer = true,
+                history = (1..16).map { PlayerRoundHistory(it, RoundStatusKind.LOSS, it * 3) },
+                onAddScore = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("player_identity").assertIsDisplayed()
+        composeRule.onNodeWithText("Ana").assertIsDisplayed()
+        composeRule.onNodeWithTag("player_round_history").assert(hasScrollAction())
+        composeRule.onNodeWithTag("player_action").assertIsDisplayed().assertHasClickAction()
+    }
+
+    @Test
+    fun longPlayerNameCannotOverlapReservedTotalAtLargeFontScale() {
+        val longName = "Alexandre Maximiliano de Albuquerque e Silva"
+        composeRule.setContent {
+            val currentDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(currentDensity.density, fontScale = 2f),
+            ) {
+                Box(Modifier.width(360.dp)) {
+                    PlayerCard(
+                        playerName = longName,
+                        total = 99999,
+                        isDealer = false,
+                        history = listOf(PlayerRoundHistory(1, RoundStatusKind.PENDING, 88)),
+                        onAddScore = {},
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("player_name").assertIsDisplayed().assertTextEquals(longName)
+        composeRule.onNodeWithTag("player_total").assertIsDisplayed().assertTextEquals("99999")
+        composeRule.onNodeWithTag("player_round_history").assertIsDisplayed().assert(hasScrollAction())
+        composeRule.onNodeWithTag("player_action").assertIsDisplayed().assertHasClickAction()
+        val nameBounds = composeRule.onNodeWithTag("player_name").fetchSemanticsNode().boundsInRoot
+        val totalNode = composeRule.onNodeWithTag("player_total").fetchSemanticsNode()
+        val totalBounds = totalNode.boundsInRoot
+        val nameLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        val totalLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        assertTrue(
+            composeRule.onNodeWithTag("player_name").fetchSemanticsNode()
+                .config[SemanticsActions.GetTextLayoutResult].action?.invoke(nameLayouts) == true,
+        )
+        assertTrue(
+            totalNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(totalLayouts) == true,
+        )
+        val nameLayout = nameLayouts.single()
+        val totalLayout = totalLayouts.single()
+        assertTrue("Name and total overlap: $nameBounds vs $totalBounds", nameBounds.right <= totalBounds.left)
+        assertTrue("Long player name should ellipsize", nameLayout.isLineEllipsized(0))
+        assertFalse("Player total was ellipsized", totalLayout.isLineEllipsized(0))
+        assertFalse(
+            "Player total overflowed its measured width: layout=${totalLayout.size}, node=$totalBounds",
+            totalLayout.didOverflowWidth,
+        )
+        assertFalse(
+            "Player total overflowed visually: layout=${totalLayout.size}, node=$totalBounds",
+            totalLayout.hasVisualOverflow,
+        )
+        assertTrue(
+            "Total layout exceeds its node bounds: ${totalLayout.size} vs $totalBounds",
+            totalLayout.size.width <= totalBounds.width,
+        )
+    }
+
+    @Test
+    fun playerNameDialogRequestsFocusOnEntry() {
+        composeRule.setContent {
+            PlayerNameDialog(value = "", onValueChange = {}, onConfirm = {}, onDismiss = {})
+        }
+
+        composeRule.onNodeWithTag("player_name_input").assertIsFocused()
+    }
+
+    @Test
+    fun scoreDialogRequestsFocusAndAcceptsExplicitZero() {
+        var confirmed: Int? = null
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent {
+            ScoreDialog(
+                playerName = "Ana",
+                roundNumber = 2,
+                indicatorLabel = "A vermelho",
+                value = "0",
+                onValueChange = {},
+                onConfirm = { confirmed = it },
+                onDismiss = {},
+                onWentOut = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("score_input").assertIsFocused()
+        composeRule.onNodeWithText(context.getString(R.string.confirm)).performClick()
+        composeRule.runOnIdle { assertEquals(0, confirmed) }
+    }
+}
+
+private fun ColorScheme.visibleRoleColors(): List<Int> = listOf(
+    primary,
+    onPrimary,
+    primaryContainer,
+    onPrimaryContainer,
+    inversePrimary,
+    secondary,
+    onSecondary,
+    secondaryContainer,
+    onSecondaryContainer,
+    tertiary,
+    onTertiary,
+    tertiaryContainer,
+    onTertiaryContainer,
+    background,
+    onBackground,
+    surface,
+    onSurface,
+    surfaceVariant,
+    onSurfaceVariant,
+    surfaceTint,
+    inverseSurface,
+    inverseOnSurface,
+    error,
+    onError,
+    errorContainer,
+    onErrorContainer,
+    outline,
+    outlineVariant,
+    scrim,
+    surfaceBright,
+    surfaceDim,
+    surfaceContainer,
+    surfaceContainerHigh,
+    surfaceContainerHighest,
+    surfaceContainerLow,
+    surfaceContainerLowest,
+    primaryFixed,
+    primaryFixedDim,
+    onPrimaryFixed,
+    onPrimaryFixedVariant,
+    secondaryFixed,
+    secondaryFixedDim,
+    onSecondaryFixed,
+    onSecondaryFixedVariant,
+    tertiaryFixed,
+    tertiaryFixedDim,
+    onTertiaryFixed,
+    onTertiaryFixedVariant,
+).map { it.toArgb() }

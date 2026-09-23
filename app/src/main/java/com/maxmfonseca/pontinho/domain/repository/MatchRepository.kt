@@ -5,7 +5,12 @@ import kotlinx.coroutines.flow.Flow
 import java.time.Instant
 import java.time.LocalDate
 
-data class CreateMatch(val playerIds: List<PlayerId>)
+data class CreateMatchPlayer(
+    val draftId: String,
+    val playerId: PlayerId? = null,
+    val displayName: String,
+)
+data class CreateMatch(val creationToken: String, val players: List<CreateMatchPlayer>)
 data class AddParticipant(val matchId: MatchId, val playerId: PlayerId, val rosterOrder: Int)
 data class ReorderParticipants(val matchId: MatchId, val participantIds: List<ParticipantId>)
 data class ChooseIndicator(val matchId: MatchId, val indicator: Indicator)
@@ -56,7 +61,10 @@ data class DaySummary(val localDate: LocalDate, val matches: List<MatchSnapshot>
     val activeMatchCount: Int get() = matches.count { !it.isFinished }
 }
 
-/** Writes commit before returning. Invalid commands throw IllegalArgumentException.
+/** Writes commit before returning. [createMatch] atomically resolves or creates players,
+ * snapshots the ordered roster, and creates the match. Its creation token is durably
+ * idempotent for the same payload and is rejected for a different payload.
+ * Invalid commands throw IllegalArgumentException.
  * Round-rule rejections preserve their typed RoundRuleException.failure.
  */
 interface MatchRepository {

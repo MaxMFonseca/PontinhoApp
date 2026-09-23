@@ -16,6 +16,9 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 
 class RoomMatchRepository(
@@ -47,19 +50,49 @@ class RoomMatchRepository(
     }.distinctUntilChanged()
 
     override suspend fun createMatch(command: CreateMatch): MatchId = db.withTransaction {
-        require(command.playerIds.size >= 2) { "At least two players are required" }
-        require(command.playerIds.distinct().size == command.playerIds.size) { "Duplicate player identity" }
-        val players = command.playerIds.map { requireNotNull(db.playerDao().get(it.value)) { "Unknown player" } }
-        require(players.none { it.archivedAt != null }) { "Archived player" }
+        require(command.creationToken.isNotBlank()) { "Creation token must not be blank" }
+        require(command.players.size >= 2) { "At least two players are required" }
+        require(command.players.map { it.draftId }.all { it.isNotBlank() }) { "Draft identity must not be blank" }
+        require(command.players.map { it.draftId }.distinct().size == command.players.size) { "Duplicate draft identity" }
+        val normalized = command.players.map { player ->
+            player.copy(displayName = player.displayName.trim().also { require(it.isNotEmpty()) { "Player name must not be blank" } })
+        }
+        val existingIds = normalized.mapNotNull { it.playerId }
+        require(existingIds.distinct().size == existingIds.size) { "Duplicate player identity" }
+        val fingerprint = creationFingerprint(normalized)
+        matches.getByCreationToken(command.creationToken)?.let { existing ->
+            require(existing.creationFingerprint == fingerprint) { "Creation token was already used for a different command" }
+            return@withTransaction MatchId(existing.id)
+        }
         val now = clock.instant()
         val zone = clock.zone
         val matchId = uuid()
+        val players = normalized.map { requested ->
+            val id = requested.playerId?.value ?: stablePlayerId(command.creationToken, requested.draftId)
+            val old = db.playerDao().get(id)
+            if (requested.playerId != null) {
+                requireNotNull(old) { "Unknown player" }
+                require(old.archivedAt == null) { "Archived player" }
+            } else {
+                require(old == null) { "Generated player identity collision" }
+            }
+            PlayerEntity(
+                id = id,
+                displayName = requested.displayName,
+                normalizedName = requested.displayName.lowercase(Locale.ROOT),
+                createdAt = old?.createdAt ?: now.toEpochMilli(),
+                updatedAt = now.toEpochMilli(),
+                archivedAt = old?.archivedAt,
+            ).also { db.playerDao().upsert(it) }
+        }
         val roster = players.mapIndexed { index, player ->
             MatchParticipantEntity(uuid(), matchId, player.id, player.displayName, index, 1, now.toEpochMilli())
         }
         matches.insertMatch(MatchEntity(
             matchId, now.atZone(zone).toLocalDate().toString(), zone.id,
             now.toEpochMilli(), now.toEpochMilli(), dealerParticipantId = roster.first().id,
+            creationToken = command.creationToken,
+            creationFingerprint = fingerprint,
         ))
         roster.forEach { matches.insertParticipant(it) }
         MatchId(matchId)
@@ -325,4 +358,23 @@ class RoomMatchRepository(
     }.toString()
 
     private fun uuid(): String = UUID.randomUUID().toString()
+
+    private fun stablePlayerId(token: String, draftId: String): String = UUID.nameUUIDFromBytes(
+        "$token\u0000$draftId".toByteArray(StandardCharsets.UTF_8),
+    ).toString()
+
+    private fun creationFingerprint(players: List<CreateMatchPlayer>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        players.forEach { player ->
+            listOf(player.draftId, player.playerId?.value.orEmpty(), player.displayName).forEach { value ->
+                val bytes = value.toByteArray(StandardCharsets.UTF_8)
+                digest.update(byteArrayOf(
+                    (bytes.size ushr 24).toByte(), (bytes.size ushr 16).toByte(),
+                    (bytes.size ushr 8).toByte(), bytes.size.toByte(),
+                ))
+                digest.update(bytes)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 }

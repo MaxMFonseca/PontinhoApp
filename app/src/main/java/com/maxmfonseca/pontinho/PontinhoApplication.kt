@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho
 
 import android.app.Application
 import com.maxmfonseca.pontinho.di.AppContainer
+import com.maxmfonseca.pontinho.di.DefaultAppContainer
 
 class PontinhoApplication : Application() {
     lateinit var container: AppContainer
@@ -9,6 +10,6 @@ class PontinhoApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        container = AppContainer()
+        container = DefaultAppContainer(applicationContext)
     }
 }

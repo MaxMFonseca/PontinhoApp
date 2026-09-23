@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "fd25677f1df9beb86a42e84ebaaa9faf",
+    "identityHash": "97a8b490f4985a32c9632602480bed3b",
     "entities": [
       {
         "tableName": "players",
@@ -53,7 +53,7 @@
       },
       {
         "tableName": "matches",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `localDate` TEXT NOT NULL, `timeZoneId` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastPlayedAt` INTEGER NOT NULL, `status` TEXT NOT NULL, `finishedAt` INTEGER, `dealerParticipantId` TEXT NOT NULL, `resultRevision` INTEGER NOT NULL, `acknowledgedResultRevision` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `localDate` TEXT NOT NULL, `timeZoneId` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastPlayedAt` INTEGER NOT NULL, `status` TEXT NOT NULL, `finishedAt` INTEGER, `dealerParticipantId` TEXT NOT NULL, `resultRevision` INTEGER NOT NULL, `acknowledgedResultRevision` INTEGER NOT NULL, `creationToken` TEXT, `creationFingerprint` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -113,6 +113,16 @@
             "columnName": "acknowledgedResultRevision",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "creationToken",
+            "columnName": "creationToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "creationFingerprint",
+            "columnName": "creationFingerprint",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -120,7 +130,18 @@
           "columnNames": [
             "id"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_matches_creationToken",
+            "unique": true,
+            "columnNames": [
+              "creationToken"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_matches_creationToken` ON `${TABLE_NAME}` (`creationToken`)"
+          }
+        ]
       },
       {
         "tableName": "participants",
@@ -709,7 +730,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'fd25677f1df9beb86a42e84ebaaa9faf')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '97a8b490f4985a32c9632602480bed3b')"
     ]
   }
 }

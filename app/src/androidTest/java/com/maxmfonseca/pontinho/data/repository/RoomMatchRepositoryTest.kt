@@ -31,8 +31,12 @@ class RoomMatchRepositoryTest {
     @After fun close() { db.close() }
 
     private suspend fun create(count: Int = 2): MatchId {
-        val ids = (1..count).map { players.upsert(UpsertPlayer(displayName = "Player $it")) }
-        return repo.createMatch(CreateMatch(ids))
+        return repo.createMatch(CreateMatch(
+            creationToken = java.util.UUID.randomUUID().toString(),
+            players = (1..count).map { index ->
+                CreateMatchPlayer("draft-$index", displayName = "Player $index")
+            },
+        ))
     }
     private suspend fun snapshot(id: MatchId) = repo.observeMatch(id).first()!!
     private val preparations = mutableMapOf<RoundId, PreparedRound>()
@@ -51,21 +55,77 @@ class RoomMatchRepositoryTest {
         try { block(); fail("Expected rejection") } catch (_: IllegalArgumentException) { }
     }
 
+    @Test fun createIsAtomicAcrossIdentityMatchAndParticipantWrites() = runBlocking {
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_atomic_create BEFORE INSERT ON matches " +
+                "BEGIN SELECT RAISE(ABORT, 'injected match failure'); END",
+        )
+
+        try {
+            repo.createMatch(CreateMatch(
+                creationToken = "atomic-token",
+                players = listOf(
+                    CreateMatchPlayer("new-a", displayName = "Same"),
+                    CreateMatchPlayer("new-b", displayName = "Same"),
+                ),
+            ))
+            fail("Expected SQLite failure")
+        } catch (_: android.database.sqlite.SQLiteException) { }
+
+        assertTrue(db.playerDao().players().isEmpty())
+        assertTrue(db.matchDao().matches().isEmpty())
+        assertTrue(db.matchDao().allParticipants().isEmpty())
+    }
+
+    @Test fun createTokenIsDurablyIdempotentAndRejectsConflictingPayload() = runBlocking {
+        val command = CreateMatch(
+            creationToken = "durable-token",
+            players = listOf(
+                CreateMatchPlayer("equal-a", displayName = "Same"),
+                CreateMatchPlayer("equal-b", displayName = "Same"),
+            ),
+        )
+
+        val first = repo.createMatch(command)
+        val retry = RoomMatchRepository(db, clock).createMatch(command)
+
+        assertEquals(first, retry)
+        assertEquals(1, db.matchDao().matches().size)
+        assertEquals(2, db.playerDao().players().size)
+        assertEquals(2, db.matchDao().allParticipants().size)
+        assertEquals(2, snapshot(first).participants.map { it.playerId }.distinct().size)
+        rejected {
+            repo.createMatch(command.copy(
+                players = command.players.mapIndexed { index, player ->
+                    if (index == 0) player.copy(displayName = "Changed") else player
+                },
+            ))
+        }
+        assertEquals(1, db.matchDao().matches().size)
+        assertEquals(listOf("Same", "Same"), snapshot(first).participants.map { it.displayName })
+    }
+
     @Test fun createReuseAndPlayerRenameKeepIdentityAndHistoricalNameSnapshots() = runBlocking {
         val a = players.upsert(UpsertPlayer(displayName = " Ana "))
         val b = players.upsert(UpsertPlayer(displayName = "Ana"))
         assertNotEquals(a, b)
-        val id = repo.createMatch(CreateMatch(listOf(a, b)))
+        val id = repo.createMatch(CreateMatch("rename-first", listOf(
+            CreateMatchPlayer("a", a, "Ana"), CreateMatchPlayer("b", b, "Ana"),
+        )))
         players.upsert(UpsertPlayer(a, "Bea"))
         val saved = snapshot(id)
         assertEquals(listOf("Ana", "Ana"), saved.participants.map { it.displayName })
         assertEquals(saved.participants.first().id, saved.dealerParticipantId)
         assertTrue(saved.rounds.isEmpty())
-        val reused = repo.createMatch(CreateMatch(saved.participants.map { it.playerId }.reversed()))
+        val reused = repo.createMatch(CreateMatch("rename-second", saved.participants.reversed().mapIndexed { index, participant ->
+            CreateMatchPlayer("reused-$index", participant.playerId, participant.displayName)
+        }))
         assertEquals(listOf(b, a), snapshot(reused).participants.map { it.playerId })
-        assertEquals(listOf("Ana", "Bea"), snapshot(reused).participants.map { it.displayName })
+        assertEquals(listOf("Ana", "Ana"), snapshot(reused).participants.map { it.displayName })
         assertEquals(2, players.observePlayers().first().size)
-        rejected { repo.createMatch(CreateMatch(listOf(a, a))) }
+        rejected { repo.createMatch(CreateMatch("duplicate", listOf(
+            CreateMatchPlayer("a", a, "Ana"), CreateMatchPlayer("b", a, "Ana"),
+        ))) }
         rejected { players.upsert(UpsertPlayer(displayName = "  ")) }
         assertEquals(2, db.matchDao().matches().size)
     }

@@ -1,8 +1,12 @@
 package com.maxmfonseca.pontinho.data.local.entity
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "matches")
+@Entity(
+    tableName = "matches",
+    indices = [Index(value = ["creationToken"], unique = true)],
+)
 data class MatchEntity(
     @PrimaryKey val id: String,
     val localDate: String,
@@ -14,4 +18,6 @@ data class MatchEntity(
     val dealerParticipantId: String,
     val resultRevision: Long = 0,
     val acknowledgedResultRevision: Long = 0,
+    val creationToken: String? = null,
+    val creationFingerprint: String? = null,
 )

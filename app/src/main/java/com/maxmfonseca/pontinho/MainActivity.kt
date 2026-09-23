@@ -8,8 +8,9 @@ import com.maxmfonseca.pontinho.ui.PontinhoApp
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val container = (application as PontinhoApplication).container
         setContent {
-            PontinhoApp()
+            PontinhoApp(container)
         }
     }
 }
