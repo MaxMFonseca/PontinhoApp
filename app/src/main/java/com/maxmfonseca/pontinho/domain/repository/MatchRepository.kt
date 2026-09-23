@@ -12,6 +12,7 @@ data class CreateMatchPlayer(
 )
 data class CreateMatch(val creationToken: String, val players: List<CreateMatchPlayer>)
 data class AddParticipant(val matchId: MatchId, val playerId: PlayerId, val rosterOrder: Int)
+data class AddPlayerToMatch(val matchId: MatchId, val operationToken: String, val displayName: String)
 data class ReorderParticipants(val matchId: MatchId, val participantIds: List<ParticipantId>)
 data class ChooseIndicator(val matchId: MatchId, val indicator: Indicator)
 /** Transient picker result. Discarding it changes no persistent match state. */
@@ -72,6 +73,13 @@ interface MatchRepository {
     fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?>
     suspend fun createMatch(command: CreateMatch): MatchId
     suspend fun addParticipant(command: AddParticipant)
+    /** Atomically creates a named player and appends their participation between rounds.
+     * The token is scoped to this match: replay with the same trimmed name returns the
+     * original participant without writes, even if the roster or match has since changed.
+     * A different name for a committed token is rejected. Failure/cancellation before
+     * commit leaves neither player nor participant. Different tokens mean distinct players.
+     */
+    suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId
     suspend fun reorderParticipants(command: ReorderParticipants)
     /** Reads and prepares the next round; only its first score/designation persists it. */
     suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound

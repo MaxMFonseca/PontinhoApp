@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +33,12 @@ import com.maxmfonseca.pontinho.ui.setup.MatchSetupEvent
 import com.maxmfonseca.pontinho.ui.setup.MatchSetupScreen
 import com.maxmfonseca.pontinho.ui.setup.MatchSetupViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import com.maxmfonseca.pontinho.domain.model.MatchId
+import com.maxmfonseca.pontinho.ui.match.MatchViewModel
+import com.maxmfonseca.pontinho.ui.match.MatchScreen
+import com.maxmfonseca.pontinho.ui.match.MatchEvent
 
 @Composable
 fun PontinhoNavHost(
@@ -101,9 +108,39 @@ fun PontinhoNavHost(
                 onCreateMatch = setupViewModel::createMatch,
             )
         }
-        composable(Destination.Match.route) { RoutePlaceholder(R.string.route_match, "match_root") }
+        composable(Destination.Match.route, arguments = listOf(navArgument(Destination.Match.MATCH_ID) { type = NavType.StringType })) { entry ->
+            // Navigation decodes the URI segment once. Decoding again would corrupt
+            // literal percent escapes and plus signs in a valid match identity.
+            val matchId = MatchId(requireNotNull(entry.arguments?.getString(Destination.Match.MATCH_ID)))
+            val matchViewModel: MatchViewModel = viewModel(factory = viewModelFactory {
+                initializer { MatchViewModel(matchId, container.matchRepository) }
+            })
+            val state by matchViewModel.uiState.collectAsStateWithLifecycle()
+            LaunchedEffect(matchViewModel) {
+                matchViewModel.events.collect { event ->
+                    when (event) {
+                        is MatchEvent.OpenResults -> navController.navigate(Destination.Results.createRoute(event.matchId.value)) {
+                            launchSingleTop = true
+                        }
+                    }
+                }
+            }
+            MatchScreen(state, { navController.popBackStack() }, matchViewModel::addScore,
+                matchViewModel::selectIndicator, matchViewModel::confirmIndicator, matchViewModel::dismissDialog,
+                matchViewModel::updateScore, matchViewModel::confirmScore, matchViewModel::wentOut, matchViewModel::viewResults,
+                onAddPlayer = matchViewModel::openAddPlayer, onPlayerNameChange = matchViewModel::updatePlayerName,
+                onConfirmPlayerName = matchViewModel::confirmPlayerName, onMovePlayer = matchViewModel::movePlayer,
+                onEditScore = matchViewModel::editScore, onDeleteScore = matchViewModel::deleteScore)
+        }
         composable(Destination.DayHistory.route) { RoutePlaceholder(R.string.route_day_history, "day_history_root") }
-        composable(Destination.Results.route) { RoutePlaceholder(R.string.route_results, "results_root") }
+        composable(Destination.Results.route, arguments = listOf(navArgument(Destination.Results.MATCH_ID) { type = NavType.StringType })) {
+            Column(Modifier.fillMaxSize().padding(24.dp).testTag("results_root"),
+                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(stringResource(R.string.route_results), style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(R.string.match_finished), style = MaterialTheme.typography.headlineLarge)
+                TextButton(onClick = { navController.popBackStack() }) { Text(stringResource(R.string.match_back)) }
+            }
+        }
         composable(Destination.Settings.route) { RoutePlaceholder(R.string.route_settings, "settings_root") }
         composable(Destination.Appearance.route) { RoutePlaceholder(R.string.route_appearance, "appearance_root") }
         composable(Destination.Language.route) { RoutePlaceholder(R.string.route_language, "language_root") }

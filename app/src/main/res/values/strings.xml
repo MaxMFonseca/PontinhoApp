@@ -1,6 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Pontinho</string>
+    <string name="match_back">Voltar</string>
+    <string name="match_round">Rodada %1$d</string>
+    <string name="match_round_short">R%1$d</string>
+    <string name="match_add_score">Adicionar pontos de %1$s</string>
+    <string name="match_finished">Partida encerrada</string>
+    <string name="match_view_result">Ver resultado</string>
+    <string name="match_missing">Partida não encontrada.</string>
+    <string name="match_save_error">Não foi possível salvar. Tente novamente.</string>
+    <string name="match_late_player_help">Começa com zero pontos. Nas rodadas anteriores, aparece em cinza com sinal de menos, pois não participou. Participa a partir da próxima rodada.</string>
+    <string name="match_edit_score">Corrigir pontos de %1$s na rodada %2$d</string>
+    <string name="player_drag">Arrastar para reordenar %1$s</string>
+    <string name="player_edit">Editar nome de %1$s</string>
+    <string name="score_delete">Excluir registro</string>
+    <string name="score_correction_help">A correção recalcula os totais e pode reabrir a partida. Excluir reabre a rodada; qualquer rodada em andamento fica pausada até a correção terminar.</string>
+    <string name="score_winner_read_only">O zero do vencedor é automático. Para alterar, exclua a marcação.</string>
+    <string name="match_correcting_round">Corrigindo a rodada %1$d</string>
+    <string name="match_paused_rounds">Rodadas pausadas: %1$s. Serão retomadas após a correção, se a partida continuar.</string>
+    <string name="score_invalid">Digite um número inteiro de 0 a 2147483647.</string>
+    <string name="indicator_title">Carta que define o coringa</string>
+    <string name="indicator_red">vermelho</string>
+    <string name="indicator_black">preto</string>
+    <string name="indicator_preview">%1$s %2$s → %3$s e %4$s valem 20</string>
     <string name="home_title">Início</string>
     <string name="home_new_match">Nova partida</string>
     <string name="home_learn">Aprenda a jogar</string>
@@ -13,7 +35,6 @@
     <plurals name="home_active_match_count"><item quantity="one">%1$d em andamento</item><item quantity="other">%1$d em andamento</item></plurals>
     <string name="route_placeholder">Esta área será implementada em uma próxima etapa.</string>
     <string name="route_setup">Nova partida</string>
-    <string name="route_match">Partida</string>
     <string name="route_day_history">Histórico do dia</string>
     <string name="route_results">Resultado</string>
     <string name="route_settings">Configurações</string>
@@ -24,6 +45,7 @@
     <string name="round_status_winner">Vencedor da rodada</string>
     <string name="round_status_loss">Pontuação registrada</string>
     <string name="round_status_pending">Aguardando o fim da rodada</string>
+    <string name="round_status_empty">Pontos ainda não registrados</string>
     <string name="round_status_not_participating">Não participou desta rodada</string>
     <string name="deals_cards">Dá as cartas</string>
     <string name="player_name_title">Nome do jogador</string>

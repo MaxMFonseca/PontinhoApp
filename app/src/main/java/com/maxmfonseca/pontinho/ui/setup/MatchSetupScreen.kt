@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.maxmfonseca.pontinho.R
@@ -195,6 +196,8 @@ private fun SetupPlayerRow(
     val moveUpLabel = stringResource(R.string.setup_move_up, player.displayName)
     val moveDownLabel = stringResource(R.string.setup_move_down, player.displayName)
     val removeLabel = stringResource(R.string.setup_remove_player, player.displayName)
+    val editLabel = stringResource(R.string.player_edit, player.displayName)
+    val dragLabel = stringResource(R.string.player_drag, player.displayName)
     var rowHeightPx by remember(player.draftId) { mutableFloatStateOf(0f) }
     Card(
         modifier = Modifier
@@ -237,10 +240,11 @@ private fun SetupPlayerRow(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("⠿", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
+            Text("⠿", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.clearAndSetSemantics { contentDescription = dragLabel })
+            TextButton(onClick = onEdit, modifier = Modifier.weight(1f).semantics { contentDescription = editLabel }) {
                 Text(player.displayName, style = MaterialTheme.typography.titleMedium)
-                Text("✎", style = MaterialTheme.typography.titleMedium)
+                Text("✎", style = MaterialTheme.typography.titleMedium, modifier = Modifier.clearAndSetSemantics {})
             }
             IconButton(
                 onClick = onRemove,

@@ -72,6 +72,8 @@ class MatchSetupScreenTest {
         }
 
         composeRule.onNodeWithText("Ana").performClick()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.player_edit, "Ana")).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.player_drag, "Ana")).assertIsDisplayed()
         composeRule.onNodeWithContentDescription(context.getString(R.string.setup_remove_player, "Ana")).performClick()
         val actions = composeRule.onNodeWithTag("setup_player_a").fetchSemanticsNode()
             .config[SemanticsActions.CustomActions]

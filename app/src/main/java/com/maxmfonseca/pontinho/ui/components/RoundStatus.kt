@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.components
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +34,7 @@ enum class RoundStatusKind(
     WINNER("✓", R.string.round_status_winner),
     LOSS("×", R.string.round_status_loss),
     PENDING("◷", R.string.round_status_pending),
+    EMPTY("", R.string.round_status_empty),
     NOT_PARTICIPATING("−", R.string.round_status_not_participating),
 }
 
@@ -45,12 +47,14 @@ fun RoundStatus(
     val background = when (status) {
         RoundStatusKind.WINNER -> Emerald
         RoundStatusKind.LOSS -> Coral
+        RoundStatusKind.EMPTY -> MaterialTheme.colorScheme.surface
         RoundStatusKind.PENDING,
         RoundStatusKind.NOT_PARTICIPATING,
         -> MaterialTheme.colorScheme.surfaceVariant
     }
     val foreground = when (status) {
         RoundStatusKind.PENDING,
+        RoundStatusKind.EMPTY,
         RoundStatusKind.NOT_PARTICIPATING,
         -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> OffWhite
@@ -64,6 +68,7 @@ fun RoundStatus(
                 roundStatusContainerColor = background.toArgb()
             },
         shape = CircleShape,
+        border = if (status == RoundStatusKind.EMPTY) BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant) else null,
         color = background,
         contentColor = foreground,
     ) {

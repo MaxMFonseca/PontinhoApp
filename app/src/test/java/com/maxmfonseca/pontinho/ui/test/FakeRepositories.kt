@@ -36,6 +36,7 @@ class FakeMatchRepository(
         return createBlock?.invoke(command) ?: createdMatchId
     }
     override suspend fun addParticipant(command: AddParticipant) = unsupported()
+    override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId = unsupported()
     override suspend fun reorderParticipants(command: ReorderParticipants) = unsupported()
     override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound = unsupported()
     override suspend fun designateWinner(command: DesignateWinner) = unsupported()

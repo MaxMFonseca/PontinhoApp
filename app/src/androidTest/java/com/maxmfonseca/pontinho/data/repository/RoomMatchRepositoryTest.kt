@@ -1,6 +1,7 @@
 package com.maxmfonseca.pontinho.data.repository
 
 import androidx.room.Room
+import androidx.room.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
@@ -198,6 +199,115 @@ class RoomMatchRepositoryTest {
         submit(id, r2, 1, 4)
         assertEquals(late.id, snapshot(id).dealerParticipantId)
         assertEquals(state.participants.last().id, snapshot(id).rounds[0].dealerParticipantId)
+    }
+
+    @Test fun namedLateJoinRollsBackGlobalPlayerWhenParticipantInsertFails() = runBlocking {
+        val id = create()
+        val before = snapshot(id)
+        val globalPlayers = db.playerDao().players()
+        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_named_join BEFORE INSERT ON participants BEGIN SELECT RAISE(ABORT, 'join failure after player write'); END")
+        try {
+            repo.addPlayerToMatch(AddPlayerToMatch(id, "late-failure", "Dora"))
+            fail("Expected SQLite failure")
+        } catch (_: android.database.sqlite.SQLiteException) { }
+        assertEquals(globalPlayers, db.playerDao().players())
+        assertEquals(before, snapshot(id))
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_named_join")
+        repo.addPlayerToMatch(AddPlayerToMatch(id, "late-failure", "Dora"))
+        assertEquals(3, db.playerDao().players().size)
+        assertEquals(3, snapshot(id).participants.size)
+    }
+
+    @Test fun namedLateJoinCancellationBeforeCommitRollsBackBothWrites() = runBlocking {
+        val inFlight = java.util.concurrent.atomic.AtomicReference<Job?>()
+        val intercepted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val cancellableDb = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java)
+            .setQueryCallback(RoomDatabase.QueryCallback { sql, _ ->
+                if (sql.startsWith("INSERT", ignoreCase = true) && sql.contains("`participants`")) {
+                    inFlight.get()?.let { job ->
+                        intercepted.set(true)
+                        job.cancel(CancellationException("Cancel after global player insert, before participant insert"))
+                    }
+                }
+            }, java.util.concurrent.Executor { it.run() }).build()
+        try {
+            val cancellableRepo = RoomMatchRepository(cancellableDb, clock)
+            val id = cancellableRepo.createMatch(CreateMatch("cancel-real-transaction", listOf(
+                CreateMatchPlayer("a", displayName = "Ana"), CreateMatchPlayer("b", displayName = "Bruno"))))
+            val before = cancellableRepo.observeMatch(id).first()
+            val globalPlayers = cancellableDb.playerDao().players()
+            val command = AddPlayerToMatch(id, "late-cancel", "Dora")
+            val operation = async(start = CoroutineStart.LAZY) { cancellableRepo.addPlayerToMatch(command) }
+            inFlight.set(operation)
+            operation.start()
+            try { operation.await(); fail("Expected cancellation") } catch (_: CancellationException) { }
+            inFlight.set(null)
+            assertTrue("Cancellation must intercept the actual participation INSERT", intercepted.get())
+            assertEquals(globalPlayers, cancellableDb.playerDao().players())
+            assertEquals(before, cancellableRepo.observeMatch(id).first())
+            cancellableRepo.addPlayerToMatch(command)
+            assertEquals(3, cancellableDb.playerDao().players().size)
+            assertEquals(3, cancellableRepo.observeMatch(id).first()!!.participants.size)
+        } finally { cancellableDb.close() }
+    }
+
+    @Test fun namedLateJoinRetryIsDurableConcurrentAndIndependentOfLaterRoundState() = runBlocking {
+        val id = create()
+        submit(id, start(id), 0, 10)
+        val command = AddPlayerToMatch(id, "late-retry", " Dora ")
+        val identities = coroutineScope {
+            List(4) { async(Dispatchers.Default) { repo.addPlayerToMatch(command) } }.awaitAll()
+        }
+        assertEquals(1, identities.distinct().size)
+        val joined = snapshot(id)
+        assertEquals(3, joined.participants.size)
+        assertEquals(3, db.playerDao().players().size)
+        assertEquals("Dora", joined.participants.last().displayName)
+        assertEquals(2, joined.participants.last().eligibleFromRoundOrdinal)
+        assertFalse(identities.first() in joined.rounds[0].draft.eligibleParticipants)
+        repo.reorderParticipants(ReorderParticipants(id, joined.participants.map { it.id }.reversed()))
+        val later = start(id); submit(id, later, 0, 3)
+        val beforeRetry = snapshot(id)
+        assertEquals(identities.first(), RoomMatchRepository(db, clock).addPlayerToMatch(command.copy(displayName = "Dora")))
+        assertEquals(beforeRetry, snapshot(id))
+        rejected { repo.addPlayerToMatch(command.copy(displayName = "Changed")) }
+        rejected { repo.addPlayerToMatch(command.copy(operationToken = "different-token")) }
+        assertEquals(3, db.playerDao().players().size)
+        assertEquals(beforeRetry, snapshot(id))
+        submit(id, later, 1, 101)
+        val finished = snapshot(id)
+        assertTrue(finished.isFinished)
+        assertEquals(identities.first(), RoomMatchRepository(db, clock).addPlayerToMatch(command))
+        rejected { repo.addPlayerToMatch(command.copy(operationToken = "new-after-finish")) }
+        assertEquals(finished, snapshot(id))
+        assertEquals(3, db.playerDao().players().size)
+    }
+
+    @Test fun rosterMutationsRejectHistoricalCorrectionAndPausedDraftWithoutChangingHistory() = runBlocking {
+        val id = create(3); val first = start(id)
+        submit(id, first, 0, 10); submit(id, first, 1, 20)
+        val roster = snapshot(id).participants
+        val late = players.upsert(UpsertPlayer(displayName = "Late"))
+        val second = start(id); submit(id, second, 0, 7)
+        repo.removeRoundEntry(RemoveRoundEntry(id, first, roster[2].id))
+        val correction = snapshot(id)
+        assertEquals(first, correction.openRound!!.id)
+        assertEquals(listOf(second), correction.pausedRounds.map { it.id })
+        rejected { repo.addParticipant(AddParticipant(id, late, 3)) }
+        rejected { repo.reorderParticipants(ReorderParticipants(id, roster.map { it.id }.reversed())) }
+        assertEquals(correction, snapshot(id))
+        assertFalse(db.roundDao().scores(first.value).any { it.participantId == roster[2].id.value })
+        designate(DesignateWinner(id, first, roster[2].id))
+        val resumed = snapshot(id)
+        assertEquals(second, resumed.openRound!!.id)
+        rejected { repo.addParticipant(AddParticipant(id, late, 3)) }
+        assertEquals(resumed, snapshot(id))
+        submit(id, second, 1, 3)
+        repo.addParticipant(AddParticipant(id, late, 3))
+        val after = snapshot(id)
+        assertEquals(3, after.participants.last().eligibleFromRoundOrdinal)
+        assertTrue(after.rounds.all { after.participants.last().id !in it.draft.eligibleParticipants })
+        assertEquals(0, after.totals[after.participants.last().id])
     }
 
     @Test fun deletingAutomaticZeroReopensWithoutReinferenceAndClearsResults() = runBlocking {

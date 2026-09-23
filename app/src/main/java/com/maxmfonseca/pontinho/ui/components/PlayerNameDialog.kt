@@ -31,18 +31,21 @@ fun PlayerNameDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     supportingText: String? = null,
+    enabled: Boolean = true,
+    confirmEnabled: Boolean = true,
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     var inputPlaced by remember { mutableStateOf(false) }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (enabled) onDismiss() },
         title = { Text(stringResource(R.string.player_name_title)) },
         text = {
             Column {
                 OutlinedTextField(
                     value = value,
                     onValueChange = onValueChange,
+                    enabled = enabled,
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
@@ -56,12 +59,12 @@ fun PlayerNameDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm) {
+            Button(onClick = onConfirm, enabled = enabled && confirmEnabled) {
                 Text(stringResource(R.string.confirm))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            TextButton(onClick = onDismiss, enabled = enabled) { Text(stringResource(R.string.cancel)) }
         },
     )
     LaunchedEffect(inputPlaced) {

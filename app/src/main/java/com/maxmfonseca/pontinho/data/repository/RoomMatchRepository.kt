@@ -98,6 +98,32 @@ class RoomMatchRepository(
         MatchId(matchId)
     }
 
+    override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId = db.withTransaction {
+        require(command.operationToken.isNotBlank()) { "Operation token must not be blank" }
+        val name = command.displayName.trim().also { require(it.isNotEmpty()) { "Player name must not be blank" } }
+        val participantId = stablePlayerId("late-participant:${command.matchId.value}", command.operationToken)
+        val playerId = stablePlayerId("late-player:${command.matchId.value}", command.operationToken)
+        val roster = matches.participants(command.matchId.value)
+        // The immutable participation snapshot is the durable operation receipt.
+        // Check replay before gameplay guards: a committed retry must still succeed
+        // after another command reorders the roster, opens a round, or ends the match.
+        roster.singleOrNull { it.id == participantId }?.let { existing ->
+            require(existing.playerId == playerId && existing.nameSnapshot == name) {
+                "Operation token was already used for a different command"
+            }
+            return@withTransaction ParticipantId(existing.id)
+        }
+        val match = activeMatch(command.matchId)
+        betweenRounds(match.id)
+        require(db.playerDao().get(playerId) == null) { "Generated player identity collision" }
+        val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
+        val now = clock.millis()
+        db.playerDao().upsert(PlayerEntity(playerId, name, name.lowercase(Locale.ROOT), now, now))
+        matches.insertParticipant(MatchParticipantEntity(participantId, match.id, playerId, name, roster.size, ordinal, now))
+        matches.updateMatch(match.copy(lastPlayedAt = now))
+        ParticipantId(participantId)
+    }
+
     override suspend fun addParticipant(command: AddParticipant) = db.withTransaction {
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
