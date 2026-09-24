@@ -49,6 +49,13 @@ class RoomMatchRepository(
         }
     }.distinctUntilChanged()
 
+    override fun observeDay(localDate: LocalDate): Flow<DayHistory> = changes().map {
+        db.withTransaction {
+            val snapshots = matches.matchesForDate(localDate.toString()).map { requireNotNull(snapshot(it.id)) }
+            dayHistory(localDate, snapshots)
+        }
+    }.distinctUntilChanged()
+
     override suspend fun createMatch(command: CreateMatch): MatchId = db.withTransaction {
         require(command.creationToken.isNotBlank()) { "Creation token must not be blank" }
         require(command.players.size >= 2) { "At least two players are required" }
@@ -402,5 +409,45 @@ class RoomMatchRepository(
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun dayHistory(localDate: LocalDate, snapshots: List<MatchSnapshot>): DayHistory {
+        val ordered = snapshots.sortedWith(compareByDescending<MatchSnapshot> { it.createdAt }.thenByDescending { it.id.value })
+        val historyMatches = ordered.map { match ->
+            val winners = match.outcome?.winners.orEmpty()
+            val highest = match.outcome?.highestScorers.orEmpty()
+            HistoryMatch(
+                id = match.id,
+                createdAtEpochMillis = match.createdAt.toEpochMilli(),
+                isFinished = match.isFinished,
+                players = match.participants.sortedBy { it.rosterOrder }.map { participant ->
+                    HistoryPlayer(
+                        playerId = participant.playerId,
+                        displayName = participant.displayName,
+                        total = match.totals.getValue(participant.id),
+                        isWinner = match.isFinished && participant.id in winners,
+                        isHighestPenalty = match.isFinished && participant.id in highest,
+                    )
+                },
+                timeZoneId = match.timeZoneId,
+            )
+        }
+        val completed = historyMatches.filter { it.isFinished }
+        val names = buildMap {
+            // Matches are newest first, so the first snapshot is the player's latest display name.
+            completed.flatMap { it.players }.forEach { putIfAbsent(it.playerId, it.displayName) }
+        }
+        val wins = completed.flatMap { match -> match.players.filter { it.isWinner }.map { it.playerId } }
+            .groupingBy { it }.eachCount()
+            .map { (id, count) -> DailyStanding(id, names.getValue(id), count) }
+            .sortedWith(compareByDescending<DailyStanding> { it.value }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+                .thenBy { it.displayName }.thenBy { it.playerId.value })
+        val penalties = completed.flatMap { it.players }.groupBy { it.playerId }
+            .map { (id, entries) -> DailyStanding(id, names.getValue(id), entries.sumOf { it.total }) }
+            .sortedWith(compareByDescending<DailyStanding> { it.value }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+                .thenBy { it.displayName }.thenBy { it.playerId.value })
+        return DayHistory(localDate, historyMatches, wins, penalties)
     }
 }

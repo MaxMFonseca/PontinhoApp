@@ -39,6 +39,12 @@ import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.ui.match.MatchViewModel
 import com.maxmfonseca.pontinho.ui.match.MatchScreen
 import com.maxmfonseca.pontinho.ui.match.MatchEvent
+import com.maxmfonseca.pontinho.ui.history.HistoryScreen
+import com.maxmfonseca.pontinho.ui.history.HistoryViewModel
+import com.maxmfonseca.pontinho.ui.results.ResultsEvent
+import com.maxmfonseca.pontinho.ui.results.ResultsScreen
+import com.maxmfonseca.pontinho.ui.results.ResultsViewModel
+import java.time.LocalDate
 
 @Composable
 fun PontinhoNavHost(
@@ -132,14 +138,46 @@ fun PontinhoNavHost(
                 onConfirmPlayerName = matchViewModel::confirmPlayerName, onMovePlayer = matchViewModel::movePlayer,
                 onEditScore = matchViewModel::editScore, onDeleteScore = matchViewModel::deleteScore)
         }
-        composable(Destination.DayHistory.route) { RoutePlaceholder(R.string.route_day_history, "day_history_root") }
-        composable(Destination.Results.route, arguments = listOf(navArgument(Destination.Results.MATCH_ID) { type = NavType.StringType })) {
-            Column(Modifier.fillMaxSize().padding(24.dp).testTag("results_root"),
-                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(stringResource(R.string.route_results), style = MaterialTheme.typography.titleLarge)
-                Text(stringResource(R.string.match_finished), style = MaterialTheme.typography.headlineLarge)
-                TextButton(onClick = { navController.popBackStack() }) { Text(stringResource(R.string.match_back)) }
+        composable(Destination.DayHistory.route, arguments = listOf(navArgument(Destination.DayHistory.LOCAL_DATE) { type = NavType.StringType })) { entry ->
+            val localDate = LocalDate.parse(requireNotNull(entry.arguments?.getString(Destination.DayHistory.LOCAL_DATE)))
+            val historyViewModel: HistoryViewModel = viewModel(factory = viewModelFactory {
+                initializer { HistoryViewModel(localDate, container.matchRepository) }
+            })
+            val state by historyViewModel.uiState.collectAsStateWithLifecycle()
+            HistoryScreen(
+                state = state,
+                onBack = { navController.popBackStack() },
+                onSettings = { navController.navigate(Destination.Settings.route) },
+                onNewMatch = { navController.navigate(Destination.Setup.route) },
+                onOpenMatch = { navController.navigate(Destination.Match.createRoute(it.value)) },
+                onToggleSummary = historyViewModel::toggleSummary,
+            )
+        }
+        composable(Destination.Results.route, arguments = listOf(navArgument(Destination.Results.MATCH_ID) { type = NavType.StringType })) { entry ->
+            val matchId = MatchId(requireNotNull(entry.arguments?.getString(Destination.Results.MATCH_ID)))
+            val resultsViewModel: ResultsViewModel = viewModel(factory = viewModelFactory {
+                initializer { ResultsViewModel(matchId, container.matchRepository) }
+            })
+            val state by resultsViewModel.uiState.collectAsStateWithLifecycle()
+            LaunchedEffect(resultsViewModel) {
+                resultsViewModel.events.collect { event ->
+                    when (event) {
+                        ResultsEvent.NewMatch -> navController.navigate(Destination.Setup.route) {
+                            popUpTo(Destination.Home.route)
+                        }
+                        is ResultsEvent.OpenMatch -> if (!navController.popBackStack()) {
+                            navController.navigate(Destination.Match.createRoute(event.matchId.value))
+                        }
+                        is ResultsEvent.OpenHistory -> {
+                            val historyRoute = Destination.DayHistory.createRoute(event.localDate.toString())
+                            if (!navController.popBackStack(historyRoute, inclusive = false)) {
+                                navController.navigate(historyRoute) { popUpTo(Destination.Home.route) }
+                            }
+                        }
+                    }
+                }
             }
+            ResultsScreen(state, resultsViewModel::newMatch, resultsViewModel::openMatch, resultsViewModel::openHistory)
         }
         composable(Destination.Settings.route) { RoutePlaceholder(R.string.route_settings, "settings_root") }
         composable(Destination.Appearance.route) { RoutePlaceholder(R.string.route_appearance, "appearance_root") }

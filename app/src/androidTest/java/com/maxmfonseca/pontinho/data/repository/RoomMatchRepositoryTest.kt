@@ -689,6 +689,74 @@ class RoomMatchRepositoryTest {
         assertEquals(1, snapshot(id).rounds.size)
     }
 
+    @Test fun dayProjectionUsesStoredDateNewestFirstCompletedOnlyTieAggregationAndStableOrdering() = runBlocking {
+        clock.time = Instant.parse("2026-10-14T02:00:00Z")
+        val complete = repo.createMatch(CreateMatch("history-complete", listOf(
+            CreateMatchPlayer("same-a", displayName = "Alex"),
+            CreateMatchPlayer("same-b", displayName = "Alex"),
+            CreateMatchPlayer("carla", displayName = "Carla"),
+        )))
+        val completeRows = db.matchDao().participants(complete.value)
+        listOf(48, 48, 112).forEachIndexed { index, total ->
+            db.matchDao().updateParticipant(completeRows[index].copy(total = total))
+        }
+        val completeEntity = db.matchDao().get(complete.value)!!
+        db.matchDao().updateMatch(completeEntity.copy(status = "FINISHED", finishedAt = clock.millis(), resultRevision = 1))
+
+        clock.time = Instant.parse("2026-10-14T02:30:00Z")
+        val active = repo.createMatch(CreateMatch("history-active", listOf(
+            CreateMatchPlayer("active-a", displayName = "Dora"),
+            CreateMatchPlayer("active-b", displayName = "Eva"),
+        )))
+        db.matchDao().participants(active.value).forEach {
+            db.matchDao().updateParticipant(it.copy(total = 999))
+        }
+
+        clock.zoneId = ZoneId.of("UTC")
+        clock.time = Instant.parse("2026-10-15T12:00:00Z")
+        val day = repo.observeDay(LocalDate.parse("2026-10-13")).first()
+
+        assertEquals(listOf(active, complete), day.matches.map { it.id })
+        assertEquals(listOf(999, 999), day.matches.first().players.map { it.total })
+        assertTrue(day.matches.first().players.none { it.isWinner || it.isHighestPenalty })
+        val expectedWinnerIds = completeRows.take(2).map { PlayerId(it.playerId) }.sortedBy { it.value }
+        assertEquals(expectedWinnerIds, day.wins.map { it.playerId })
+        assertEquals(listOf(1, 1), day.wins.map { it.value })
+        assertEquals(listOf(112, 48, 48), day.penalties.map { it.value })
+        assertEquals(PlayerId(completeRows[2].playerId), day.penalties.first().playerId)
+        assertEquals("America/Sao_Paulo", day.matches.last().timeZoneId)
+        assertTrue(repo.observeDay(LocalDate.parse("2026-10-14")).first().matches.isEmpty())
+    }
+
+    @Test fun acknowledgedResultAndCorrectionRevisionsRemainDurableAcrossRepositoryRecreation() = runBlocking {
+        val id = create()
+        val round = start(id)
+        submit(id, round, 0, 101)
+        val firstResult = snapshot(id)
+        assertTrue(firstResult.hasPendingResults)
+
+        repo.acknowledgeResults(id, firstResult.resultRevision)
+        repo = RoomMatchRepository(db, clock)
+        var state = snapshot(id)
+        assertFalse(state.hasPendingResults)
+        assertEquals(firstResult.resultRevision, state.acknowledgedResultRevision)
+
+        repo.updateExplicitScore(UpdateExplicitScore(id, round, state.participants[0].id, 100))
+        repo = RoomMatchRepository(db, clock)
+        state = snapshot(id)
+        assertFalse(state.isFinished)
+        assertNull(state.outcome)
+        assertFalse(state.hasPendingResults)
+
+        repo.updateExplicitScore(UpdateExplicitScore(id, round, state.participants[0].id, 101))
+        repo = RoomMatchRepository(db, clock)
+        state = snapshot(id)
+        assertTrue(state.isFinished)
+        assertTrue(state.hasPendingResults)
+        assertTrue(state.resultRevision > firstResult.resultRevision)
+        assertEquals(0L, state.acknowledgedResultRevision)
+    }
+
     private class TestClock(var time: Instant, var zoneId: ZoneId) : Clock() {
         override fun instant() = time
         override fun getZone() = zoneId

@@ -30,6 +30,7 @@ class FakeMatchRepository(
     val createdCommands = mutableListOf<CreateMatch>()
 
     override fun observeHome(): Flow<List<DaySummary>> = home
+    override fun observeDay(localDate: LocalDate): Flow<DayHistory> = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
     override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = MutableStateFlow(null)
     override suspend fun createMatch(command: CreateMatch): MatchId {
         createdCommands += command

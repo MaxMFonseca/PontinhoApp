@@ -31,6 +31,20 @@
     <string name="home_empty_body">Crie uma partida para começar a marcar os pontos.</string>
     <string name="home_create_match">Criar partida</string>
     <string name="home_today">Hoje</string>
+    <string name="history_daily_summary">Resumo do dia</string>
+    <string name="history_wins">Vitórias</string>
+    <string name="history_penalties">Pontos acumulados</string>
+    <string name="history_summary_empty">Nenhuma partida foi encerrada ainda.</string>
+    <string name="history_empty">Nenhuma partida neste dia.</string>
+    <string name="history_completed">Encerrada</string>
+    <string name="history_in_progress">Em andamento</string>
+    <string name="history_provisional">Totais provisórios</string>
+    <string name="results_winner">Vencedor</string>
+    <string name="results_highest_penalty">Maior pontuação</string>
+    <string name="results_lower_better">Quanto menos pontos, melhor!</string>
+    <string name="results_new_match">Nova partida</string>
+    <string name="results_details">Ver detalhes</string>
+    <string name="results_back_history">Voltar ao histórico</string>
     <plurals name="home_match_count"><item quantity="one">%1$d partida</item><item quantity="other">%1$d partidas</item></plurals>
     <plurals name="home_active_match_count"><item quantity="one">%1$d em andamento</item><item quantity="other">%1$d em andamento</item></plurals>
     <string name="route_placeholder">Esta área será implementada em uma próxima etapa.</string>

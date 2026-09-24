@@ -215,6 +215,7 @@ private class ScoringRepository(private val gate: CompletableDeferred<Unit>? = n
     var submissions = 0
     override fun observeMatch(matchId: MatchId) = snapshot
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
+    override fun observeDay(localDate: LocalDate) = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
     override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound {
         check(snapshot.value!!.rounds.none { it.status != RoundStatus.COMPLETE })
         val ordinal = snapshot.value!!.rounds.size + 1

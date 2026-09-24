@@ -31,6 +31,20 @@
     <string name="home_empty_body">Create a match to start keeping score.</string>
     <string name="home_create_match">Create match</string>
     <string name="home_today">Today</string>
+    <string name="history_daily_summary">Daily summary</string>
+    <string name="history_wins">Wins</string>
+    <string name="history_penalties">Accumulated points</string>
+    <string name="history_summary_empty">No matches have finished yet.</string>
+    <string name="history_empty">No matches on this day.</string>
+    <string name="history_completed">Finished</string>
+    <string name="history_in_progress">In progress</string>
+    <string name="history_provisional">Provisional totals</string>
+    <string name="results_winner">Winner</string>
+    <string name="results_highest_penalty">Highest score</string>
+    <string name="results_lower_better">The fewer points, the better!</string>
+    <string name="results_new_match">New match</string>
+    <string name="results_details">View details</string>
+    <string name="results_back_history">Back to history</string>
     <plurals name="home_match_count"><item quantity="one">%1$d match</item><item quantity="other">%1$d matches</item></plurals>
     <plurals name="home_active_match_count"><item quantity="one">%1$d in progress</item><item quantity="other">%1$d in progress</item></plurals>
     <string name="route_placeholder">This area will be implemented in a later step.</string>

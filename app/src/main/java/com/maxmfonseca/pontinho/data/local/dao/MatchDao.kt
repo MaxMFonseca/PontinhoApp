@@ -13,6 +13,8 @@ interface MatchDao {
     @Query("SELECT * FROM matches WHERE id = :id") suspend fun get(id: String): MatchEntity?
     @Query("SELECT * FROM matches WHERE creationToken = :token") suspend fun getByCreationToken(token: String): MatchEntity?
     @Query("SELECT * FROM matches ORDER BY createdAt DESC, id DESC") suspend fun matches(): List<MatchEntity>
+    @Query("SELECT * FROM matches WHERE localDate = :localDate ORDER BY createdAt DESC, id DESC")
+    suspend fun matchesForDate(localDate: String): List<MatchEntity>
     @Query("SELECT * FROM matches ORDER BY createdAt DESC, id DESC") fun observeMatches(): Flow<List<MatchEntity>>
     @Query("SELECT * FROM participants WHERE matchId = :matchId ORDER BY rosterOrder") suspend fun participants(matchId: String): List<MatchParticipantEntity>
     @Query("SELECT * FROM participants ORDER BY matchId, rosterOrder") suspend fun allParticipants(): List<MatchParticipantEntity>

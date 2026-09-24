@@ -62,6 +62,31 @@ data class DaySummary(val localDate: LocalDate, val matches: List<MatchSnapshot>
     val activeMatchCount: Int get() = matches.count { !it.isFinished }
 }
 
+data class HistoryPlayer(
+    val playerId: PlayerId,
+    val displayName: String,
+    val total: Int,
+    val isWinner: Boolean,
+    val isHighestPenalty: Boolean,
+)
+
+data class HistoryMatch(
+    val id: MatchId,
+    val createdAtEpochMillis: Long,
+    val isFinished: Boolean,
+    val players: List<HistoryPlayer>,
+    val timeZoneId: String = "UTC",
+)
+
+data class DailyStanding(val playerId: PlayerId, val displayName: String, val value: Int)
+
+data class DayHistory(
+    val localDate: LocalDate,
+    val matches: List<HistoryMatch>,
+    val wins: List<DailyStanding>,
+    val penalties: List<DailyStanding>,
+)
+
 /** Writes commit before returning. [createMatch] atomically resolves or creates players,
  * snapshots the ordered roster, and creates the match. Its creation token is durably
  * idempotent for the same payload and is rejected for a different payload.
@@ -70,6 +95,7 @@ data class DaySummary(val localDate: LocalDate, val matches: List<MatchSnapshot>
  */
 interface MatchRepository {
     fun observeHome(): Flow<List<DaySummary>>
+    fun observeDay(localDate: LocalDate): Flow<DayHistory>
     fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?>
     suspend fun createMatch(command: CreateMatch): MatchId
     suspend fun addParticipant(command: AddParticipant)
