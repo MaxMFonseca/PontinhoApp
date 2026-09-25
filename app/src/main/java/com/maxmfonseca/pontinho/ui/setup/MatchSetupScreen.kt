@@ -173,6 +173,7 @@ fun MatchSetupScreen(
             onConfirm = onConfirmName,
             onDismiss = onDismissName,
             supportingText = if (dialog.showBlankError) stringResource(R.string.setup_blank_name_error) else null,
+            duplicateNameError = dialog.duplicateNameError,
         )
     }
 

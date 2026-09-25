@@ -33,6 +33,7 @@ fun PlayerNameDialog(
     supportingText: String? = null,
     enabled: Boolean = true,
     confirmEnabled: Boolean = true,
+    duplicateNameError: Boolean = false,
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -53,6 +54,10 @@ fun PlayerNameDialog(
                         .testTag("player_name_input"),
                     label = { Text(stringResource(R.string.player_name_label)) },
                     singleLine = true,
+                    isError = duplicateNameError,
+                    supportingText = if (duplicateNameError) {
+                        { Text(stringResource(R.string.player_name_duplicate_error)) }
+                    } else null,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 )
                 supportingText?.let { Text(it) }

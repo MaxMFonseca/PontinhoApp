@@ -149,6 +149,7 @@ fun MatchScreen(
         PlayerNameDialog(name, onPlayerNameChange, onConfirmPlayerName, onDismissDialog,
             supportingText = stringResource(R.string.match_late_player_help) +
                 if (state.hasError) "\n" + stringResource(R.string.match_save_error) else "",
-            enabled = !state.isSaving, confirmEnabled = name.isNotBlank())
+            enabled = !state.isSaving, confirmEnabled = name.isNotBlank(),
+            duplicateNameError = state.duplicateNameError)
     }
 }

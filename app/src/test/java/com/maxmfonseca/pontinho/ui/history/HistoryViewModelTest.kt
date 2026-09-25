@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.history
 
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
+import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -21,8 +22,8 @@ class HistoryViewModelTest {
                 HistoryMatch(MatchId("new"), 200L, true, listOf(HistoryPlayer(PlayerId("a"), "Ana", 48, true, false))),
                 HistoryMatch(MatchId("old"), 100L, false, listOf(HistoryPlayer(PlayerId("b"), "Bruno", 12, false, false))),
             ),
-            wins = listOf(DailyStanding(PlayerId("a"), "Ana", 2)),
-            penalties = listOf(DailyStanding(PlayerId("b"), "Bruno", 112)),
+            wins = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 2)),
+            penalties = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 112)),
         )
         val repo = HistoryRepository(MutableStateFlow(projection))
         val vm = HistoryViewModel(date, repo, StandardTestDispatcher(testScheduler))

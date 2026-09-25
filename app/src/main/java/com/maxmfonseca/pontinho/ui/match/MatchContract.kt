@@ -21,6 +21,7 @@ data class MatchUiState(
     val isSaving: Boolean = false, val hasError: Boolean = false,
     val picker: IndicatorPickerState? = null, val scoreDialog: MatchScoreDialogState? = null,
     val canManagePlayers: Boolean = false, val playerName: String? = null,
+    val duplicateNameError: Boolean = false,
     val pausedRoundNumbers: List<Int> = emptyList(), val isCorrectingRound: Boolean = false,
 )
 sealed interface MatchEvent {

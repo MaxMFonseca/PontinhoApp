@@ -2,9 +2,11 @@ package com.maxmfonseca.pontinho.data.repository
 
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
+import com.maxmfonseca.pontinho.data.local.entity.*
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import kotlinx.coroutines.*
@@ -56,6 +58,175 @@ class RoomMatchRepositoryTest {
         try { block(); fail("Expected rejection") } catch (_: IllegalArgumentException) { }
     }
 
+    @Test fun historicalNamesSplitSharedIdsAndMergeDifferentIdsWithoutChangingSnapshots() = runBlocking {
+        db.withTransaction {
+            db.playerDao().upsert(PlayerEntity("shared", "Julia2", "julia2", 1, 2))
+            db.playerDao().upsert(PlayerEntity("max-old", "Max", "max", 1, 1))
+            db.playerDao().upsert(PlayerEntity("max-new", "MAX", "max", 2, 2))
+            seedFinished("old", 1, listOf(Triple("shared", "Julia", 33), Triple("max-old", "Max", 110)))
+            seedFinished("new", 2, listOf(Triple("shared", "Julia2", 110), Triple("max-new", "MAX", 0)))
+        }
+        val before = db.matchDao().allParticipants()
+        val day = repo.observeDay(LocalDate.parse("2026-10-13")).first()
+        assertEquals(mapOf("Julia" to 1, "MAX" to 1, "Julia2" to 0), day.wins.associate { it.displayName to it.value })
+        assertEquals(mapOf("Julia" to 33, "MAX" to 110, "Julia2" to 110), day.penalties.associate { it.displayName to it.value })
+        assertEquals(listOf("Julia", "MAX", "Julia2"), day.wins.map { it.displayName })
+        assertEquals(listOf("Julia2", "MAX", "Julia"), day.penalties.map { it.displayName })
+        assertEquals(before, db.matchDao().allParticipants())
+    }
+
+    private suspend fun seedFinished(id: String, createdAt: Long, roster: List<Triple<String, String, Int>>) {
+        db.matchDao().insertMatch(MatchEntity(id, "2026-10-13", clock.zone.id, createdAt, createdAt,
+            status = "FINISHED", finishedAt = createdAt, dealerParticipantId = "$id-0", resultRevision = 1))
+        roster.forEachIndexed { index, (playerId, name, total) ->
+            db.matchDao().insertParticipant(MatchParticipantEntity("$id-$index", id, playerId, name, index, 1, createdAt, total))
+        }
+    }
+
+    @Test fun concurrentNamesAndRetriesReuseDeterministicCanonicalPlayer() = runBlocking {
+        // Earliest creation wins; lexical id breaks a creation-time tie.
+        db.playerDao().upsert(PlayerEntity("z-old", "MAX", "max", 1, 1))
+        db.playerDao().upsert(PlayerEntity("a-new", "Max", "max", 2, 2))
+        db.playerDao().upsert(PlayerEntity("a-old", "max", "max", 1, 1))
+        val commands = listOf(" Max ", "MAX", "max", "mAx").mapIndexed { index, name ->
+            CreateMatch("canonical-$index", listOf(CreateMatchPlayer("max", displayName = name),
+                CreateMatchPlayer("other", displayName = "Other $index")))
+        }
+        val ids = coroutineScope { commands.map { command -> async(Dispatchers.Default) {
+            RoomMatchRepository(db, clock).createMatch(command)
+        } }.awaitAll() }
+        ids.forEachIndexed { index, id ->
+            assertEquals("a-old", snapshot(id).participants.first().playerId.value)
+            assertEquals(commands[index].players.first().displayName.trim(), snapshot(id).participants.first().displayName)
+            assertEquals(id, RoomMatchRepository(db, clock).createMatch(commands[index]))
+        }
+        assertEquals(7, db.playerDao().players().size)
+        rejected { repo.createMatch(commands.first().copy(players = commands.first().players.reversed())) }
+        rejected { repo.createMatch(commands.first().copy(players = commands.first().players.map {
+            if (it.draftId == "max") it.copy(displayName = "MAX") else it
+        })) }
+    }
+
+    @Test fun concurrentNewNamesResolveOnceAndLateJoinReplaysAfterCanonicalNameChanges() = runBlocking {
+        val ids = coroutineScope { (1..4).map { index -> async(Dispatchers.Default) {
+            repo.createMatch(CreateMatch("new-$index", listOf(CreateMatchPlayer("a", displayName = if (index % 2 == 0) "Ana" else "ANA"),
+                CreateMatchPlayer("b", displayName = "Other $index"))))
+        } }.awaitAll() }
+        assertEquals(1, ids.map { snapshot(it).participants.first().playerId }.distinct().size)
+        assertEquals(5, db.playerDao().players().size)
+        val target = create()
+        val command = AddPlayerToMatch(target, "canonical-late", " Ana ")
+        val joined = repo.addPlayerToMatch(command)
+        val before = snapshot(target)
+        assertEquals(snapshot(ids.first()).participants.first().playerId, before.participants.last().playerId)
+        players.upsert(UpsertPlayer(before.participants.last().playerId, "Renamed"))
+        assertEquals(joined, RoomMatchRepository(db, clock).addPlayerToMatch(command))
+        assertEquals(before, snapshot(target))
+        rejected { repo.addPlayerToMatch(command.copy(displayName = "ANA")) }
+        rejected { repo.addPlayerToMatch(command.copy(operationToken = "another", displayName = "ANA")) }
+    }
+
+    @Test fun nameEditsResolveNewIdentityAndDuplicateNamesAreRejectedAtomically() = runBlocking {
+        val old = players.upsert(UpsertPlayer(displayName = "Julia"))
+        val other = players.upsert(UpsertPlayer(displayName = "Max"))
+        val first = repo.createMatch(CreateMatch("before-rename", listOf(CreateMatchPlayer("j", old, "Julia"), CreateMatchPlayer("m", other, "Max"))))
+        val before = snapshot(first)
+        val renamed = repo.createMatch(CreateMatch("after-rename", listOf(CreateMatchPlayer("j", old, "Julia2"), CreateMatchPlayer("m", other, "MAX"))))
+        assertNotEquals(old, snapshot(renamed).participants.first().playerId)
+        assertEquals("Julia", db.playerDao().get(old.value)!!.displayName)
+        assertEquals(before, snapshot(first))
+        val allPlayers = db.playerDao().players()
+        rejected { repo.createMatch(CreateMatch("duplicate-names", listOf(CreateMatchPlayer("a", displayName = " Max "), CreateMatchPlayer("b", displayName = "MAX")))) }
+        assertEquals(allPlayers, db.playerDao().players())
+        assertEquals(2, db.matchDao().matches().size)
+    }
+
+    @Test fun legacyIdLateJoinResolvesCanonicalAndRejectsAnotherIdWithSameName() = runBlocking {
+        db.playerDao().upsert(PlayerEntity("late-first", "Ana", "ana", 1, 1))
+        db.playerDao().upsert(PlayerEntity("late-second", "ANA", "ana", 2, 2))
+        val id = create()
+        repo.addParticipant(AddParticipant(id, PlayerId("late-second"), 1))
+        val joined = snapshot(id)
+        assertEquals(PlayerId("late-first"), joined.participants[1].playerId)
+        assertEquals("ANA", joined.participants[1].displayName)
+        rejected { repo.addParticipant(AddParticipant(id, PlayerId("late-second"), 3)) }
+        assertEquals(joined, snapshot(id))
+    }
+
+    @Test fun legacyCreationReceiptReplaysEvenIfOriginalRosterHasDuplicateNames() = runBlocking {
+        db.withTransaction {
+            db.playerDao().upsert(PlayerEntity("same-a", "Same", "same", 1, 1))
+            db.playerDao().upsert(PlayerEntity("same-b", "Same", "same", 1, 1))
+            seedFinished("legacy", 1, listOf(Triple("same-a", "Same", 0), Triple("same-b", "Same", 101)))
+            val row = db.matchDao().get("legacy")!!
+            // SHA-256 of the v1 length-prefixed payload [a, empty, Same, b, empty, Same].
+            db.matchDao().updateMatch(row.copy(creationToken = "legacy-retry",
+                creationFingerprint = "01f8114512895fc58ac5950230abe016220eba7650b4ede5c5e99640574b3297"))
+        }
+        val before = snapshot(MatchId("legacy"))
+        val command = CreateMatch("legacy-retry", listOf(CreateMatchPlayer("a", displayName = "Same"), CreateMatchPlayer("b", displayName = "Same")))
+        assertEquals(MatchId("legacy"), repo.createMatch(command))
+        assertEquals(before, snapshot(MatchId("legacy")))
+        rejected { repo.createMatch(command.copy(players = command.players.reversed())) }
+        rejected { repo.createMatch(command.copy(creationToken = "new-duplicate")) }
+        assertEquals(1, db.matchDao().matches().size)
+    }
+
+    @Test fun namedLateJoinAfterLegacyRenameUsesAnotherTechnicalIdAndRetriesDurably() = runBlocking {
+        val id = create()
+        val originalCommand = AddPlayerToMatch(id, "original-ana", "Ana")
+        val originalParticipant = repo.addPlayerToMatch(originalCommand)
+        val original = snapshot(id)
+        val canonicalId = original.participants.last().playerId
+        players.upsert(UpsertPlayer(canonicalId, "Renamed"))
+        clock.time = clock.time.plusSeconds(1)
+        val command = AddPlayerToMatch(id, "renamed-join", " Renamed ")
+
+        val joinedIds = coroutineScope { List(4) { async(Dispatchers.Default) {
+            RoomMatchRepository(db, clock).addPlayerToMatch(command)
+        } }.awaitAll() }
+
+        val joined = snapshot(id)
+        assertEquals(1, joinedIds.distinct().size)
+        assertEquals(original.participants, joined.participants.take(3))
+        assertEquals("Renamed", joined.participants.last().displayName)
+        assertNotEquals(canonicalId, joined.participants.last().playerId)
+        assertEquals(4, db.playerDao().players().size)
+        assertEquals(originalParticipant, repo.addPlayerToMatch(originalCommand))
+        assertEquals(joinedIds.first(), RoomMatchRepository(db, clock).addPlayerToMatch(command))
+        rejected { repo.addPlayerToMatch(command.copy(displayName = "RENAMED")) }
+        rejected { repo.addPlayerToMatch(command.copy(operationToken = "duplicate-name", displayName = "RENAMED")) }
+        assertEquals(joined, snapshot(id))
+        val another = create()
+        repo.addPlayerToMatch(AddPlayerToMatch(another, "ordinary-reuse", "Renamed"))
+        assertEquals(canonicalId, snapshot(another).participants.last().playerId)
+        assertEquals(4, db.playerDao().players().size)
+    }
+
+    @Test fun legacyIdLateJoinAfterRenamePreservesSnapshotAndRejectsDuplicateNormalizedName() = runBlocking {
+        val id = create()
+        repo.addPlayerToMatch(AddPlayerToMatch(id, "original-ana", "Ana"))
+        val original = snapshot(id)
+        val canonicalId = original.participants.last().playerId
+        players.upsert(UpsertPlayer(canonicalId, "Renamed"))
+        clock.time = clock.time.plusSeconds(1)
+
+        repo.addParticipant(AddParticipant(id, canonicalId, 3))
+
+        val joined = snapshot(id)
+        assertEquals(original.participants, joined.participants.take(3))
+        assertEquals("Renamed", joined.participants.last().displayName)
+        assertNotEquals(canonicalId, joined.participants.last().playerId)
+        assertEquals(4, db.playerDao().players().size)
+        rejected { repo.addParticipant(AddParticipant(id, canonicalId, 4)) }
+        rejected { repo.addPlayerToMatch(AddPlayerToMatch(id, "duplicate-name", " RENAMED ")) }
+        assertEquals(joined, snapshot(id))
+        val another = create()
+        repo.addParticipant(AddParticipant(another, canonicalId, 2))
+        assertEquals(canonicalId, snapshot(another).participants.last().playerId)
+        assertEquals(4, db.playerDao().players().size)
+    }
+
     @Test fun createIsAtomicAcrossIdentityMatchAndParticipantWrites() = runBlocking {
         db.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER fail_atomic_create BEFORE INSERT ON matches " +
@@ -67,7 +238,7 @@ class RoomMatchRepositoryTest {
                 creationToken = "atomic-token",
                 players = listOf(
                     CreateMatchPlayer("new-a", displayName = "Same"),
-                    CreateMatchPlayer("new-b", displayName = "Same"),
+                    CreateMatchPlayer("new-b", displayName = "Other"),
                 ),
             ))
             fail("Expected SQLite failure")
@@ -83,7 +254,7 @@ class RoomMatchRepositoryTest {
             creationToken = "durable-token",
             players = listOf(
                 CreateMatchPlayer("equal-a", displayName = "Same"),
-                CreateMatchPlayer("equal-b", displayName = "Same"),
+                CreateMatchPlayer("equal-b", displayName = "Other"),
             ),
         )
 
@@ -103,27 +274,28 @@ class RoomMatchRepositoryTest {
             ))
         }
         assertEquals(1, db.matchDao().matches().size)
-        assertEquals(listOf("Same", "Same"), snapshot(first).participants.map { it.displayName })
+        assertEquals(listOf("Same", "Other"), snapshot(first).participants.map { it.displayName })
     }
 
-    @Test fun createReuseAndPlayerRenameKeepIdentityAndHistoricalNameSnapshots() = runBlocking {
+    @Test fun createReuseAfterLegacyPlayerRenameResolvesSnapshotNameWithoutChangingHistory() = runBlocking {
         val a = players.upsert(UpsertPlayer(displayName = " Ana "))
-        val b = players.upsert(UpsertPlayer(displayName = "Ana"))
+        val b = players.upsert(UpsertPlayer(displayName = "Bia"))
         assertNotEquals(a, b)
         val id = repo.createMatch(CreateMatch("rename-first", listOf(
-            CreateMatchPlayer("a", a, "Ana"), CreateMatchPlayer("b", b, "Ana"),
+            CreateMatchPlayer("a", a, "Ana"), CreateMatchPlayer("b", b, "Bia"),
         )))
         players.upsert(UpsertPlayer(a, "Bea"))
         val saved = snapshot(id)
-        assertEquals(listOf("Ana", "Ana"), saved.participants.map { it.displayName })
+        assertEquals(listOf("Ana", "Bia"), saved.participants.map { it.displayName })
         assertEquals(saved.participants.first().id, saved.dealerParticipantId)
         assertTrue(saved.rounds.isEmpty())
         val reused = repo.createMatch(CreateMatch("rename-second", saved.participants.reversed().mapIndexed { index, participant ->
             CreateMatchPlayer("reused-$index", participant.playerId, participant.displayName)
         }))
-        assertEquals(listOf(b, a), snapshot(reused).participants.map { it.playerId })
-        assertEquals(listOf("Ana", "Ana"), snapshot(reused).participants.map { it.displayName })
-        assertEquals(2, players.observePlayers().first().size)
+        assertEquals(b, snapshot(reused).participants.first().playerId)
+        assertNotEquals(a, snapshot(reused).participants.last().playerId)
+        assertEquals(listOf("Bia", "Ana"), snapshot(reused).participants.map { it.displayName })
+        assertEquals(3, players.observePlayers().first().size)
         rejected { repo.createMatch(CreateMatch("duplicate", listOf(
             CreateMatchPlayer("a", a, "Ana"), CreateMatchPlayer("b", a, "Ana"),
         ))) }
@@ -693,7 +865,7 @@ class RoomMatchRepositoryTest {
         clock.time = Instant.parse("2026-10-14T02:00:00Z")
         val complete = repo.createMatch(CreateMatch("history-complete", listOf(
             CreateMatchPlayer("same-a", displayName = "Alex"),
-            CreateMatchPlayer("same-b", displayName = "Alex"),
+            CreateMatchPlayer("same-b", displayName = "Bella"),
             CreateMatchPlayer("carla", displayName = "Carla"),
             CreateMatchPlayer("nina", displayName = "Nina"),
         )))
@@ -731,14 +903,13 @@ class RoomMatchRepositoryTest {
         assertEquals(listOf(active, complete, olderComplete), day.matches.map { it.id })
         assertEquals(listOf(999, 999), day.matches.first().players.map { it.total })
         assertTrue(day.matches.first().players.none { it.isWinner || it.isHighestPenalty })
-        val expectedWinnerIds = completeRows.take(2).map { PlayerId(it.playerId) }.sortedBy { it.value }
         assertEquals(
-            listOf(expectedWinnerIds[0], expectedWinnerIds[1], PlayerId(completeRows[2].playerId), PlayerId(completeRows[3].playerId)),
-            day.wins.map { it.playerId },
+            listOf(PlayerNameKey("alex"), PlayerNameKey("bella"), PlayerNameKey("carla"), PlayerNameKey("nina")),
+            day.wins.map { it.playerKey },
         )
         assertEquals(listOf(2, 2, 0, 0), day.wins.map { it.value })
         assertEquals(listOf(213, 168, 58, 58), day.penalties.map { it.value })
-        assertEquals(PlayerId(completeRows[2].playerId), day.penalties.first().playerId)
+        assertEquals(PlayerNameKey("carla"), day.penalties.first().playerKey)
         assertEquals("America/Sao_Paulo", day.matches[1].timeZoneId)
         assertTrue(repo.observeDay(LocalDate.parse("2026-10-14")).first().matches.isEmpty())
     }

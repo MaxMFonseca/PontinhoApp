@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
+import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.CreateMatch
 import com.maxmfonseca.pontinho.domain.repository.CreateMatchPlayer
 import com.maxmfonseca.pontinho.domain.repository.MatchRepository
@@ -64,7 +65,7 @@ class MatchSetupViewModel(
 
     fun updateDialogName(value: String) = updateIfEditable { state ->
         val dialog = state.nameDialog ?: return@updateIfEditable state
-        state.copy(nameDialog = dialog.copy(value = value, showBlankError = false))
+        state.copy(nameDialog = dialog.copy(value = value, showBlankError = false, duplicateNameError = false))
     }
 
     fun confirmPlayerName() {
@@ -74,10 +75,19 @@ class MatchSetupViewModel(
             val dialog = state.nameDialog ?: return@update state
             val trimmed = dialog.value.trim()
             if (trimmed.isEmpty()) return@update state.copy(nameDialog = dialog.copy(showBlankError = true))
+            val key = PlayerNameKey.from(trimmed)
+            if (state.players.any { it.draftId != dialog.editingDraftId && PlayerNameKey.from(it.displayName) == key }) {
+                return@update state.copy(nameDialog = dialog.copy(duplicateNameError = true))
+            }
             val players = if (dialog.editingDraftId == null) {
                 state.players + DraftPlayer(newDraftId(), null, trimmed)
             } else {
-                state.players.map { if (it.draftId == dialog.editingDraftId) it.copy(displayName = trimmed) else it }
+                state.players.map {
+                    if (it.draftId == dialog.editingDraftId) it.copy(
+                        displayName = trimmed,
+                        playerId = if (PlayerNameKey.from(it.displayName) == key) it.playerId else null,
+                    ) else it
+                }
             }
             persisted = players
             state.copy(players = players, nameDialog = null)
@@ -114,7 +124,7 @@ class MatchSetupViewModel(
     fun createMatch() {
         var roster: List<DraftPlayer>? = null
         mutableUiState.update { state ->
-            if (state.players.size < 2 || state.isCreating || savedStateHandle.get<String>(COMMITTED_MATCH_ID) != null) state
+            if (!state.canCreate || savedStateHandle.get<String>(COMMITTED_MATCH_ID) != null) state
             else {
                 roster = state.players
                 state.copy(isCreating = true, createError = false, nameDialog = null)

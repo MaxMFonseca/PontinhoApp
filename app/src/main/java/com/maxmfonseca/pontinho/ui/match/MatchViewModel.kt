@@ -25,6 +25,7 @@ class MatchViewModel(
     private var emittedRevision: Long? = null
     private var submissionToken = ""
     private var addPlayerToken: String? = null
+    private var submittedPlayerName: String? = null
 
     init {
         scope.launch {
@@ -84,7 +85,8 @@ class MatchViewModel(
         if (uiState.value.isSaving) return
         prepared = null
         addPlayerToken = null
-        mutableUiState.update { it.copy(picker = null, scoreDialog = null, playerName = null, hasError = false) }
+        submittedPlayerName = null
+        mutableUiState.update { it.copy(picker = null, scoreDialog = null, playerName = null, hasError = false, duplicateNameError = false) }
     }
 
     fun confirmScore() {
@@ -113,19 +115,31 @@ class MatchViewModel(
         val state = uiState.value
         if (!state.canManagePlayers || state.isSaving || state.scoreDialog != null || state.picker != null) return
         addPlayerToken = UUID.randomUUID().toString()
-        mutableUiState.update { it.copy(playerName = "", hasError = false) }
+        submittedPlayerName = null
+        mutableUiState.update { it.copy(playerName = "", hasError = false, duplicateNameError = false) }
     }
 
     fun updatePlayerName(value: String) {
         if (uiState.value.isSaving || uiState.value.playerName == null) return
-        mutableUiState.update { it.copy(playerName = value, hasError = false) }
+        if (submittedPlayerName != null && submittedPlayerName != value.trim()) {
+            addPlayerToken = UUID.randomUUID().toString()
+            submittedPlayerName = null
+        }
+        mutableUiState.update { it.copy(playerName = value, hasError = false, duplicateNameError = false) }
     }
 
     fun confirmPlayerName() {
         val state = uiState.value
         val name = state.playerName?.trim()?.takeIf { it.isNotEmpty() } ?: return
-        if (!state.canManagePlayers) return
+        if (!state.canManagePlayers || state.isSaving) return
         val token = addPlayerToken ?: return
+        // Retry an attempted command before duplicate validation: its own committed
+        // participation may already be visible after a lost acknowledgement.
+        if (submittedPlayerName == null && state.players.any { PlayerNameKey.from(it.name) == PlayerNameKey.from(name) }) {
+            mutableUiState.update { it.copy(duplicateNameError = true) }
+            return
+        }
+        submittedPlayerName = name
         mutate {
             // Keep the token until success is observed. A lost acknowledgement or
             // failed refresh can safely replay the same atomic repository operation.
@@ -173,7 +187,8 @@ class MatchViewModel(
                 snapshot = repository.observeMatch(matchId).first()
                 prepared = null
                 addPlayerToken = null
-                mutableUiState.update { it.copy(playerName = null, scoreDialog = null, picker = null) }
+                submittedPlayerName = null
+                mutableUiState.update { it.copy(playerName = null, scoreDialog = null, picker = null, duplicateNameError = false) }
                 render()
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: Exception) { mutableUiState.update { it.copy(hasError = true) }

@@ -3,11 +3,14 @@ package com.maxmfonseca.pontinho.ui.match
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.SavedStateHandle
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavHostController
 import androidx.compose.runtime.SideEffect
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
+import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.repository.*
 import com.maxmfonseca.pontinho.di.AppContainer
@@ -16,6 +19,8 @@ import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.settings.*
 import com.maxmfonseca.pontinho.ui.components.RoundStatusKind
 import com.maxmfonseca.pontinho.ui.navigation.*
+import com.maxmfonseca.pontinho.ui.setup.MatchSetupViewModel
+import com.maxmfonseca.pontinho.ui.setup.MatchSetupEvent
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.junit.*
@@ -27,6 +32,93 @@ class MatchIntegrationTest {
     private val stores = mutableListOf<ViewModelStore>()
     @Before fun setup() { db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java).build() }
     @After fun close() { stores.forEach { it.clear() }; db.close() }
+
+    @Test fun duplicateDialogsShowLocalizedInlineErrorKeepInputAndAllowCorrection() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val repo = RoomMatchRepository(db)
+        compose.setContent { PontinhoNavHost(container(repo), startDestination = Destination.Setup.route) }
+        fun addSetupName(name: String) {
+            compose.onNodeWithText(context.getString(R.string.setup_add_player)).performScrollTo().performClick()
+            compose.onNodeWithTag("player_name_input").performTextInput(name)
+            compose.onNodeWithText(context.getString(R.string.confirm)).performClick()
+        }
+        addSetupName("Max")
+        addSetupName(" max ")
+        compose.onNodeWithTag("player_name_input").assertIsFocused().assertTextContains(" max ")
+        compose.onNodeWithText(context.getString(R.string.player_name_duplicate_error)).assertIsDisplayed()
+        compose.onNodeWithTag("player_name_input").performTextReplacement("Julia")
+        compose.onNodeWithText(context.getString(R.string.player_name_duplicate_error)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.confirm)).performClick()
+        compose.onNodeWithText(context.getString(R.string.setup_create_match)).performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("match_add_player").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("match_add_player").performClick()
+        compose.onNodeWithTag("player_name_input").performTextInput(" JULIA ")
+        compose.onNodeWithText(context.getString(R.string.confirm)).performClick()
+        compose.onNodeWithTag("player_name_input").assertIsFocused().assertTextContains(" JULIA ")
+        compose.onNodeWithText(context.getString(R.string.player_name_duplicate_error)).assertIsDisplayed()
+        compose.onNodeWithTag("player_name_input").performTextReplacement("Dora")
+        compose.onNodeWithText(context.getString(R.string.player_name_duplicate_error)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.confirm)).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("player_name_input").fetchSemanticsNodes().isEmpty() }
+        runBlocking {
+            val match = repo.observeHome().first().single().matches.single()
+            assertEquals(listOf("Max", "Julia", "Dora"), match.participants.map { it.displayName })
+            assertEquals(3, db.playerDao().players().size)
+        }
+    }
+
+    @Test fun setupRenameCreatesNewIdentityAndCapitalizationReusesWithoutChangingHistory() = runBlocking {
+        val repo = RoomMatchRepository(db)
+        val originalId = repo.createMatch(CreateMatch("original-names", listOf(
+            CreateMatchPlayer("j", displayName = "Julia"), CreateMatchPlayer("m", displayName = "max"))))
+        val original = repo.observeMatch(originalId).first()!!
+        val julia = db.playerDao().get(original.participants[0].playerId.value)!!
+        val model = MatchSetupViewModel(SavedStateHandle(), repo, Dispatchers.Unconfined)
+        val store = ViewModelStore(); store.put("setup", model); stores += store
+        model.uiState.first { it.canUseLastMatch }
+        model.requestUseLastMatch()
+        val draft = model.uiState.value.players
+        model.openEditPlayer(draft[0].draftId); model.updateDialogName("Julia2"); model.confirmPlayerName()
+        model.openEditPlayer(draft[1].draftId); model.updateDialogName("MAX"); model.confirmPlayerName()
+        model.createMatch()
+        val newId = (withTimeout(5_000) { model.events.first() } as MatchSetupEvent.OpenMatch).matchId
+        val created = repo.observeMatch(newId).first()!!
+        assertEquals(listOf("Julia2", "MAX"), created.participants.map { it.displayName })
+        assertNotEquals(original.participants[0].playerId, created.participants[0].playerId)
+        assertEquals(original.participants[1].playerId, created.participants[1].playerId)
+        assertEquals(julia, db.playerDao().get(julia.id))
+        assertEquals(original, repo.observeMatch(originalId).first())
+        assertEquals(3, db.playerDao().players().size)
+    }
+
+    @Test fun duplicateCreateRollsBackAndConcurrentLateNamesReuseCanonicalExactlyOnce() = runBlocking {
+        val repo = RoomMatchRepository(db)
+        val rejected = runCatching { repo.createMatch(CreateMatch("duplicate-roster", listOf(
+            CreateMatchPlayer("one", displayName = "Max"), CreateMatchPlayer("two", displayName = " max ")))) }
+        assertTrue(rejected.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(db.playerDao().players().isEmpty())
+        assertTrue(db.matchDao().matches().isEmpty())
+        val canonicalMatch = repo.createMatch(CreateMatch("canonical", listOf(
+            CreateMatchPlayer("d", displayName = "Dora"), CreateMatchPlayer("m", displayName = "Max"))))
+        val canonical = repo.observeMatch(canonicalMatch).first()!!.participants.first().playerId
+        val target = repo.createMatch(CreateMatch("target", listOf(
+            CreateMatchPlayer("a", displayName = "Ana"), CreateMatchPlayer("b", displayName = "Bruno"))))
+        val commands = listOf("Dora", " dORA ", "DORA", "dora").mapIndexed { index, name ->
+            AddPlayerToMatch(target, "concurrent-$index", name)
+        }
+        val results = commands.map { command -> async(Dispatchers.IO) {
+            runCatching { RoomMatchRepository(db).addPlayerToMatch(command) }
+        } }.awaitAll()
+        assertEquals(1, results.count { it.isSuccess })
+        assertTrue(results.filter { it.isFailure }.all { it.exceptionOrNull() is IllegalArgumentException })
+        val committed = repo.observeMatch(target).first()!!
+        assertEquals(3, committed.participants.size)
+        assertEquals(canonical, committed.participants.last().playerId)
+        assertEquals(4, db.playerDao().players().size)
+        val winner = results.indexOfFirst { it.isSuccess }
+        assertEquals(results[winner].getOrThrow(), repo.addPlayerToMatch(commands[winner]))
+        assertEquals(committed, repo.observeMatch(target).first())
+    }
 
     @Test fun lateJoinRecoversLostCommitAcknowledgementAndRefreshWithoutDuplicates() = runBlocking {
         for (failAfterCommit in listOf(true, false)) {
@@ -60,12 +152,43 @@ class MatchIntegrationTest {
             val committed = real.observeMatch(id).first()!!
             assertEquals(3, committed.participants.size)
             val globalCount = db.playerDao().players().size
+            withTimeout(5_000) { model.uiState.first { it.players.size == 3 } }
+            assertEquals("Dora", model.uiState.value.playerName)
             model.confirmPlayerName()
             withTimeout(5_000) { model.uiState.first { !it.isSaving && !it.hasError && it.playerName == null } }
             assertEquals(committed, real.observeMatch(id).first())
             assertEquals(globalCount, db.playerDao().players().size)
             assertEquals(committed.participants.map { it.id }, model.uiState.value.players.map { it.id })
         }
+    }
+
+    @Test fun editingNameAfterLostAcknowledgementStartsAnotherDurableCommand() = runBlocking {
+        val real = RoomMatchRepository(db)
+        val id = real.createMatch(CreateMatch("edited-retry", listOf(
+            CreateMatchPlayer("a", displayName = "Ana"), CreateMatchPlayer("b", displayName = "Bruno"))))
+        var throwOnce = true
+        val repo = object : MatchRepository by real {
+            override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId {
+                val result = real.addPlayerToMatch(command)
+                if (throwOnce) {
+                    throwOnce = false
+                    throw java.io.IOException("Lost committed acknowledgement")
+                }
+                return result
+            }
+        }
+        val model = vm(id, repo)
+        model.uiState.first { !it.isLoading }
+        model.openAddPlayer(); model.updatePlayerName(" Dora "); model.confirmPlayerName()
+        withTimeout(5_000) { model.uiState.first { !it.isSaving && it.hasError } }
+        assertEquals(" Dora ", model.uiState.value.playerName)
+        model.updatePlayerName("Eva"); model.confirmPlayerName()
+        val settled = withTimeout(5_000) { model.uiState.first { !it.isSaving } }
+        assertFalse(settled.hasError)
+        assertNull(settled.playerName)
+        val committed = real.observeMatch(id).first()!!
+        assertEquals(listOf("Ana", "Bruno", "Dora", "Eva"), committed.participants.map { it.displayName })
+        assertEquals(4, db.playerDao().players().size)
     }
 
     @Test fun lateJoinFailureThenCancelAndReopenDoesNotLeaveAnOrphanIdentity() = runBlocking {
@@ -76,6 +199,7 @@ class MatchIntegrationTest {
         db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_vm_join BEFORE INSERT ON participants BEGIN SELECT RAISE(ABORT, 'join failed'); END")
         model.openAddPlayer(); model.updatePlayerName("Dora"); model.confirmPlayerName()
         withTimeout(5_000) { model.uiState.first { !it.isSaving && it.hasError } }
+        assertEquals("Dora", model.uiState.value.playerName)
         assertEquals(2, db.playerDao().players().size)
         assertEquals(2, repository.observeMatch(id).first()!!.participants.size)
         model.dismissDialog()

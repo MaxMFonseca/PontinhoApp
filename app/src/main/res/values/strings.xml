@@ -86,6 +86,7 @@
     <string name="deals_cards">Dá as cartas</string>
     <string name="player_name_title">Nome do jogador</string>
     <string name="player_name_label">Nome</string>
+    <string name="player_name_duplicate_error">Já existe um jogador com esse nome nesta partida.</string>
     <string name="confirm">Confirmar</string>
     <string name="cancel">Cancelar</string>
     <string name="score_dialog_title">Pontos de %1$s</string>

@@ -13,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
+import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.*
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -36,8 +37,8 @@ class HistoryScreenTest {
                             HistoryPlayer(PlayerId("c"), "Carla", 112, false, true),
                         )),
                     ),
-                    wins = listOf(DailyStanding(PlayerId("b"), "Bruno", 1)),
-                    penalties = listOf(DailyStanding(PlayerId("c"), "Carla", 112)),
+                    wins = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 1)),
+                    penalties = listOf(DailyStanding(PlayerNameKey("carla"), "Carla", 112)),
                     summaryExpanded = true,
                     isLoading = false,
                 ),

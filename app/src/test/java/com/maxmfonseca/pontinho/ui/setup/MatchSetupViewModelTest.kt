@@ -26,6 +26,28 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchSetupViewModelTest {
+    @Test fun creationFailurePreservesEditedDraftAndAllowsRetry() = runTest {
+        var fail = true
+        val repo = FakeMatchRepository(createBlock = {
+            if (fail) throw java.io.IOException("Storage unavailable")
+            MatchId("retried")
+        })
+        val saved = SavedStateHandle()
+        val vm = MatchSetupViewModel(saved, repo, StandardTestDispatcher(testScheduler))
+        add(vm, "Julia"); add(vm, "Max")
+        vm.openEditPlayer(vm.uiState.value.players[0].draftId)
+        vm.updateDialogName("Julia2"); vm.confirmPlayerName()
+        val draft = vm.uiState.value.players
+        vm.createMatch(); advanceUntilIdle()
+        assertTrue(vm.uiState.value.createError)
+        assertEquals(draft, vm.uiState.value.players)
+        assertEquals(listOf("Julia2", "Max"), saved.get<ArrayList<String>>(MatchSetupViewModel.PLAYER_NAMES))
+        fail = false
+        vm.createMatch(); advanceUntilIdle()
+        assertFalse(vm.uiState.value.createError)
+        assertEquals(MatchSetupEvent.OpenMatch(MatchId("retried")), vm.events.first())
+    }
+
     @Test
     fun setupStartsEmptyAndCreateRequiresTwoPlayers() {
         val viewModel = viewModel()
@@ -55,10 +77,10 @@ class MatchSetupViewModelTest {
     }
 
     @Test
-    fun equalNamesRemainDistinctPlayersAndOrderCanChange() {
+    fun distinctPlayersCanChangeOrder() {
         val viewModel = viewModel()
         add(viewModel, "Ana")
-        add(viewModel, "Ana")
+        add(viewModel, "Bruno")
         val original = viewModel.uiState.value.players
         assertNotEquals(original[0].draftId, original[1].draftId)
 
@@ -67,6 +89,54 @@ class MatchSetupViewModelTest {
         assertEquals(original[1].draftId, viewModel.uiState.value.players[0].draftId)
         viewModel.removePlayer(original[0].draftId)
         assertEquals(listOf(original[1].draftId), viewModel.uiState.value.players.map { it.draftId })
+    }
+
+    @Test fun normalizedRenameClearsIdentityWhileCapitalizationRetainsIt() {
+        val saved = SavedStateHandle(mapOf(
+            MatchSetupViewModel.DRAFT_IDS to arrayListOf("julia", "max"),
+            MatchSetupViewModel.PLAYER_IDS to arrayListOf("original-julia", "original-max"),
+            MatchSetupViewModel.PLAYER_NAMES to arrayListOf("Julia", "max"),
+        ))
+        val repo = FakeMatchRepository()
+        val vm = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        vm.openEditPlayer("julia"); vm.updateDialogName("Julia2"); vm.confirmPlayerName()
+        assertNull(vm.uiState.value.players[0].playerId)
+        assertEquals("Julia2", vm.uiState.value.players[0].displayName)
+        vm.openEditPlayer("max"); vm.updateDialogName("MAX"); vm.confirmPlayerName()
+        assertEquals(PlayerId("original-max"), vm.uiState.value.players[1].playerId)
+        vm.createMatch()
+        assertNull(repo.createdCommands.single().players[0].playerId)
+        assertEquals("Julia2", repo.createdCommands.single().players[0].displayName)
+    }
+
+    @Test fun duplicateNameKeepsTypedTextAndCannotCreateOrReplaceAnotherPlayer() {
+        val vm = viewModel()
+        add(vm, "Max"); add(vm, " max ")
+        assertEquals(" max ", vm.uiState.value.nameDialog?.value)
+        assertTrue(vm.uiState.value.nameDialog!!.duplicateNameError)
+        assertEquals(1, vm.uiState.value.players.size)
+        assertFalse(vm.uiState.value.canCreate)
+        vm.updateDialogName("Julia")
+        assertFalse(vm.uiState.value.nameDialog!!.duplicateNameError)
+        vm.confirmPlayerName()
+        vm.openEditPlayer(vm.uiState.value.players[1].draftId)
+        vm.updateDialogName("MAX"); vm.confirmPlayerName()
+        assertEquals("MAX", vm.uiState.value.nameDialog?.value)
+        assertTrue(vm.uiState.value.nameDialog!!.duplicateNameError)
+        assertEquals(listOf("Max", "Julia"), vm.uiState.value.players.map { it.displayName })
+    }
+
+    @Test fun restoredDuplicateRosterCannotCreate() {
+        val saved = SavedStateHandle(mapOf(
+            MatchSetupViewModel.DRAFT_IDS to arrayListOf("a", "b"),
+            MatchSetupViewModel.PLAYER_IDS to arrayListOf("", ""),
+            MatchSetupViewModel.PLAYER_NAMES to arrayListOf("Max", " max "),
+        ))
+        val repo = FakeMatchRepository()
+        val vm = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        assertFalse(vm.uiState.value.canCreate)
+        vm.createMatch()
+        assertTrue(repo.createdCommands.isEmpty())
     }
 
     @Test
@@ -149,13 +219,13 @@ class MatchSetupViewModelTest {
         val matches = FakeMatchRepository(createdMatchId = MatchId("match-7"))
         val viewModel = viewModel(players, matches)
         add(viewModel, " Ana ")
-        add(viewModel, "Ana")
+        add(viewModel, " Bruno ")
 
         viewModel.createMatch()
         viewModel.createMatch()
 
         assertTrue(players.upserts.isEmpty())
-        assertEquals(listOf("Ana", "Ana"), matches.createdCommands.single().players.map { it.displayName })
+        assertEquals(listOf("Ana", "Bruno"), matches.createdCommands.single().players.map { it.displayName })
         assertNotEquals(
             matches.createdCommands.single().players[0].draftId,
             matches.createdCommands.single().players[1].draftId,

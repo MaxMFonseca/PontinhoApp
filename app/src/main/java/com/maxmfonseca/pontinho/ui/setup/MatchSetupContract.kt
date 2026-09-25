@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.setup
 
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
+import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 
 data class DraftPlayer(
     val draftId: String,
@@ -13,6 +14,7 @@ data class PlayerNameDialogState(
     val editingDraftId: String?,
     val value: String,
     val showBlankError: Boolean = false,
+    val duplicateNameError: Boolean = false,
 )
 
 data class MatchSetupUiState(
@@ -24,7 +26,8 @@ data class MatchSetupUiState(
     val createError: Boolean = false,
 ) {
     val minimumPlayers: Int get() = 2
-    val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating
+    val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating &&
+        players.map { PlayerNameKey.from(it.displayName) }.distinct().size == players.size
     val canUseLastMatch: Boolean get() = latestMatchPlayers.isNotEmpty()
     val showNoPreviousMatchExplanation: Boolean get() = !canUseLastMatch
 }

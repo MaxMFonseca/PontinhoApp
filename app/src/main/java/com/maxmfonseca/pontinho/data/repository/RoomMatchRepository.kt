@@ -18,7 +18,6 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
-import java.util.Locale
 import java.util.UUID
 
 class RoomMatchRepository(
@@ -64,33 +63,22 @@ class RoomMatchRepository(
         val normalized = command.players.map { player ->
             player.copy(displayName = player.displayName.trim().also { require(it.isNotEmpty()) { "Player name must not be blank" } })
         }
-        val existingIds = normalized.mapNotNull { it.playerId }
-        require(existingIds.distinct().size == existingIds.size) { "Duplicate player identity" }
         val fingerprint = creationFingerprint(normalized)
         matches.getByCreationToken(command.creationToken)?.let { existing ->
             require(existing.creationFingerprint == fingerprint) { "Creation token was already used for a different command" }
             return@withTransaction MatchId(existing.id)
         }
+        val nameKeys = normalized.map { PlayerNameKey.from(it.displayName) }
+        require(nameKeys.distinct().size == nameKeys.size) { "Duplicate player name" }
         val now = clock.instant()
         val zone = clock.zone
         val matchId = uuid()
         val players = normalized.map { requested ->
-            val id = requested.playerId?.value ?: stablePlayerId(command.creationToken, requested.draftId)
-            val old = db.playerDao().get(id)
-            if (requested.playerId != null) {
-                requireNotNull(old) { "Unknown player" }
-                require(old.archivedAt == null) { "Archived player" }
-            } else {
-                require(old == null) { "Generated player identity collision" }
+            requested.playerId?.let {
+                val referenced = requireNotNull(db.playerDao().get(it.value)) { "Unknown player" }
+                require(referenced.archivedAt == null) { "Archived player" }
             }
-            PlayerEntity(
-                id = id,
-                displayName = requested.displayName,
-                normalizedName = requested.displayName.lowercase(Locale.ROOT),
-                createdAt = old?.createdAt ?: now.toEpochMilli(),
-                updatedAt = now.toEpochMilli(),
-                archivedAt = old?.archivedAt,
-            ).also { db.playerDao().upsert(it) }
+            resolvePlayer(requested.displayName, stablePlayerId(command.creationToken, requested.draftId), now.toEpochMilli())
         }
         val roster = players.mapIndexed { index, player ->
             MatchParticipantEntity(uuid(), matchId, player.id, player.displayName, index, 1, now.toEpochMilli())
@@ -115,18 +103,18 @@ class RoomMatchRepository(
         // Check replay before gameplay guards: a committed retry must still succeed
         // after another command reorders the roster, opens a round, or ends the match.
         roster.singleOrNull { it.id == participantId }?.let { existing ->
-            require(existing.playerId == playerId && existing.nameSnapshot == name) {
+            require(existing.nameSnapshot == name) {
                 "Operation token was already used for a different command"
             }
             return@withTransaction ParticipantId(existing.id)
         }
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
-        require(db.playerDao().get(playerId) == null) { "Generated player identity collision" }
+        require(roster.none { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(name) }) { "Duplicate player name" }
         val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
         val now = clock.millis()
-        db.playerDao().upsert(PlayerEntity(playerId, name, name.lowercase(Locale.ROOT), now, now))
-        matches.insertParticipant(MatchParticipantEntity(participantId, match.id, playerId, name, roster.size, ordinal, now))
+        val player = resolvePlayer(name, playerId, now, roster.map { it.playerId }.toSet())
+        matches.insertParticipant(MatchParticipantEntity(participantId, match.id, player.id, name, roster.size, ordinal, now))
         matches.updateMatch(match.copy(lastPlayedAt = now))
         ParticipantId(participantId)
     }
@@ -135,17 +123,18 @@ class RoomMatchRepository(
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
         val roster = matches.participants(match.id)
-        require(roster.none { it.playerId == command.playerId.value }) { "Duplicate player identity" }
         require(command.rosterOrder in 0..roster.size) { "Invalid roster position" }
         val player = requireNotNull(db.playerDao().get(command.playerId.value)) { "Unknown player" }
         require(player.archivedAt == null) { "Archived player" }
+        require(roster.none { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(player.displayName) }) { "Duplicate player name" }
+        val canonical = resolvePlayer(player.displayName, uuid(), clock.millis(), roster.map { it.playerId }.toSet())
         val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
         // Shift from the tail so the unique roster position is never violated.
         roster.filter { it.rosterOrder >= command.rosterOrder }.asReversed().forEach {
             matches.updateParticipant(it.copy(rosterOrder = it.rosterOrder + 1))
         }
         matches.insertParticipant(MatchParticipantEntity(
-            uuid(), match.id, player.id, player.displayName, command.rosterOrder, ordinal, clock.millis(),
+            uuid(), match.id, canonical.id, player.displayName, command.rosterOrder, ordinal, clock.millis(),
         ))
         matches.updateMatch(match.copy(lastPlayedAt = clock.millis()))
     }
@@ -392,6 +381,26 @@ class RoomMatchRepository(
 
     private fun uuid(): String = UUID.randomUUID().toString()
 
+    // Call only inside the command transaction: lookup and insertion must serialize.
+    private suspend fun resolvePlayer(
+        name: String,
+        newId: String,
+        now: Long,
+        occupiedPlayerIds: Set<String> = emptySet(),
+    ): PlayerEntity {
+        val key = PlayerNameKey.from(name)
+        val canonical = db.playerDao().getCanonicalByNormalizedName(key.value)
+        require(canonical?.archivedAt == null) { "Archived player" }
+        // A legacy rename may leave this UUID in the roster under another snapshot name.
+        // Use a new technical row in that case; the immutable snapshot and name identity stay intact.
+        val existing = canonical?.takeUnless { it.id in occupiedPlayerIds }
+        if (existing == null) {
+            require(db.playerDao().get(newId) == null) { "Generated player identity collision" }
+        }
+        return PlayerEntity(existing?.id ?: newId, name, key.value, existing?.createdAt ?: now, now)
+            .also { db.playerDao().upsert(it) }
+    }
+
     private fun stablePlayerId(token: String, draftId: String): String = UUID.nameUUIDFromBytes(
         "$token\u0000$draftId".toByteArray(StandardCharsets.UTF_8),
     ).toString()
@@ -435,21 +444,21 @@ class RoomMatchRepository(
         val completed = historyMatches.filter { it.isFinished }
         val names = buildMap {
             // Matches are newest first, so the first snapshot is the player's latest display name.
-            completed.flatMap { it.players }.forEach { putIfAbsent(it.playerId, it.displayName) }
+            completed.flatMap { it.players }.forEach { putIfAbsent(PlayerNameKey.from(it.displayName), it.displayName) }
         }
-        val winsByPlayer = completed.flatMap { match -> match.players.filter { it.isWinner }.map { it.playerId } }
+        val winsByPlayer = completed.flatMap { match -> match.players.filter { it.isWinner }.map { PlayerNameKey.from(it.displayName) } }
             .groupingBy { it }.eachCount()
         val wins = names.map { (id, displayName) ->
             DailyStanding(id, displayName, winsByPlayer[id] ?: 0)
         }
             .sortedWith(compareByDescending<DailyStanding> { it.value }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-                .thenBy { it.displayName }.thenBy { it.playerId.value })
-        val penalties = completed.flatMap { it.players }.groupBy { it.playerId }
+                .thenBy { it.displayName }.thenBy { it.playerKey.value })
+        val penalties = completed.flatMap { it.players }.groupBy { PlayerNameKey.from(it.displayName) }
             .map { (id, entries) -> DailyStanding(id, names.getValue(id), entries.sumOf { it.total }) }
             .sortedWith(compareByDescending<DailyStanding> { it.value }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-                .thenBy { it.displayName }.thenBy { it.playerId.value })
+                .thenBy { it.displayName }.thenBy { it.playerKey.value })
         return DayHistory(localDate, historyMatches, wins, penalties)
     }
 }

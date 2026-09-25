@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.Flow
 interface PlayerDao {
     @Upsert suspend fun upsert(player: PlayerEntity)
     @Query("SELECT * FROM players WHERE id = :id") suspend fun get(id: String): PlayerEntity?
+    @Query("SELECT * FROM players WHERE normalizedName = :normalizedName ORDER BY createdAt, id LIMIT 1")
+    suspend fun getCanonicalByNormalizedName(normalizedName: String): PlayerEntity?
     @Query("SELECT * FROM players ORDER BY id") suspend fun players(): List<PlayerEntity>
     @Query("SELECT * FROM players WHERE archivedAt IS NULL ORDER BY normalizedName, id")
     fun observePlayers(): Flow<List<PlayerEntity>>

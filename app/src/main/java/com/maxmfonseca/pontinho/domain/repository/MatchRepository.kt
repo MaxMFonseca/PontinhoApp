@@ -78,7 +78,7 @@ data class HistoryMatch(
     val timeZoneId: String = "UTC",
 )
 
-data class DailyStanding(val playerId: PlayerId, val displayName: String, val value: Int)
+data class DailyStanding(val playerKey: PlayerNameKey, val displayName: String, val value: Int)
 
 data class DayHistory(
     val localDate: LocalDate,
@@ -99,11 +99,12 @@ interface MatchRepository {
     fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?>
     suspend fun createMatch(command: CreateMatch): MatchId
     suspend fun addParticipant(command: AddParticipant)
-    /** Atomically creates a named player and appends their participation between rounds.
+    /** Atomically resolves a named player and appends their participation between rounds.
      * The token is scoped to this match: replay with the same trimmed name returns the
      * original participant without writes, even if the roster or match has since changed.
      * A different name for a committed token is rejected. Failure/cancellation before
-     * commit leaves neither player nor participant. Different tokens mean distinct players.
+     * commit leaves neither player nor participant. Names resolve to a canonical player;
+     * duplicate normalized names within a match are rejected.
      */
     suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId
     suspend fun reorderParticipants(command: ReorderParticipants)

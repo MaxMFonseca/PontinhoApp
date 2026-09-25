@@ -18,6 +18,35 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun editingFailedLateJoinValidatesTheNewNameAgain() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.openAddPlayer(); vm.updatePlayerName(" Dora "); vm.confirmPlayerName()
+        advanceUntilIdle()
+        assertEquals(" Dora ", vm.uiState.value.playerName)
+        assertTrue(vm.uiState.value.hasError)
+        vm.updatePlayerName(" ANA "); vm.confirmPlayerName()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.duplicateNameError)
+        assertFalse(vm.uiState.value.hasError)
+        assertEquals(1, repo.lateJoinAttempts)
+    }
+
+    @Test fun lateJoinRejectsNormalizedDuplicateAndRetainsTypedText() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.openAddPlayer(); vm.updatePlayerName(" aNA "); vm.confirmPlayerName()
+        advanceUntilIdle()
+        assertEquals(" aNA ", vm.uiState.value.playerName)
+        assertTrue(vm.uiState.value.duplicateNameError)
+        assertFalse(vm.uiState.value.hasError)
+        assertEquals(0, repo.lateJoinAttempts)
+        vm.updatePlayerName("Dora")
+        assertFalse(vm.uiState.value.duplicateNameError)
+    }
+
     @Test fun rosterGuardTracksOpenPausedAndFinishedState() = runTest {
         val repo = ScoringRepository()
         val initial = repo.snapshot.value!!
@@ -213,6 +242,7 @@ private class ScoringRepository(private val gate: CompletableDeferred<Unit>? = n
         listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla")))
     val ids get() = snapshot.value!!.participants.map { it.id }
     var submissions = 0
+    var lateJoinAttempts = 0
     override fun observeMatch(matchId: MatchId) = snapshot
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
     override fun observeDay(localDate: LocalDate) = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
@@ -255,7 +285,10 @@ private class ScoringRepository(private val gate: CompletableDeferred<Unit>? = n
     }
     override suspend fun createMatch(command: CreateMatch): MatchId = error("unused")
     override suspend fun addParticipant(command: AddParticipant) = error("unused")
-    override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId = error("unused")
+    override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId {
+        lateJoinAttempts++
+        error("Storage unavailable")
+    }
     override suspend fun reorderParticipants(command: ReorderParticipants) = error("unused")
     override suspend fun removeRoundEntry(command: RemoveRoundEntry) {
         val r = snapshot.value!!.rounds.single { it.id == command.roundId }
