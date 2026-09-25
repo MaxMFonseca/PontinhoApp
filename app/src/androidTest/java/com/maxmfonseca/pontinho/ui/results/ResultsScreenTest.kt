@@ -5,6 +5,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
@@ -42,5 +45,26 @@ class ResultsScreenTest {
         composeRule.onNodeWithText(context.getString(R.string.results_details)).assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.results_back_history)).assertIsDisplayed()
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
+    }
+
+    @Test fun celebrationIsVisibleWithoutReducedMotionButDecorativeForTalkBack() {
+        composeRule.setContent {
+            CompositionLocalProvider(LocalReducedMotion provides false) {
+                ResultsScreen(
+                    state = ResultsUiState(
+                        matchId = MatchId("result"),
+                        localDate = LocalDate.parse("2026-10-14"),
+                        players = emptyList(),
+                        resultRevision = 1,
+                        isFinished = true,
+                        isLoading = false,
+                    ),
+                    onNewMatch = {}, onOpenMatch = {}, onOpenHistory = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("results_celebration", useUnmergedTree = true)
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Text))
     }
 }

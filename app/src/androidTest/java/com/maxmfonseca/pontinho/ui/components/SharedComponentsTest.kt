@@ -184,8 +184,12 @@ class SharedComponentsTest {
         )
         val nameLayout = nameLayouts.single()
         val totalLayout = totalLayouts.single()
-        assertTrue("Name and total overlap: $nameBounds vs $totalBounds", nameBounds.right <= totalBounds.left)
-        assertTrue("Long player name should ellipsize", nameLayout.isLineEllipsized(0))
+        assertFalse("Name and total overlap: $nameBounds vs $totalBounds", nameBounds.overlaps(totalBounds))
+        assertTrue("Large text should stack the total below the name", totalBounds.top >= nameBounds.bottom)
+        assertFalse(
+            "Player name overflowed visually: layout=${nameLayout.size}, node=$nameBounds",
+            nameLayout.hasVisualOverflow,
+        )
         assertFalse("Player total was ellipsized", totalLayout.isLineEllipsized(0))
         assertFalse(
             "Player total overflowed its measured width: layout=${totalLayout.size}, node=$totalBounds",

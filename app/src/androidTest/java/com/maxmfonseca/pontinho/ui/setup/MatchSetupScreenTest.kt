@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.down
 import androidx.compose.ui.test.moveBy
@@ -50,6 +51,13 @@ class MatchSetupScreenTest {
         composeRule.onNodeWithText("Editar jogadores", substring = true).assertDoesNotExist()
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
         composeRule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ToggleableState)).assertCountEquals(0)
+    }
+
+    @Test fun backGlyphHasLocalizedTalkBackDescription() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent { SetupContent(MatchSetupUiState()) }
+        composeRule.onNodeWithContentDescription(context.getString(R.string.match_back))
+            .assertContentDescriptionEquals(context.getString(R.string.match_back))
     }
 
     @Test

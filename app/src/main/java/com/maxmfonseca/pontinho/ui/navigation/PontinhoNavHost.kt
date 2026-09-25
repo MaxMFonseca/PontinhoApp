@@ -11,6 +11,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import android.content.Context
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -29,6 +31,12 @@ import com.maxmfonseca.pontinho.di.AppContainer
 import com.maxmfonseca.pontinho.ui.home.HomeScreen
 import com.maxmfonseca.pontinho.ui.home.HomeViewModel
 import com.maxmfonseca.pontinho.ui.learn.LearnScreen
+import com.maxmfonseca.pontinho.ui.about.AboutScreen
+import com.maxmfonseca.pontinho.ui.settings.AndroidXAppLocaleController
+import com.maxmfonseca.pontinho.ui.settings.AppearanceScreen
+import com.maxmfonseca.pontinho.ui.settings.LanguageScreen
+import com.maxmfonseca.pontinho.ui.settings.SettingsScreen
+import com.maxmfonseca.pontinho.ui.settings.SettingsViewModel
 import com.maxmfonseca.pontinho.ui.setup.MatchSetupEvent
 import com.maxmfonseca.pontinho.ui.setup.MatchSetupScreen
 import com.maxmfonseca.pontinho.ui.setup.MatchSetupViewModel
@@ -179,11 +187,53 @@ fun PontinhoNavHost(
             }
             ResultsScreen(state, resultsViewModel::newMatch, resultsViewModel::openMatch, resultsViewModel::openHistory)
         }
-        composable(Destination.Settings.route) { RoutePlaceholder(R.string.route_settings, "settings_root") }
-        composable(Destination.Appearance.route) { RoutePlaceholder(R.string.route_appearance, "appearance_root") }
-        composable(Destination.Language.route) { RoutePlaceholder(R.string.route_language, "language_root") }
+        composable(Destination.Settings.route) {
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onAppearance = { navController.navigate(Destination.Appearance.route) },
+                onLanguage = { navController.navigate(Destination.Language.route) },
+                onLearn = { navController.navigate(Destination.Learn.route) },
+                onAbout = { navController.navigate(Destination.About.route) },
+            )
+        }
+        composable(Destination.Appearance.route) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory(container, context))
+            val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+            AppearanceScreen(
+                preferences = settingsState.preferences,
+                onBack = { navController.popBackStack() },
+                onThemeSelected = settingsViewModel::setTheme,
+                onReducedMotionSelected = settingsViewModel::setReducedMotion,
+            )
+        }
+        composable(Destination.Language.route) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory(container, context))
+            val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+            LanguageScreen(
+                selected = settingsState.preferences.language,
+                onBack = { navController.popBackStack() },
+                onLanguageSelected = settingsViewModel::setLanguage,
+            )
+        }
         composable(Destination.Learn.route) { LearnScreen(onBack = { navController.popBackStack() }) }
-        composable(Destination.About.route) { RoutePlaceholder(R.string.route_about, "about_root") }
+        composable(Destination.About.route) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val version = remember(context) {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+            }
+            AboutScreen(versionName = version, onBack = { navController.popBackStack() })
+        }
+    }
+}
+
+private fun settingsFactory(container: AppContainer, context: Context) = viewModelFactory {
+    initializer {
+        SettingsViewModel(
+            container.preferencesRepository,
+            AndroidXAppLocaleController(context.applicationContext),
+        )
     }
 }
 

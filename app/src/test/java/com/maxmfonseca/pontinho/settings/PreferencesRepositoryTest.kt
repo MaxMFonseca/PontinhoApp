@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -83,6 +84,32 @@ class PreferencesRepositoryTest {
         repository.setReducedMotion(true)
         val restored = DataStorePreferencesRepository(dataStore).preferences.first()
         assertEquals(true, restored.reducedMotion)
+    }
+
+    @Test
+    fun preferencesSurviveAProcessStyleRepositoryAndDataStoreRecreation() = runBlocking {
+        val file = temporaryFolder.root.resolve("process-recreated.preferences_pb")
+        val firstJob = SupervisorJob()
+        val firstStore = PreferenceDataStoreFactory.create(
+            scope = CoroutineScope(firstJob + Dispatchers.IO),
+        ) { file }
+        val firstRepository = DataStorePreferencesRepository(firstStore)
+        firstRepository.setTheme(ThemePreference.LIGHT)
+        firstJob.cancelAndJoin()
+
+        val secondJob = SupervisorJob()
+        val secondStore = PreferenceDataStoreFactory.create(
+            scope = CoroutineScope(secondJob + Dispatchers.IO),
+        ) { file }
+        val restored = DataStorePreferencesRepository(secondStore).preferences.first()
+
+        assertEquals(
+            AppPreferences(
+                theme = ThemePreference.LIGHT,
+            ),
+            restored,
+        )
+        secondJob.cancelAndJoin()
     }
 
     @Test

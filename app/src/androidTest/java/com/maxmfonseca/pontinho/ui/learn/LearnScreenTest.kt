@@ -6,6 +6,13 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import android.content.res.Configuration
+import java.util.Locale
+import org.junit.Assert.assertTrue
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
@@ -50,6 +57,16 @@ class LearnScreenTest {
             R.string.learn_card_values,
             R.string.learn_late_players,
         ).forEach { composeRule.onNodeWithText(context.getString(it)).assertIsDisplayed() }
+        listOf(
+            R.string.learn_objective_title,
+            R.string.learn_order_title,
+            R.string.learn_wildcard_title,
+            R.string.learn_values_title,
+            R.string.learn_round_title,
+            R.string.learn_finish_title,
+            R.string.learn_late_title,
+        ).forEach { composeRule.onNodeWithText(context.getString(it)).assertIsDisplayed() }
+        composeRule.onNodeWithTag("learn_card_examples").assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.route_placeholder)).assertDoesNotExist()
     }
 
@@ -72,5 +89,57 @@ class LearnScreenTest {
 
         composeRule.onNodeWithTag("learn_root").assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.learn_penalties)).assertIsDisplayed()
+    }
+
+    @Test fun latePlayerHelpExplicitlyExplainsGrayMinusAndNextRoundInBothLocales() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val portuguese = localizedContext(context, "pt-BR").getString(R.string.learn_late_players)
+        val english = localizedContext(context, "en-US").getString(R.string.learn_late_players)
+
+        assertTrue(portuguese.contains("sinal de menos cinza"))
+        assertTrue(portuguese.contains("próxima rodada"))
+        assertTrue(english.contains("gray minus"))
+        assertTrue(english.contains("next round"))
+    }
+
+    @Test fun portugueseCardExamplesExposeLocalizedTalkBackDescriptions() {
+        showLearnInLocale("pt-BR")
+        val context = localizedContext(InstrumentationRegistry.getInstrumentation().targetContext, "pt-BR")
+        listOf(
+            R.string.learn_example_ace_hearts_description,
+            R.string.learn_example_two_diamonds_description,
+            R.string.learn_example_king_spades_description,
+            R.string.learn_example_printed_joker_description,
+        ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).assertIsDisplayed() }
+        composeRule.onNodeWithText("A♥", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun englishCardExamplesExposeLocalizedTalkBackDescriptions() {
+        showLearnInLocale("en-US")
+        val context = localizedContext(InstrumentationRegistry.getInstrumentation().targetContext, "en-US")
+        listOf(
+            R.string.learn_example_ace_hearts_description,
+            R.string.learn_example_two_diamonds_description,
+            R.string.learn_example_king_spades_description,
+            R.string.learn_example_printed_joker_description,
+        ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).assertIsDisplayed() }
+        composeRule.onNodeWithText("A♥", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    private fun showLearnInLocale(tag: String) {
+        val localized = localizedContext(InstrumentationRegistry.getInstrumentation().targetContext, tag)
+        composeRule.setContent {
+            CompositionLocalProvider(
+                LocalContext provides localized,
+                LocalConfiguration provides localized.resources.configuration,
+            ) { LearnScreen(onBack = {}) }
+        }
+    }
+
+    private fun localizedContext(context: android.content.Context, tag: String): android.content.Context {
+        val configuration = Configuration(context.resources.configuration).apply {
+            setLocale(Locale.forLanguageTag(tag))
+        }
+        return context.createConfigurationContext(configuration)
     }
 }

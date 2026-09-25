@@ -5,7 +5,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.maxmfonseca.pontinho.di.AppContainer
 import com.maxmfonseca.pontinho.settings.AppPreferences
@@ -17,14 +16,7 @@ fun PontinhoApp(container: AppContainer) {
     val preferences by container.preferencesRepository.preferences.collectAsStateWithLifecycle(
         initialValue = AppPreferences(),
     )
-    val context = LocalContext.current
-    val systemReducedMotion = runCatching {
-        android.provider.Settings.Global.getFloat(
-            context.contentResolver,
-            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
-        ) == 0f
-    }.getOrDefault(false)
+    val systemReducedMotion = rememberSystemReducedMotion()
 
     PontinhoTheme(
         themePreference = preferences.theme,

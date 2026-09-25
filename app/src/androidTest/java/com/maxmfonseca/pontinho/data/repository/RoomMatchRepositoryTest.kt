@@ -695,9 +695,10 @@ class RoomMatchRepositoryTest {
             CreateMatchPlayer("same-a", displayName = "Alex"),
             CreateMatchPlayer("same-b", displayName = "Alex"),
             CreateMatchPlayer("carla", displayName = "Carla"),
+            CreateMatchPlayer("nina", displayName = "Nina"),
         )))
         val completeRows = db.matchDao().participants(complete.value)
-        listOf(48, 48, 112).forEachIndexed { index, total ->
+        listOf(48, 48, 112, 77).forEachIndexed { index, total ->
             db.matchDao().updateParticipant(completeRows[index].copy(total = total))
         }
         val completeEntity = db.matchDao().get(complete.value)!!
@@ -712,19 +713,33 @@ class RoomMatchRepositoryTest {
             db.matchDao().updateParticipant(it.copy(total = 999))
         }
 
+        clock.time = Instant.parse("2026-10-14T01:30:00Z")
+        val olderComplete = repo.createMatch(CreateMatch("history-older-complete", completeRows.mapIndexed { index, row ->
+            CreateMatchPlayer("older-$index", PlayerId(row.playerId), row.nameSnapshot)
+        }))
+        val olderRows = db.matchDao().participants(olderComplete.value)
+        listOf(10, 10, 101, 91).forEachIndexed { index, total ->
+            db.matchDao().updateParticipant(olderRows[index].copy(total = total))
+        }
+        val olderEntity = db.matchDao().get(olderComplete.value)!!
+        db.matchDao().updateMatch(olderEntity.copy(status = "FINISHED", finishedAt = clock.millis(), resultRevision = 1))
+
         clock.zoneId = ZoneId.of("UTC")
         clock.time = Instant.parse("2026-10-15T12:00:00Z")
         val day = repo.observeDay(LocalDate.parse("2026-10-13")).first()
 
-        assertEquals(listOf(active, complete), day.matches.map { it.id })
+        assertEquals(listOf(active, complete, olderComplete), day.matches.map { it.id })
         assertEquals(listOf(999, 999), day.matches.first().players.map { it.total })
         assertTrue(day.matches.first().players.none { it.isWinner || it.isHighestPenalty })
         val expectedWinnerIds = completeRows.take(2).map { PlayerId(it.playerId) }.sortedBy { it.value }
-        assertEquals(expectedWinnerIds, day.wins.map { it.playerId })
-        assertEquals(listOf(1, 1), day.wins.map { it.value })
-        assertEquals(listOf(112, 48, 48), day.penalties.map { it.value })
+        assertEquals(
+            listOf(expectedWinnerIds[0], expectedWinnerIds[1], PlayerId(completeRows[2].playerId), PlayerId(completeRows[3].playerId)),
+            day.wins.map { it.playerId },
+        )
+        assertEquals(listOf(2, 2, 0, 0), day.wins.map { it.value })
+        assertEquals(listOf(213, 168, 58, 58), day.penalties.map { it.value })
         assertEquals(PlayerId(completeRows[2].playerId), day.penalties.first().playerId)
-        assertEquals("America/Sao_Paulo", day.matches.last().timeZoneId)
+        assertEquals("America/Sao_Paulo", day.matches[1].timeZoneId)
         assertTrue(repo.observeDay(LocalDate.parse("2026-10-14")).first().matches.isEmpty())
     }
 

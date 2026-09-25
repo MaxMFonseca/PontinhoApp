@@ -23,6 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -61,8 +64,13 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Black,
                 )
-                TextButton(onClick = onSettings) {
-                    Text("⚙", style = MaterialTheme.typography.headlineLarge)
+                val settingsDescription = stringResource(R.string.home_settings)
+                TextButton(onClick = onSettings, modifier = Modifier.semantics { contentDescription = settingsDescription }) {
+                    Text(
+                        "⚙",
+                        style = MaterialTheme.typography.headlineLarge,
+                        modifier = Modifier.clearAndSetSemantics { },
+                    )
                 }
             }
         }
@@ -74,7 +82,7 @@ fun HomeScreen(
                     .height(64.dp),
                 shape = RoundedCornerShape(20.dp),
             ) {
-                Text("＋", style = MaterialTheme.typography.titleLarge)
+                Text("＋", style = MaterialTheme.typography.titleLarge, modifier = Modifier.clearAndSetSemantics { })
                 Text(stringResource(R.string.home_new_match), style = MaterialTheme.typography.titleLarge)
             }
         }
@@ -86,7 +94,7 @@ fun HomeScreen(
                     .height(58.dp),
                 shape = RoundedCornerShape(20.dp),
             ) {
-                Text("▤", style = MaterialTheme.typography.titleMedium)
+                Text("▤", style = MaterialTheme.typography.titleMedium, modifier = Modifier.clearAndSetSemantics { })
                 Text(stringResource(R.string.home_learn), style = MaterialTheme.typography.titleMedium)
             }
         }
@@ -106,7 +114,7 @@ fun HomeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("♣ ♥", style = MaterialTheme.typography.displayMedium)
+                    Text("♣ ♥", style = MaterialTheme.typography.displayMedium, modifier = Modifier.clearAndSetSemantics { })
                     Text(
                         text = stringResource(R.string.home_empty_title),
                         style = MaterialTheme.typography.headlineSmall,
@@ -151,7 +159,7 @@ private fun HomeDayCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("▦", style = MaterialTheme.typography.headlineLarge)
+            Text("▦", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.clearAndSetSemantics { })
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = if (card.localDate == LocalDate.now()) {
@@ -178,7 +186,7 @@ private fun HomeDayCard(
                     )
                 }
             }
-            Text("›", style = MaterialTheme.typography.headlineLarge)
+            Text("›", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.clearAndSetSemantics { })
         }
     }
 }

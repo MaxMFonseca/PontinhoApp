@@ -13,6 +13,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.repository.DailyStanding
@@ -56,9 +58,14 @@ fun HistoryScreen(
             }
         }
         item {
+            val summaryState = stringResource(
+                if (state.summaryExpanded) R.string.history_summary_expanded else R.string.history_summary_collapsed,
+            )
             Card(
                 onClick = onToggleSummary,
-                modifier = Modifier.fillMaxWidth().testTag("daily_summary_toggle"),
+                modifier = Modifier.fillMaxWidth().testTag("daily_summary_toggle").semantics {
+                    stateDescription = summaryState
+                },
                 shape = RoundedCornerShape(18.dp),
             ) {
                 Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) {

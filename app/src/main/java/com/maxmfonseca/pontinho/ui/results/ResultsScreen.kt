@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
 
@@ -33,7 +34,11 @@ fun ResultsScreen(
     ) {
         item {
             if (!LocalReducedMotion.current && state.isFinished) {
-                Text("◆  ◆  ◆", color = MaterialTheme.colorScheme.secondary, modifier = Modifier.testTag("results_celebration"))
+                Text(
+                    "◆  ◆  ◆",
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.testTag("results_celebration").clearAndSetSemantics { },
+                )
             }
             Text(stringResource(R.string.match_finished), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
             Text(stringResource(R.string.results_lower_better), color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -21,6 +21,12 @@ enum class LanguagePreference {
         }
     }
 
+    fun applicationLocaleTags(): String = when (this) {
+        SYSTEM -> ""
+        PORTUGUESE_BRAZIL -> PORTUGUESE_BRAZIL_TAG
+        ENGLISH_UNITED_STATES -> ENGLISH_UNITED_STATES_TAG
+    }
+
     companion object {
         const val PORTUGUESE_BRAZIL_TAG = "pt-BR"
         const val ENGLISH_UNITED_STATES_TAG = "en-US"

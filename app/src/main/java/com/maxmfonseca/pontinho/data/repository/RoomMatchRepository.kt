@@ -437,9 +437,11 @@ class RoomMatchRepository(
             // Matches are newest first, so the first snapshot is the player's latest display name.
             completed.flatMap { it.players }.forEach { putIfAbsent(it.playerId, it.displayName) }
         }
-        val wins = completed.flatMap { match -> match.players.filter { it.isWinner }.map { it.playerId } }
+        val winsByPlayer = completed.flatMap { match -> match.players.filter { it.isWinner }.map { it.playerId } }
             .groupingBy { it }.eachCount()
-            .map { (id, count) -> DailyStanding(id, names.getValue(id), count) }
+        val wins = names.map { (id, displayName) ->
+            DailyStanding(id, displayName, winsByPlayer[id] ?: 0)
+        }
             .sortedWith(compareByDescending<DailyStanding> { it.value }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
                 .thenBy { it.displayName }.thenBy { it.playerId.value })

@@ -9,6 +9,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
@@ -58,19 +59,33 @@ class MatchScreenTest {
         assertTrue(confirmed)
     }
 
-    @Test fun dotAndValueOpenSameCorrectionAndNonparticipationCannotEdit() {
+    @Test fun roundCellProvidesOneMinimumTouchTargetAndDotAndValueOpenSameCorrection() {
         val clicks = mutableListOf<Pair<ParticipantId, Int>>()
         val state = fixture(3).copy(players = fixture(3).players.map { p -> p.copy(history = listOf(
             PlayerRoundHistory(1, RoundStatusKind.LOSS, 12, true),
-            PlayerRoundHistory(2, RoundStatusKind.NOT_PARTICIPATING, null))) })
+            PlayerRoundHistory(2, RoundStatusKind.NOT_PARTICIPATING, null),
+            PlayerRoundHistory(3, RoundStatusKind.WINNER, 0, false))) })
         compose.setContent { PontinhoTheme {
             MatchScreen(state, {}, {}, {}, {}, {}, {}, {}, {}, {}, onEditScore = { id, round -> clicks += id to round })
         } }
         val ancestor = hasAnyAncestor(hasTestTag("match_player_p0"))
-        compose.onNode(hasTestTag("round_dot_1") and ancestor, useUnmergedTree = true).performClick()
-        compose.onNode(hasTestTag("round_score_1") and ancestor, useUnmergedTree = true).performClick()
+        val cell = compose.onNode(hasTestTag("round_cell_1") and ancestor)
+        cell.assertHasClickAction()
+        assertEquals(
+            context.getString(R.string.match_edit_score, longName(0), 1),
+            cell.fetchSemanticsNode().config[SemanticsActions.OnClick].label,
+        )
+        val bounds = cell.getUnclippedBoundsInRoot()
+        assertTrue("Correction target width was ${bounds.right - bounds.left}", bounds.right - bounds.left >= 48.dp)
+        assertTrue("Correction target height was ${bounds.bottom - bounds.top}", bounds.bottom - bounds.top >= 48.dp)
+
+        val dot = compose.onNode(hasTestTag("round_dot_1") and ancestor, useUnmergedTree = true)
+        val score = compose.onNode(hasTestTag("round_score_1") and ancestor, useUnmergedTree = true)
+        dot.assertHasNoClickAction().performTouchInput { click(center) }
+        score.assertHasNoClickAction().performTouchInput { click(center) }
         assertEquals(listOf(ParticipantId("p0") to 1, ParticipantId("p0") to 1), clicks)
-        compose.onNode(hasTestTag("round_dot_2") and ancestor, useUnmergedTree = true).assertHasNoClickAction()
+        compose.onNode(hasTestTag("round_cell_2") and ancestor, useUnmergedTree = true).assertHasNoClickAction()
+        compose.onNode(hasTestTag("round_cell_3") and ancestor, useUnmergedTree = true).assertHasNoClickAction()
     }
 
     @Test fun correctionDialogPreloadsExplicitAndWinnerIsReadOnlyWithTrash() {

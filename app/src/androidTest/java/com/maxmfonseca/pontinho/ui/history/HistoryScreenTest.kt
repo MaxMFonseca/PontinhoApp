@@ -6,6 +6,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
@@ -49,5 +52,18 @@ class HistoryScreenTest {
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
         composeRule.onNodeWithTag("daily_summary_toggle").performClick()
         composeRule.runOnIdle { assertEquals(1, toggles) }
+    }
+
+    @Test fun summaryToggleAnnouncesItsCurrentState() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent {
+            HistoryScreen(HistoryUiState(LocalDate.parse("2026-10-14"), summaryExpanded = false, isLoading = false), {}, {}, {}, {}, {})
+        }
+        composeRule.onNodeWithTag("daily_summary_toggle").assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.StateDescription,
+                context.getString(R.string.history_summary_collapsed),
+            ),
+        )
     }
 }

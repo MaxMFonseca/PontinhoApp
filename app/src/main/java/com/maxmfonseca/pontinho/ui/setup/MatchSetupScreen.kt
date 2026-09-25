@@ -69,7 +69,14 @@ fun MatchSetupScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("←", style = MaterialTheme.typography.headlineMedium) }
+            val backLabel = stringResource(R.string.match_back)
+            TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = backLabel }) {
+                Text(
+                    "←",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.clearAndSetSemantics { },
+                )
+            }
             Text(
                 text = stringResource(R.string.route_setup),
                 modifier = Modifier.weight(1f),
@@ -87,7 +94,7 @@ fun MatchSetupScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("ⓘ", style = MaterialTheme.typography.titleMedium)
+                Text("ⓘ", style = MaterialTheme.typography.titleMedium, modifier = Modifier.clearAndSetSemantics { })
                 Text(
                     text = stringResource(R.string.setup_first_player_help),
                     style = MaterialTheme.typography.titleMedium,
@@ -112,7 +119,7 @@ fun MatchSetupScreen(
             }
         }
         OutlinedButton(onClick = onAddPlayer, modifier = Modifier.fillMaxWidth()) {
-            Text("＋")
+            Text("＋", modifier = Modifier.clearAndSetSemantics { })
             Text(stringResource(R.string.setup_add_player))
         }
         OutlinedButton(
@@ -120,7 +127,7 @@ fun MatchSetupScreen(
             enabled = state.canUseLastMatch,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("⇄")
+            Text("⇄", modifier = Modifier.clearAndSetSemantics { })
             Text(stringResource(R.string.setup_use_last_match))
         }
         Text(
@@ -133,7 +140,7 @@ fun MatchSetupScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("ⓘ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("ⓘ", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
             Text(
                 text = stringResource(R.string.setup_minimum_players),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -250,7 +257,8 @@ private fun SetupPlayerRow(
                 onClick = onRemove,
                 modifier = Modifier.semantics { contentDescription = removeLabel },
             ) {
-                Text("×", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.headlineMedium)
+                Text("×", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.clearAndSetSemantics { })
             }
         }
     }

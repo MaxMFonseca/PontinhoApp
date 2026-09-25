@@ -3,8 +3,10 @@ package com.maxmfonseca.pontinho.ui.home
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import org.junit.Assert.assertEquals
@@ -61,5 +63,14 @@ class HomeScreenTest {
         composeRule.onNodeWithTag("home_day_0").assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.home_today)).assertIsDisplayed()
         composeRule.onNodeWithText("Ana · Bruno").assertIsDisplayed()
+    }
+
+    @Test fun settingsGlyphHasLocalizedTalkBackDescription() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent {
+            HomeScreen(HomeUiState(isLoading = false), {}, {}, {}, onSettings = {})
+        }
+        composeRule.onNodeWithContentDescription(context.getString(R.string.home_settings))
+            .assertContentDescriptionEquals(context.getString(R.string.home_settings))
     }
 }
