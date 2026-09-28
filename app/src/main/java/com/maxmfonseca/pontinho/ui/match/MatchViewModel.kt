@@ -191,6 +191,11 @@ class MatchViewModel(
                 mutableUiState.update { it.copy(playerName = null, scoreDialog = null, picker = null, duplicateNameError = false) }
                 render()
             } catch (cancelled: CancellationException) { throw cancelled
+            } catch (_: DuplicatePlayerNameException) {
+                // This command was rejected before commit, so it has no receipt
+                // to recover and subsequent confirms must validate the roster again.
+                submittedPlayerName = null
+                mutableUiState.update { it.copy(duplicateNameError = true, hasError = false) }
             } catch (_: Exception) { mutableUiState.update { it.copy(hasError = true) }
             } finally { mutableUiState.update { it.copy(isSaving = false) } }
         }

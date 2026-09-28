@@ -1,23 +1,13 @@
 package com.maxmfonseca.pontinho.ui.navigation
 
-import androidx.annotation.StringRes
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import android.content.Context
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -26,7 +16,6 @@ import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.di.AppContainer
 import com.maxmfonseca.pontinho.ui.home.HomeScreen
 import com.maxmfonseca.pontinho.ui.home.HomeViewModel
@@ -65,6 +54,13 @@ fun PontinhoNavHost(
         navController = navController,
         startDestination = startDestination,
         modifier = modifier,
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
+        predictivePopEnterTransition = { EnterTransition.None },
+        predictivePopExitTransition = { ExitTransition.None },
+        sizeTransform = null,
     ) {
         composable(Destination.Home.route) {
             val homeViewModel: HomeViewModel = viewModel(
@@ -234,24 +230,5 @@ private fun settingsFactory(container: AppContainer, context: Context) = viewMod
             container.preferencesRepository,
             AndroidXAppLocaleController(context.applicationContext),
         )
-    }
-}
-
-@Composable
-private fun RoutePlaceholder(
-    @StringRes title: Int,
-    tag: String,
-    @StringRes subtitle: Int = R.string.route_placeholder,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .testTag(tag),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(text = stringResource(title), style = MaterialTheme.typography.headlineLarge)
-        Text(text = stringResource(subtitle), style = MaterialTheme.typography.bodyLarge)
     }
 }

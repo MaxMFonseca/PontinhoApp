@@ -95,7 +95,7 @@ class MatchIntegrationTest {
         val repo = RoomMatchRepository(db)
         val rejected = runCatching { repo.createMatch(CreateMatch("duplicate-roster", listOf(
             CreateMatchPlayer("one", displayName = "Max"), CreateMatchPlayer("two", displayName = " max ")))) }
-        assertTrue(rejected.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(rejected.exceptionOrNull() is DuplicatePlayerNameException)
         assertTrue(db.playerDao().players().isEmpty())
         assertTrue(db.matchDao().matches().isEmpty())
         val canonicalMatch = repo.createMatch(CreateMatch("canonical", listOf(
@@ -110,7 +110,7 @@ class MatchIntegrationTest {
             runCatching { RoomMatchRepository(db).addPlayerToMatch(command) }
         } }.awaitAll()
         assertEquals(1, results.count { it.isSuccess })
-        assertTrue(results.filter { it.isFailure }.all { it.exceptionOrNull() is IllegalArgumentException })
+        assertTrue(results.filter { it.isFailure }.all { it.exceptionOrNull() is DuplicatePlayerNameException })
         val committed = repo.observeMatch(target).first()!!
         assertEquals(3, committed.participants.size)
         assertEquals(canonical, committed.participants.last().playerId)
@@ -160,6 +160,47 @@ class MatchIntegrationTest {
             assertEquals(globalCount, db.playerDao().players().size)
             assertEquals(committed.participants.map { it.id }, model.uiState.value.players.map { it.id })
         }
+    }
+
+    @Test fun concurrentLateJoinWithStaleRostersShowsInlineDuplicateAndPreservesTypedName() = runBlocking {
+        val real = RoomMatchRepository(db)
+        val id = real.createMatch(CreateMatch("stale-concurrent", listOf(
+            CreateMatchPlayer("a", displayName = "Ana"), CreateMatchPlayer("b", displayName = "Bruno"))))
+        val visible = MutableStateFlow(real.observeMatch(id).first())
+        val bothSubmitted = CompletableDeferred<Unit>()
+        var attempts = 0
+        val repo = object : MatchRepository by real {
+            override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = visible
+            override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId {
+                attempts++
+                if (attempts == 2) bothSubmitted.complete(Unit)
+                bothSubmitted.await()
+                return real.addPlayerToMatch(command)
+            }
+        }
+        val models = listOf(vm(id, repo), vm(id, repo))
+        val typedNames = listOf(" Dora ", " dORA ")
+        models.forEachIndexed { index, model ->
+            model.uiState.first { !it.isLoading }
+            model.openAddPlayer(); model.updatePlayerName(typedNames[index]); model.confirmPlayerName()
+        }
+        models.forEach { model -> withTimeout(5_000) { model.uiState.first { !it.isSaving } } }
+        val loserIndex = models.indexOfFirst { it.uiState.value.playerName != null }
+        assertTrue(loserIndex >= 0)
+        val loser = models[loserIndex]
+        assertTrue(loser.uiState.value.duplicateNameError)
+        assertFalse(loser.uiState.value.hasError)
+        assertEquals(typedNames[loserIndex], loser.uiState.value.playerName)
+        val committed = real.observeMatch(id).first()!!
+        assertEquals(3, committed.participants.size)
+        assertEquals(3, db.playerDao().players().size)
+        visible.value = committed
+        withTimeout(5_000) { loser.uiState.first { it.players.size == 3 } }
+        loser.confirmPlayerName()
+        assertEquals(2, attempts)
+        assertTrue(loser.uiState.value.duplicateNameError)
+        assertEquals(typedNames[loserIndex], loser.uiState.value.playerName)
+        assertEquals(committed, real.observeMatch(id).first())
     }
 
     @Test fun editingNameAfterLostAcknowledgementStartsAnotherDurableCommand() = runBlocking {

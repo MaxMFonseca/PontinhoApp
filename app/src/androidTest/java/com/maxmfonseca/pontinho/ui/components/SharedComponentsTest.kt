@@ -38,6 +38,23 @@ import com.maxmfonseca.pontinho.ui.theme.OffWhite
 import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
 import com.maxmfonseca.pontinho.ui.theme.SkyBlue
 import com.maxmfonseca.pontinho.ui.theme.WarmYellow
+import com.maxmfonseca.pontinho.ui.theme.WarmSurface
+import com.maxmfonseca.pontinho.ui.theme.WarmSurfaceLow
+import com.maxmfonseca.pontinho.ui.theme.WarmSurfaceHigh
+import com.maxmfonseca.pontinho.ui.theme.NavySurfaceHigh
+import com.maxmfonseca.pontinho.ui.theme.NeutralText
+import com.maxmfonseca.pontinho.ui.theme.NeutralTextLight
+import com.maxmfonseca.pontinho.ui.theme.NeutralOutline
+import com.maxmfonseca.pontinho.ui.theme.NeutralOutlineDark
+import com.maxmfonseca.pontinho.ui.theme.EmeraldContainer
+import com.maxmfonseca.pontinho.ui.theme.EmeraldContainerDark
+import com.maxmfonseca.pontinho.ui.theme.YellowContainer
+import com.maxmfonseca.pontinho.ui.theme.YellowContainerDark
+import com.maxmfonseca.pontinho.ui.theme.BlueContainer
+import com.maxmfonseca.pontinho.ui.theme.BlueContainerDark
+import com.maxmfonseca.pontinho.ui.theme.CoralStrong
+import com.maxmfonseca.pontinho.ui.theme.CoralContainer
+import com.maxmfonseca.pontinho.ui.theme.CoralContainerDark
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -94,6 +111,10 @@ class SharedComponentsTest {
             OffWhite,
             Navy,
             NavySurface,
+            WarmSurface, WarmSurfaceLow, WarmSurfaceHigh, NavySurfaceHigh,
+            NeutralText, NeutralTextLight, NeutralOutline, NeutralOutlineDark,
+            EmeraldContainer, EmeraldContainerDark, YellowContainer, YellowContainerDark,
+            BlueContainer, BlueContainerDark, CoralStrong, CoralContainer, CoralContainerDark,
         ).mapTo(mutableSetOf()) { it.toArgb() }
         composeRule.runOnIdle {
             assertTrue("Light scheme leaked colors: ${lightColors.filterNot(approved::contains)}", lightColors.all(approved::contains))

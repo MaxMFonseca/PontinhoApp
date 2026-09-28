@@ -13,6 +13,10 @@ data class CreateMatchPlayer(
 data class CreateMatch(val creationToken: String, val players: List<CreateMatchPlayer>)
 data class AddParticipant(val matchId: MatchId, val playerId: PlayerId, val rosterOrder: Int)
 data class AddPlayerToMatch(val matchId: MatchId, val operationToken: String, val displayName: String)
+
+/** A roster command would include the same normalized name more than once in a match. */
+class DuplicatePlayerNameException : IllegalArgumentException("Duplicate player name")
+
 data class ReorderParticipants(val matchId: MatchId, val participantIds: List<ParticipantId>)
 data class ChooseIndicator(val matchId: MatchId, val indicator: Indicator)
 /** Transient picker result. Discarding it changes no persistent match state. */
@@ -90,7 +94,8 @@ data class DayHistory(
 /** Writes commit before returning. [createMatch] atomically resolves or creates players,
  * snapshots the ordered roster, and creates the match. Its creation token is durably
  * idempotent for the same payload and is rejected for a different payload.
- * Invalid commands throw IllegalArgumentException.
+ * Invalid commands throw IllegalArgumentException; normalized roster conflicts throw
+ * its subtype [DuplicatePlayerNameException]. Committed receipt replay precedes this validation.
  * Round-rule rejections preserve their typed RoundRuleException.failure.
  */
 interface MatchRepository {
@@ -104,7 +109,7 @@ interface MatchRepository {
      * original participant without writes, even if the roster or match has since changed.
      * A different name for a committed token is rejected. Failure/cancellation before
      * commit leaves neither player nor participant. Names resolve to a canonical player;
-     * duplicate normalized names within a match are rejected.
+     * duplicate normalized names within a match throw [DuplicatePlayerNameException].
      */
     suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId
     suspend fun reorderParticipants(command: ReorderParticipants)

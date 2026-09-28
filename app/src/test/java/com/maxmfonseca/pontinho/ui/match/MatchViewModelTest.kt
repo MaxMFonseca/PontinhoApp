@@ -18,6 +18,38 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun repositoryDuplicateShowsInlineErrorAndStopsRetryingAfterRosterRefresh() = runTest {
+        val storage = ScoringRepository()
+        val initial = storage.snapshot.value!!
+        var attempts = 0
+        val repo = object : MatchRepository by storage {
+            override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId {
+                attempts++
+                throw DuplicatePlayerNameException()
+            }
+        }
+        val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.openAddPlayer(); vm.updatePlayerName(" dORA "); vm.confirmPlayerName()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.duplicateNameError)
+        assertFalse(vm.uiState.value.hasError)
+        assertEquals(" dORA ", vm.uiState.value.playerName)
+        assertFalse(vm.uiState.value.isSaving)
+        storage.snapshot.value = initial.copy(
+            participants = initial.participants + initial.participants.last().copy(
+                id = ParticipantId("joined"), playerId = PlayerId("dora"), displayName = "Dora", rosterOrder = 3),
+            totals = initial.totals + (ParticipantId("joined") to 0),
+        )
+        runCurrent()
+        vm.confirmPlayerName(); advanceUntilIdle()
+        assertEquals(1, attempts)
+        assertTrue(vm.uiState.value.duplicateNameError)
+        assertEquals(" dORA ", vm.uiState.value.playerName)
+        vm.updatePlayerName("Eva")
+        assertFalse(vm.uiState.value.duplicateNameError)
+    }
+
     @Test fun editingFailedLateJoinValidatesTheNewNameAgain() = runTest {
         val repo = ScoringRepository()
         val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))

@@ -69,7 +69,7 @@ class RoomMatchRepository(
             return@withTransaction MatchId(existing.id)
         }
         val nameKeys = normalized.map { PlayerNameKey.from(it.displayName) }
-        require(nameKeys.distinct().size == nameKeys.size) { "Duplicate player name" }
+        if (nameKeys.distinct().size != nameKeys.size) throw DuplicatePlayerNameException()
         val now = clock.instant()
         val zone = clock.zone
         val matchId = uuid()
@@ -110,7 +110,9 @@ class RoomMatchRepository(
         }
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
-        require(roster.none { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(name) }) { "Duplicate player name" }
+        if (roster.any { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(name) }) {
+            throw DuplicatePlayerNameException()
+        }
         val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
         val now = clock.millis()
         val player = resolvePlayer(name, playerId, now, roster.map { it.playerId }.toSet())
@@ -126,7 +128,9 @@ class RoomMatchRepository(
         require(command.rosterOrder in 0..roster.size) { "Invalid roster position" }
         val player = requireNotNull(db.playerDao().get(command.playerId.value)) { "Unknown player" }
         require(player.archivedAt == null) { "Archived player" }
-        require(roster.none { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(player.displayName) }) { "Duplicate player name" }
+        if (roster.any { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(player.displayName) }) {
+            throw DuplicatePlayerNameException()
+        }
         val canonical = resolvePlayer(player.displayName, uuid(), clock.millis(), roster.map { it.playerId }.toSet())
         val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
         // Shift from the tail so the unique roster position is never violated.
