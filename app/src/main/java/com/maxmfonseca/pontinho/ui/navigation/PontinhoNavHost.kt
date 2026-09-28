@@ -109,6 +109,7 @@ fun PontinhoNavHost(
                 onEditPlayer = setupViewModel::openEditPlayer,
                 onRemovePlayer = setupViewModel::removePlayer,
                 onMovePlayer = setupViewModel::movePlayer,
+                onReorderPlayers = setupViewModel::reorderPlayers,
                 onUseLastMatch = setupViewModel::requestUseLastMatch,
                 onDismissReplace = setupViewModel::dismissUseLastMatchConfirmation,
                 onConfirmReplace = setupViewModel::confirmUseLastMatch,

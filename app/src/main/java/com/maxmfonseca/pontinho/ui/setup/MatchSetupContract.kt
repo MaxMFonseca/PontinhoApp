@@ -24,6 +24,7 @@ data class MatchSetupUiState(
     val showReplaceConfirmation: Boolean = false,
     val isCreating: Boolean = false,
     val createError: Boolean = false,
+    val reorderError: Boolean = false,
 ) {
     val minimumPlayers: Int get() = 2
     val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating &&

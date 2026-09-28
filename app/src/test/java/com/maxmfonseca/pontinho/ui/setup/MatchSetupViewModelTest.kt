@@ -23,9 +23,50 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchSetupViewModelTest {
+    @Test fun reorderPersistsOneExactPermutationAndRetainsPlayerIdentity() {
+        val saved = SavedStateHandle()
+        val repo = FakeMatchRepository()
+        val vm = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        add(vm, "Ana"); add(vm, "Bruno"); add(vm, "Carla")
+        val original = vm.uiState.value.players
+        vm.reorderPlayers(listOf(original[1].draftId, original[2].draftId, original[0].draftId))
+        assertEquals(listOf("Bruno", "Carla", "Ana"), vm.uiState.value.players.map { it.displayName })
+        val restored = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        assertEquals(listOf(original[1], original[2], original[0]), restored.uiState.value.players)
+        assertTrue(repo.createdCommands.isEmpty())
+    }
+
+    @Test fun reorderRejectsMissingExtraDuplicateAndStaleDraftIds() {
+        val vm = viewModel()
+        add(vm, "Ana"); add(vm, "Bruno")
+        val original = vm.uiState.value.players
+        val a = original[0].draftId
+        val b = original[1].draftId
+        listOf(emptyList(), listOf(a), listOf(a, a), listOf(a, b, "extra"), listOf(b, "stale")).forEach {
+            vm.reorderPlayers(it)
+            assertEquals(original, vm.uiState.value.players)
+        }
+    }
+
+    @Test fun reorderDoesNotChangeRosterWhileCreateIsInFlight() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val repo = FakeMatchRepository(createBlock = { gate.await(); MatchId("created") })
+        val vm = MatchSetupViewModel(SavedStateHandle(), repo, StandardTestDispatcher(testScheduler))
+        add(vm, "Ana"); add(vm, "Bruno")
+        val original = vm.uiState.value.players
+        vm.createMatch()
+        vm.reorderPlayers(original.reversed().map { it.draftId })
+        assertEquals(original, vm.uiState.value.players)
+        gate.complete(Unit)
+        advanceUntilIdle()
+    }
+
     @Test fun creationFailurePreservesEditedDraftAndAllowsRetry() = runTest {
         var fail = true
         val repo = FakeMatchRepository(createBlock = {
@@ -316,5 +357,36 @@ class MatchSetupViewModelTest {
         viewModel.openAddPlayer()
         viewModel.updateDialogName(name)
         viewModel.confirmPlayerName()
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class MatchSetupReorderFailureTest {
+    @Test fun failedDraftWriteRestoresCommittedOrderAndAllowsRetry() {
+        val saved = SavedStateHandle(mapOf(
+            MatchSetupViewModel.DRAFT_IDS to arrayListOf("a", "b"),
+            MatchSetupViewModel.PLAYER_IDS to arrayListOf("id-a", "id-b"),
+            MatchSetupViewModel.PLAYER_NAMES to arrayListOf("Ana", "Bruno"),
+        ))
+        val vm = MatchSetupViewModel(saved, FakeMatchRepository(), Dispatchers.Unconfined)
+        var fail = true
+        val ids = saved.getLiveData<ArrayList<String>>(MatchSetupViewModel.DRAFT_IDS)
+        val observer = androidx.lifecycle.Observer<ArrayList<String>> { order ->
+            if (fail && order == listOf("b", "a")) {
+                fail = false
+                throw java.io.IOException("Draft storage unavailable")
+            }
+        }
+        ids.observeForever(observer)
+        try {
+            vm.reorderPlayers(listOf("b", "a"))
+            assertEquals(listOf("Ana", "Bruno"), vm.uiState.value.players.map { it.displayName })
+            assertEquals(listOf("a", "b"), saved.get<ArrayList<String>>(MatchSetupViewModel.DRAFT_IDS))
+            assertTrue(vm.uiState.value.reorderError)
+            vm.reorderPlayers(listOf("b", "a"))
+            assertEquals(listOf("Bruno", "Ana"), vm.uiState.value.players.map { it.displayName })
+            assertFalse(vm.uiState.value.reorderError)
+        } finally { ids.removeObserver(observer) }
     }
 }

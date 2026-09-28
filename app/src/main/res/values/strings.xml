@@ -29,7 +29,6 @@
     <string name="home_matches_title">Suas partidas</string>
     <string name="home_empty_title">Nenhuma partida ainda</string>
     <string name="home_empty_body">Crie uma partida para começar a marcar os pontos.</string>
-    <string name="home_create_match">Criar partida</string>
     <string name="home_today">Hoje</string>
     <string name="history_daily_summary">Resumo do dia</string>
     <string name="history_wins">Vitórias</string>
@@ -95,6 +94,7 @@
     <string name="camera">Câmera</string>
     <string name="went_out">Bateu a rodada</string>
     <string name="setup_first_player_help">O primeiro jogador será a mão inicial.</string>
+    <string name="setup_reorder_error">Não foi possível salvar a ordem. A ordem anterior foi restaurada.</string>
     <string name="setup_players_heading">Jogadores</string>
     <string name="setup_add_player">Adicionar jogador</string>
     <string name="setup_use_last_match">Usar jogadores da última partida</string>

@@ -106,6 +106,25 @@ class MatchSetupViewModel(
         }
     }
 
+    fun reorderPlayers(orderedDraftIds: List<String>) {
+        val committed = mutableUiState.value
+        val currentIds = committed.players.map { it.draftId }
+        if (committed.isCreating || orderedDraftIds.size != currentIds.size ||
+            orderedDraftIds.toSet() != currentIds.toSet() || orderedDraftIds.distinct().size != orderedDraftIds.size
+        ) return
+        val byId = committed.players.associateBy { it.draftId }
+        val reordered = orderedDraftIds.map { byId.getValue(it) }
+        try {
+            persistDraft(reordered)
+            mutableUiState.update { it.copy(players = reordered, reorderError = false) }
+        } catch (failure: Exception) {
+            if (failure is CancellationException) throw failure
+            // Saved state may have accepted some fields before an observer failed.
+            runCatching { persistDraft(committed.players) }
+            mutableUiState.update { it.copy(players = committed.players, reorderError = true) }
+        }
+    }
+
     fun requestUseLastMatch() {
         val state = mutableUiState.value
         if (state.isCreating || state.latestMatchPlayers.isEmpty()) return
