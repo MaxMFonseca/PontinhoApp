@@ -37,12 +37,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -70,6 +72,7 @@ fun MatchSetupScreen(
     onCreateMatch: () -> Unit,
     modifier: Modifier = Modifier,
     onReorderPlayers: (List<String>) -> Unit = {},
+    onSelectInitialDealer: (String) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val reorderState = rememberReorderableListState(listState, state.players.map { it.draftId },
@@ -103,7 +106,9 @@ fun MatchSetupScreen(
                 val dragging = reorderState.draggedKey == player.draftId
                 SetupPlayerRow(
                     player = player, index = index, playerCount = visualPlayers.size, enabled = !state.isCreating,
+                    isInitialDealer = state.initialDealerDraftId == player.draftId,
                     onEdit = { onEditPlayer(player.draftId) }, onRemove = { onRemovePlayer(player.draftId) },
+                    onSelectInitialDealer = { onSelectInitialDealer(player.draftId) },
                     onMove = { onMovePlayer(player.draftId, it) },
                     onDragStart = { offsetY ->
                         val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == player.draftId }
@@ -135,14 +140,12 @@ fun MatchSetupScreen(
                         Icon(Icons.Filled.Refresh, null, Modifier.padding(end = 8.dp))
                         Text(stringResource(R.string.setup_use_last_match), modifier = Modifier.weight(1f))
                     }
-                    Text(stringResource(if (state.showNoPreviousMatchExplanation) R.string.setup_no_previous_match else R.string.setup_replace_helper),
+                    if (state.showNoPreviousMatchExplanation) Text(stringResource(R.string.setup_no_previous_match),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             item(key = "create") {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(R.string.setup_minimum_players), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (state.hasDuplicateNames) Text(stringResource(R.string.setup_duplicate_names_error),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.testTag("setup_duplicate_names_error")
@@ -184,8 +187,10 @@ private fun SetupPlayerRow(
     index: Int,
     playerCount: Int,
     enabled: Boolean,
+    isInitialDealer: Boolean,
     onEdit: () -> Unit,
     onRemove: () -> Unit,
+    onSelectInitialDealer: () -> Unit,
     onMove: (Int) -> Unit,
     onDragStart: (Float) -> Unit,
     onDragDelta: (Float) -> Unit,
@@ -197,6 +202,10 @@ private fun SetupPlayerRow(
     val moveDownLabel = stringResource(R.string.setup_move_down, player.displayName)
     val removeLabel = stringResource(R.string.setup_remove_player, player.displayName)
     val editLabel = stringResource(R.string.player_edit, player.displayName)
+    val dealerLabel = stringResource(
+        if (isInitialDealer) R.string.setup_initial_hand_selected else R.string.setup_select_initial_hand,
+        player.displayName,
+    )
     Card(modifier.fillMaxWidth().testTag("setup_player_${player.draftId}").semantics {
         customActions = if (!enabled) emptyList() else buildList {
             if (index > 0) add(CustomAccessibilityAction(moveUpLabel) { onMove(-1); true })
@@ -213,6 +222,15 @@ private fun SetupPlayerRow(
                 modifier = Modifier.weight(1f).sizeIn(minHeight = 48.dp).semantics { contentDescription = editLabel }) {
                 Text(player.displayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 Icon(Icons.Filled.Edit, null, Modifier.padding(start = 8.dp).size(18.dp))
+            }
+            IconButton(onClick = onSelectInitialDealer, enabled = enabled,
+                modifier = Modifier.size(48.dp).testTag("setup_hand_${player.draftId}").semantics {
+                    contentDescription = dealerLabel
+                    selected = isInitialDealer
+                }) {
+                Icon(painterResource(R.drawable.ic_dealer_hand), null,
+                    tint = if (isInitialDealer) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.7f else 0.38f))
             }
             IconButton(onClick = onRemove, enabled = enabled,
                 modifier = Modifier.size(48.dp).semantics { contentDescription = removeLabel }) {

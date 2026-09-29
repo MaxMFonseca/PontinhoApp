@@ -1,5 +1,6 @@
 package com.maxmfonseca.pontinho.ui.history
 
+import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.repository.DailyStanding
 import com.maxmfonseca.pontinho.domain.repository.HistoryMatch
 import java.time.LocalDate
@@ -11,4 +12,7 @@ data class HistoryUiState(
     val penalties: List<DailyStanding> = emptyList(),
     val summaryExpanded: Boolean = false,
     val isLoading: Boolean = true,
+    val pendingDeleteMatchId: MatchId? = null,
+    val isDeleting: Boolean = false,
+    val deleteError: Boolean = false,
 )

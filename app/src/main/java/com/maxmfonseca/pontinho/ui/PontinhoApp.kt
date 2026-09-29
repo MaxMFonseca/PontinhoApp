@@ -20,7 +20,7 @@ fun PontinhoApp(container: AppContainer) {
 
     PontinhoTheme(
         themePreference = preferences.theme,
-        reducedMotion = preferences.resolveReducedMotion(systemReducedMotion),
+        reducedMotion = systemReducedMotion,
     ) {
         Surface(modifier = Modifier.fillMaxSize()) {
             PontinhoNavHost(container = container)

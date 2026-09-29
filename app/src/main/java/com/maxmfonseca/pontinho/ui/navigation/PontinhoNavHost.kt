@@ -2,6 +2,12 @@ package com.maxmfonseca.pontinho.ui.navigation
 
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +47,7 @@ import com.maxmfonseca.pontinho.ui.history.HistoryViewModel
 import com.maxmfonseca.pontinho.ui.results.ResultsEvent
 import com.maxmfonseca.pontinho.ui.results.ResultsScreen
 import com.maxmfonseca.pontinho.ui.results.ResultsViewModel
+import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
 import java.time.LocalDate
 
 @Composable
@@ -50,16 +57,20 @@ fun PontinhoNavHost(
     navController: NavHostController = rememberNavController(),
     startDestination: String = Destination.Home.route,
 ) {
+    val reducedMotion = LocalReducedMotion.current
+    // Sequential fade-through: 75 ms out, then 75 ms in, in every direction.
+    val enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(durationMillis = 75, delayMillis = 75))
+    val exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(durationMillis = 75))
     NavHost(
         navController = navController,
         startDestination = startDestination,
-        modifier = modifier,
-        enterTransition = { EnterTransition.None },
-        exitTransition = { ExitTransition.None },
-        popEnterTransition = { EnterTransition.None },
-        popExitTransition = { ExitTransition.None },
-        predictivePopEnterTransition = { EnterTransition.None },
-        predictivePopExitTransition = { ExitTransition.None },
+        modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+        enterTransition = { enter },
+        exitTransition = { exit },
+        popEnterTransition = { enter },
+        popExitTransition = { exit },
+        predictivePopEnterTransition = { enter },
+        predictivePopExitTransition = { exit },
         sizeTransform = null,
     ) {
         composable(Destination.Home.route) {
@@ -109,6 +120,7 @@ fun PontinhoNavHost(
                 onEditPlayer = setupViewModel::openEditPlayer,
                 onRemovePlayer = setupViewModel::removePlayer,
                 onMovePlayer = setupViewModel::movePlayer,
+                onSelectInitialDealer = setupViewModel::selectInitialDealer,
                 onReorderPlayers = setupViewModel::reorderPlayers,
                 onUseLastMatch = setupViewModel::requestUseLastMatch,
                 onDismissReplace = setupViewModel::dismissUseLastMatchConfirmation,
@@ -157,6 +169,10 @@ fun PontinhoNavHost(
                 onNewMatch = { navController.navigate(Destination.Setup.route) },
                 onOpenMatch = { navController.navigate(Destination.Match.createRoute(it.value)) },
                 onToggleSummary = historyViewModel::toggleSummary,
+                onRequestDelete = historyViewModel::requestDelete,
+                onCancelDelete = historyViewModel::cancelDelete,
+                onConfirmDelete = historyViewModel::confirmDelete,
+                onClearDeleteError = historyViewModel::clearDeleteError,
             )
         }
         composable(Destination.Results.route, arguments = listOf(navArgument(Destination.Results.MATCH_ID) { type = NavType.StringType })) { entry ->
@@ -202,7 +218,6 @@ fun PontinhoNavHost(
                 preferences = settingsState.preferences,
                 onBack = { navController.popBackStack() },
                 onThemeSelected = settingsViewModel::setTheme,
-                onReducedMotionSelected = settingsViewModel::setReducedMotion,
             )
         }
         composable(Destination.Language.route) {

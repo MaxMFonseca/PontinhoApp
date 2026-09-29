@@ -31,7 +31,7 @@ class MatchViewModel(
         scope.launch {
             repository.observeMatch(matchId).catch { failure ->
                 if (failure is CancellationException) throw failure
-                mutableUiState.update { it.copy(isLoading = false, hasError = true) }
+                updateState { it.copy(isLoading = false, hasError = true) }
             }.collect { match ->
                 snapshot = match
                 render()
@@ -50,48 +50,50 @@ class MatchViewModel(
         val match = snapshot ?: return
         val round = match.openRound
         if (round == null) {
-            prepared = null
-            mutableUiState.update { it.copy(picker = IndicatorPickerState(participantId), hasError = false) }
+            val pending = prepared
+            if (pending == null) {
+                updateState { it.copy(picker = IndicatorPickerState(participantId), hasError = false) }
+            } else openDialog(participantId, pending.id, pending.ordinal, pending.indicator, true)
         } else openDialog(participantId, round.id, round.ordinal, round.indicator, round.draft.winner == null)
     }
 
     fun selectIndicatorRank(rank: Rank) {
         if (uiState.value.isSaving) return
-        mutableUiState.update { it.copy(picker = it.picker?.copy(selectedRank = rank)) }
+        updateState { it.copy(picker = it.picker?.copy(selectedRank = rank)) }
     }
 
     fun selectIndicatorColor(color: CardColor) {
         if (uiState.value.isSaving) return
-        mutableUiState.update { it.copy(picker = it.picker?.copy(selectedColor = color)) }
+        updateState { it.copy(picker = it.picker?.copy(selectedColor = color)) }
     }
 
     fun confirmIndicator() {
         val picker = uiState.value.picker ?: return
         val indicator = picker.indicator ?: return
         if (uiState.value.isSaving) return
-        mutableUiState.update { it.copy(isSaving = true, hasError = false) }
+        updateState { it.copy(isSaving = true, hasError = false) }
         scope.launch {
             try {
                 val result = repository.chooseIndicator(ChooseIndicator(matchId, indicator))
                 prepared = result
+                render()
                 openDialog(picker.participantId, result.id, result.ordinal, result.indicator, true)
             } catch (cancelled: CancellationException) { throw cancelled
-            } catch (_: Exception) { mutableUiState.update { it.copy(hasError = true) }
-            } finally { mutableUiState.update { it.copy(isSaving = false) } }
+            } catch (_: Exception) { updateState { it.copy(hasError = true) }
+            } finally { updateState { it.copy(isSaving = false) } }
         }
     }
 
     fun updateScore(value: String) {
         if (uiState.value.isSaving || uiState.value.scoreDialog?.readOnly == true) return
-        mutableUiState.update { it.copy(scoreDialog = it.scoreDialog?.copy(value = value), hasError = false) }
+        updateState { it.copy(scoreDialog = it.scoreDialog?.copy(value = value), hasError = false) }
     }
 
     fun dismissDialog() {
         if (uiState.value.isSaving) return
-        prepared = null
         addPlayerToken = null
         submittedPlayerName = null
-        mutableUiState.update { it.copy(picker = null, scoreDialog = null, playerName = null, hasError = false, duplicateNameError = false) }
+        updateState { it.copy(picker = null, scoreDialog = null, playerName = null, hasError = false, duplicateNameError = false) }
     }
 
     fun confirmScore() {
@@ -118,10 +120,10 @@ class MatchViewModel(
 
     fun openAddPlayer() {
         val state = uiState.value
-        if (!state.canManagePlayers || state.isSaving || state.scoreDialog != null || state.picker != null) return
+        if (!state.canAddPlayer) return
         addPlayerToken = UUID.randomUUID().toString()
         submittedPlayerName = null
-        mutableUiState.update { it.copy(playerName = "", hasError = false, duplicateNameError = false) }
+        updateState { it.copy(playerName = "", hasError = false, duplicateNameError = false) }
     }
 
     fun updatePlayerName(value: String) {
@@ -130,22 +132,22 @@ class MatchViewModel(
             addPlayerToken = UUID.randomUUID().toString()
             submittedPlayerName = null
         }
-        mutableUiState.update { it.copy(playerName = value, hasError = false, duplicateNameError = false) }
+        updateState { it.copy(playerName = value, hasError = false, duplicateNameError = false) }
     }
 
     fun confirmPlayerName() {
         val state = uiState.value
         val name = state.playerName?.trim()?.takeIf { it.isNotEmpty() } ?: return
-        if (!state.canManagePlayers || state.isSaving) return
+        if (!canJoinMatch() || state.isSaving || state.scoreDialog != null || state.picker != null) return
         val token = addPlayerToken ?: return
         // Retry an attempted command before duplicate validation: its own committed
         // participation may already be visible after a lost acknowledgement.
         if (submittedPlayerName == null && state.players.any { PlayerNameKey.from(it.name) == PlayerNameKey.from(name) }) {
-            mutableUiState.update { it.copy(duplicateNameError = true) }
+            updateState { it.copy(duplicateNameError = true) }
             return
         }
         submittedPlayerName = name
-        mutate {
+        mutate(preservePrepared = true) {
             // Keep the token until success is observed. A lost acknowledgement or
             // failed refresh can safely replay the same atomic repository operation.
             repository.addPlayerToMatch(AddPlayerToMatch(matchId, token, name))
@@ -154,7 +156,7 @@ class MatchViewModel(
 
     fun movePlayer(id: ParticipantId, direction: Int) {
         val state = uiState.value
-        if (!state.canManagePlayers || state.playerName != null || state.scoreDialog != null || state.picker != null || direction == 0) return
+        if (!state.canReorderPlayers || direction == 0) return
         val order = state.players.map { it.id }.toMutableList()
         val from = order.indexOf(id)
         if (from < 0) return
@@ -166,10 +168,10 @@ class MatchViewModel(
 
     fun reorderPlayers(orderedParticipantIds: List<ParticipantId>) {
         val state = uiState.value
-        if (!state.canManagePlayers || state.isSaving || state.playerName != null || state.scoreDialog != null || state.picker != null) return
+        if (!state.canReorderPlayers) return
         val committed = state.players.map { it.id }
         if (orderedParticipantIds.size != committed.size || orderedParticipantIds.toSet() != committed.toSet() || orderedParticipantIds == committed) return
-        mutate { repository.reorderParticipants(ReorderParticipants(matchId, orderedParticipantIds.toList())) }
+        mutate(preservePrepared = true) { repository.reorderParticipants(ReorderParticipants(matchId, orderedParticipantIds.toList())) }
     }
 
     fun editScore(id: ParticipantId, ordinal: Int) {
@@ -181,7 +183,7 @@ class MatchViewModel(
         if (entry == null && (round.status != RoundStatus.OPEN || state.isFinished)) return
         prepared = null
         openDialog(id, round.id, ordinal, round.indicator, entry == null && round.draft.winner == null)
-        mutableUiState.update { it.copy(scoreDialog = it.scoreDialog?.copy(
+        updateState { it.copy(scoreDialog = it.scoreDialog?.copy(
             value = entry?.points?.toString() ?: "", isCorrection = entry != null,
             readOnly = entry?.origin == RoundEntryOrigin.AUTOMATIC_WINNER)) }
     }
@@ -191,32 +193,32 @@ class MatchViewModel(
         mutate { repository.removeRoundEntry(RemoveRoundEntry(matchId, dialog.roundId, dialog.participantId)) }
     }
 
-    private fun mutate(command: suspend () -> Unit) {
+    private fun mutate(preservePrepared: Boolean = false, command: suspend () -> Unit) {
         if (uiState.value.isSaving) return
-        mutableUiState.update { it.copy(isSaving = true, hasError = false) }
+        updateState { it.copy(isSaving = true, hasError = false) }
         scope.launch {
             try {
                 command()
                 snapshot = repository.observeMatch(matchId).first()
-                prepared = null
+                if (!preservePrepared) prepared = null
                 addPlayerToken = null
                 submittedPlayerName = null
-                mutableUiState.update { it.copy(playerName = null, scoreDialog = null, picker = null, duplicateNameError = false) }
+                updateState { it.copy(playerName = null, scoreDialog = null, picker = null, duplicateNameError = false) }
                 render()
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: DuplicatePlayerNameException) {
                 // This command was rejected before commit, so it has no receipt
                 // to recover and subsequent confirms must validate the roster again.
                 submittedPlayerName = null
-                mutableUiState.update { it.copy(duplicateNameError = true, hasError = false) }
-            } catch (_: Exception) { mutableUiState.update { it.copy(hasError = true) }
-            } finally { mutableUiState.update { it.copy(isSaving = false) } }
+                updateState { it.copy(duplicateNameError = true, hasError = false) }
+            } catch (_: Exception) { updateState { it.copy(hasError = true) }
+            } finally { updateState { it.copy(isSaving = false) } }
         }
     }
 
     private fun save(dialog: MatchScoreDialogState, winner: Boolean, command: suspend () -> Unit) {
         if (uiState.value.isSaving) return
-        mutableUiState.update { it.copy(isSaving = true, hasError = false) }
+        updateState { it.copy(isSaving = true, hasError = false) }
         scope.launch {
             try {
                 command()
@@ -228,30 +230,30 @@ class MatchViewModel(
                         else round.draft.entries[dialog.participantId]?.points == dialog.parsedScore) } == true
                 }
                 prepared = null
-                mutableUiState.update { it.copy(picker = null, scoreDialog = null) }
+                updateState { it.copy(picker = null, scoreDialog = null) }
                 render()
             } catch (cancelled: CancellationException) { throw cancelled
-            } catch (_: Exception) { mutableUiState.update { it.copy(hasError = true) }
-            } finally { mutableUiState.update { it.copy(isSaving = false) } }
+            } catch (_: Exception) { updateState { it.copy(hasError = true) }
+            } finally { updateState { it.copy(isSaving = false) } }
         }
     }
 
     private fun openDialog(id: ParticipantId, roundId: RoundId, ordinal: Int, indicator: Indicator, canWin: Boolean) {
         val name = snapshot?.participants?.singleOrNull { it.id == id }?.displayName ?: return
         submissionToken = UUID.randomUUID().toString()
-        mutableUiState.update { it.copy(picker = null, hasError = false,
+        updateState { it.copy(picker = null, hasError = false,
             scoreDialog = MatchScoreDialogState(id, name, roundId, ordinal, indicator, canWin)) }
     }
 
     private fun render() {
         val match = snapshot
         if (match == null) {
-            mutableUiState.update { it.copy(isLoading = false, isMissing = true) }
+            updateState { it.copy(isLoading = false, isMissing = true) }
             return
         }
         val open = match.openRound
         val nextOrdinal = (match.rounds.maxOfOrNull { it.ordinal } ?: 0) + 1
-        val ordinal = open?.ordinal ?: nextOrdinal
+        val ordinal = open?.ordinal ?: prepared?.ordinal ?: nextOrdinal
         val betweenRounds = open == null && match.pausedRounds.isEmpty()
         val players = match.participants.sortedBy { it.rosterOrder }.map { participant ->
             val history = match.rounds.sortedBy { it.ordinal }.map { round ->
@@ -277,16 +279,30 @@ class MatchViewModel(
                 !match.isFinished && eligible && (open != null || betweenRounds) &&
                     open?.draft?.entries?.containsKey(participant.id) != true && open?.draft?.designatedWinner != participant.id)
         }
-        mutableUiState.update { old -> old.copy(isLoading = false, isMissing = false,
-            players = players, roundNumber = ordinal, indicator = open?.indicator,
+        updateState { old -> old.copy(isLoading = false, isMissing = false,
+            players = players, roundNumber = ordinal, indicator = open?.indicator ?: prepared?.indicator,
             isFinished = match.isFinished,
-            canManagePlayers = betweenRounds && !match.isFinished,
             pausedRoundNumbers = match.pausedRounds.map { it.ordinal }, isCorrectingRound = open?.isCorrection == true,
-            playerName = old.playerName.takeIf { betweenRounds && !match.isFinished },
+            playerName = old.playerName.takeIf { canJoinMatch() },
             picker = old.picker.takeUnless { match.isFinished },
             scoreDialog = old.scoreDialog?.takeUnless { match.isFinished && !it.isCorrection }?.let { dialog ->
                 dialog.copy(wentOutEnabled = !dialog.isCorrection && if (dialog.roundId == open?.id) open.draft.winner == null else dialog.wentOutEnabled)
             }) }
+    }
+
+    private fun canJoinMatch(): Boolean = snapshot?.let { match ->
+        !match.isFinished && match.pausedRounds.isEmpty() && match.openRound?.isCorrection != true
+    } == true
+
+    private fun updateState(transform: (MatchUiState) -> MatchUiState) {
+        mutableUiState.update { old ->
+            val state = transform(old)
+            val idle = !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
+            state.copy(
+                canAddPlayer = canJoinMatch() && idle,
+                canReorderPlayers = canJoinMatch() && snapshot?.openRound == null && idle,
+            )
+        }
     }
 
     override fun onCleared() { scope.cancel() }

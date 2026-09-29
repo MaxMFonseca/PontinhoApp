@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Star
@@ -20,8 +21,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.repository.DailyStanding
@@ -43,6 +48,10 @@ fun HistoryScreen(
     onOpenMatch: (MatchId) -> Unit,
     onToggleSummary: () -> Unit,
     modifier: Modifier = Modifier,
+    onRequestDelete: (MatchId) -> Unit = {},
+    onCancelDelete: () -> Unit = {},
+    onConfirmDelete: () -> Unit = {},
+    onClearDeleteError: () -> Unit = {},
 ) {
     val locale = Locale.forLanguageTag(LocalLocale.current.toLanguageTag())
     LazyColumn(
@@ -85,9 +94,44 @@ fun HistoryScreen(
             item { PontinhoInfoBanner(R.string.history_empty, Modifier.padding(horizontal = 16.dp)) }
         } else {
             itemsIndexed(state.matches, key = { _, match -> match.id.value }) { index, match ->
-                HistoryMatchCard(match, locale, onOpenMatch, Modifier.padding(horizontal = 16.dp).testTag("history_match_$index"))
+                HistoryMatchCard(match, locale, onOpenMatch, onRequestDelete, !state.isDeleting,
+                    Modifier.padding(horizontal = 16.dp).testTag("history_match_$index"))
             }
         }
+    }
+    if (state.pendingDeleteMatchId != null) {
+        val cancel = {
+            if (!state.isDeleting) {
+                onClearDeleteError()
+                onCancelDelete()
+            }
+        }
+        AlertDialog(
+            modifier = Modifier.testTag("history_delete_dialog"),
+            onDismissRequest = cancel,
+            properties = DialogProperties(dismissOnBackPress = !state.isDeleting, dismissOnClickOutside = !state.isDeleting),
+            title = { Text(stringResource(R.string.history_delete_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.history_delete_message))
+                    if (state.deleteError) Text(stringResource(R.string.history_delete_error),
+                        color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("history_delete_error"))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onClearDeleteError()
+                    onConfirmDelete()
+                }, enabled = !state.isDeleting, modifier = Modifier.testTag("history_delete_confirm")) {
+                    Text(stringResource(R.string.history_delete_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = cancel, enabled = !state.isDeleting, modifier = Modifier.testTag("history_delete_cancel")) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }
 
@@ -106,10 +150,11 @@ private fun DailyMetricCard(rows: List<DailyStanding>, victories: Boolean) {
                 Text(label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
             }
             rows.forEach { row ->
-                Column(Modifier.fillMaxWidth().testTag("daily_${metric}_${row.playerKey.value}").semantics(mergeDescendants = true) {},
-                    verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(row.displayName, style = MaterialTheme.typography.titleSmall)
-                    Text(stringResource(R.string.history_metric_value, label, row.value), style = MaterialTheme.typography.bodyMedium)
+                Row(Modifier.fillMaxWidth().testTag("daily_${metric}_${row.playerKey.value}").semantics(mergeDescendants = true) {},
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(row.value.toString(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.widthIn(min = 24.dp))
+                    Text(row.displayName, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -117,28 +162,52 @@ private fun DailyMetricCard(rows: List<DailyStanding>, victories: Boolean) {
 }
 
 @Composable
-private fun HistoryMatchCard(match: HistoryMatch, locale: Locale, onOpenMatch: (MatchId) -> Unit, modifier: Modifier = Modifier) {
+private fun HistoryMatchCard(
+    match: HistoryMatch,
+    locale: Locale,
+    onOpenMatch: (MatchId) -> Unit,
+    onRequestDelete: (MatchId) -> Unit,
+    deleteEnabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
     Card(onClick = { onOpenMatch(match.id) }, modifier = modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         border = BorderStroke(1.dp, if (match.isFinished) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.tertiary),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val time = Instant.ofEpochMilli(match.createdAtEpochMillis).atZone(ZoneId.of(match.timeZoneId)).toLocalTime()
                 .format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale))
-            Text(time, style = MaterialTheme.typography.titleMedium)
-            Text(stringResource(if (match.isFinished) R.string.history_completed else R.string.history_in_progress),
-                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (!match.isFinished) PontinhoInfoBanner(R.string.history_provisional)
-            match.players.forEach { player ->
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(player.displayName, style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.results_total, player.total), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                    if (player.isWinner) Text(stringResource(R.string.results_winner), color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelLarge, modifier = Modifier.testTag("history_winner_${player.playerId.value}"))
-                    if (player.isHighestPenalty) Text(stringResource(R.string.results_highest_penalty), color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelLarge, modifier = Modifier.testTag("history_highest_${player.playerId.value}"))
+            val status = stringResource(if (match.isFinished) R.string.history_completed else R.string.history_in_progress)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.history_match_header, time, status),
+                    style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                IconButton(onClick = { onRequestDelete(match.id) }, enabled = deleteEnabled,
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("history_delete_${match.id.value}")) {
+                    Icon(Icons.Filled.Delete, stringResource(R.string.history_delete_description, time))
                 }
+            }
+            match.players.forEach { player ->
+                val result = when {
+                    !match.isFinished -> null
+                    player.isWinner -> R.string.results_winner
+                    player.isHighestPenalty -> R.string.results_highest_penalty
+                    else -> null
+                }
+                val resultDescription = result?.let { stringResource(it) }
+                val nameColor = when (result) {
+                    R.string.results_winner -> MaterialTheme.colorScheme.primary
+                    R.string.results_highest_penalty -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+                Text(buildAnnotatedString {
+                    withStyle(SpanStyle(color = nameColor)) { append(player.displayName) }
+                    append(" ")
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(player.total.toString()) }
+                }, style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+                        if (resultDescription != null) stateDescription = resultDescription
+                    })
             }
         }
     }

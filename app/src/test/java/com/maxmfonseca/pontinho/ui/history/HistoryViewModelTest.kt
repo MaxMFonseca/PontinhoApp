@@ -4,6 +4,7 @@ import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
 import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -14,6 +15,112 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HistoryViewModelTest {
+    @Test fun deleteRequestCanBeCancelledWithoutWrite() = runTest {
+        val day = MutableStateFlow(deletionDay())
+        val repo = HistoryRepository(day)
+        val vm = HistoryViewModel(day.value.localDate, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.toggleSummary()
+        vm.requestDelete(MatchId("missing"))
+        assertNull(vm.uiState.value.pendingDeleteMatchId)
+        vm.confirmDelete()
+        vm.requestDelete(MatchId("delete"))
+        assertEquals(MatchId("delete"), vm.uiState.value.pendingDeleteMatchId)
+        assertEquals(day.value.matches, vm.uiState.value.matches)
+
+        vm.cancelDelete()
+        vm.confirmDelete()
+        runCurrent()
+
+        assertTrue(repo.deletions.isEmpty())
+        assertNull(vm.uiState.value.pendingDeleteMatchId)
+        assertFalse(vm.uiState.value.isDeleting)
+        assertFalse(vm.uiState.value.deleteError)
+        assertTrue(vm.uiState.value.summaryExpanded)
+        assertEquals(day.value.wins, vm.uiState.value.wins)
+        assertEquals(day.value.penalties, vm.uiState.value.penalties)
+    }
+
+    @Test fun deleteConfirmRunsOnceAndWaitsForProjection() = runTest {
+        val day = MutableStateFlow(deletionDay())
+        val commit = CompletableDeferred<Unit>()
+        val repo = HistoryRepository(day) { commit.await() }
+        val vm = HistoryViewModel(day.value.localDate, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.toggleSummary()
+        vm.requestDelete(MatchId("delete"))
+        vm.confirmDelete()
+        vm.confirmDelete()
+        vm.cancelDelete()
+        vm.requestDelete(MatchId("keep"))
+        assertTrue(vm.uiState.value.isDeleting)
+        runCurrent()
+        assertEquals(listOf(MatchId("delete")), repo.deletions)
+        assertEquals(MatchId("delete"), vm.uiState.value.pendingDeleteMatchId)
+
+        // Projection updates during the write must not be overwritten by local state changes.
+        day.value = day.value.copy(penalties = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 220)))
+        runCurrent()
+        commit.complete(Unit)
+        runCurrent()
+        assertTrue(vm.uiState.value.isDeleting)
+        assertEquals(day.value.matches, vm.uiState.value.matches)
+        assertEquals(day.value.penalties, vm.uiState.value.penalties)
+        vm.confirmDelete()
+        runCurrent()
+        assertEquals(1, repo.deletions.size)
+
+        day.value = day.value.copy(matches = day.value.matches.filterNot { it.id == MatchId("delete") }, wins = emptyList())
+        runCurrent()
+        assertNull(vm.uiState.value.pendingDeleteMatchId)
+        assertFalse(vm.uiState.value.isDeleting)
+        assertFalse(vm.uiState.value.deleteError)
+        assertTrue(vm.uiState.value.summaryExpanded)
+        assertEquals(day.value.matches, vm.uiState.value.matches)
+        assertEquals(day.value.wins, vm.uiState.value.wins)
+        assertEquals(day.value.penalties, vm.uiState.value.penalties)
+    }
+
+    @Test fun deleteFailureKeepsCardAndAllowsRetry() = runTest {
+        val day = MutableStateFlow(deletionDay())
+        var failWrite = true
+        val repo = HistoryRepository(day) {
+            if (failWrite) throw IllegalStateException("Write failed")
+            day.value = day.value.copy(matches = day.value.matches.filterNot { it.id == MatchId("delete") })
+        }
+        val vm = HistoryViewModel(day.value.localDate, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.toggleSummary()
+        vm.requestDelete(MatchId("delete"))
+        vm.confirmDelete()
+        runCurrent()
+        assertTrue(vm.uiState.value.deleteError)
+        assertFalse(vm.uiState.value.isDeleting)
+        assertEquals(MatchId("delete"), vm.uiState.value.pendingDeleteMatchId)
+        assertEquals(day.value.matches, vm.uiState.value.matches)
+        val failedState = vm.uiState.value
+        vm.clearDeleteError()
+        assertEquals(failedState.copy(deleteError = false), vm.uiState.value)
+        vm.confirmDelete()
+        runCurrent()
+        assertTrue(vm.uiState.value.deleteError)
+        vm.cancelDelete()
+        assertNull(vm.uiState.value.pendingDeleteMatchId)
+        assertFalse(vm.uiState.value.deleteError)
+        vm.requestDelete(MatchId("delete"))
+        failWrite = false
+        vm.confirmDelete()
+        runCurrent()
+        assertEquals(List(3) { MatchId("delete") }, repo.deletions)
+        assertFalse(vm.uiState.value.isDeleting)
+        assertFalse(vm.uiState.value.deleteError)
+        assertNull(vm.uiState.value.pendingDeleteMatchId)
+        assertTrue(vm.uiState.value.summaryExpanded)
+        assertEquals(day.value.matches, vm.uiState.value.matches)
+        assertEquals(day.value.wins, vm.uiState.value.wins)
+        assertEquals(day.value.penalties, vm.uiState.value.penalties)
+    }
+
     @Test fun normalizedNameProjectionKeepsSnapshotNamesAndActiveTotalsSeparateAfterRefresh() = runTest {
         val date = LocalDate.parse("2026-10-14")
         val day = MutableStateFlow(DayHistory(date,
@@ -65,7 +172,25 @@ class HistoryViewModelTest {
     }
 }
 
-private class HistoryRepository(private val day: MutableStateFlow<DayHistory>) : MatchRepository {
+private fun deletionDay() = DayHistory(
+    LocalDate.parse("2026-10-14"),
+    listOf(
+        HistoryMatch(MatchId("delete"), 200L, true, listOf(HistoryPlayer(PlayerId("a"), "Ana", 110, true, true))),
+        HistoryMatch(MatchId("keep"), 100L, false, listOf(HistoryPlayer(PlayerId("b"), "Bruno", 0, false, false))),
+    ),
+    listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 1)),
+    listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 110)),
+)
+
+private class HistoryRepository(
+    private val day: MutableStateFlow<DayHistory>,
+    private val deleteBlock: suspend (MatchId) -> Unit = {},
+) : MatchRepository {
+    val deletions = mutableListOf<MatchId>()
+    override suspend fun deleteMatch(matchId: MatchId) {
+        deletions += matchId
+        deleteBlock(matchId)
+    }
     override fun observeDay(localDate: LocalDate) = day
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
     override fun observeMatch(matchId: MatchId) = MutableStateFlow(null)

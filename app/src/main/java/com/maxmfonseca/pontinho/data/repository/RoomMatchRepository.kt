@@ -55,6 +55,11 @@ class RoomMatchRepository(
         }
     }.distinctUntilChanged()
 
+    override suspend fun deleteMatch(matchId: MatchId) = db.withTransaction {
+        requireMatch(matchId)
+        check(matches.deleteMatch(matchId.value) == 1)
+    }
+
     override suspend fun createMatch(command: CreateMatch): MatchId = db.withTransaction {
         require(command.creationToken.isNotBlank()) { "Creation token must not be blank" }
         require(command.players.size >= 2) { "At least two players are required" }
@@ -63,7 +68,9 @@ class RoomMatchRepository(
         val normalized = command.players.map { player ->
             player.copy(displayName = player.displayName.trim().also { require(it.isNotEmpty()) { "Player name must not be blank" } })
         }
-        val fingerprint = creationFingerprint(normalized)
+        val initialDealerDraftId = command.initialDealerDraftId ?: normalized.first().draftId
+        require(normalized.any { it.draftId == initialDealerDraftId }) { "Initial dealer must belong to the roster" }
+        val fingerprint = creationFingerprint(normalized, initialDealerDraftId)
         matches.getByCreationToken(command.creationToken)?.let { existing ->
             require(existing.creationFingerprint == fingerprint) { "Creation token was already used for a different command" }
             return@withTransaction MatchId(existing.id)
@@ -85,7 +92,7 @@ class RoomMatchRepository(
         }
         matches.insertMatch(MatchEntity(
             matchId, now.atZone(zone).toLocalDate().toString(), zone.id,
-            now.toEpochMilli(), now.toEpochMilli(), dealerParticipantId = roster.first().id,
+            now.toEpochMilli(), now.toEpochMilli(), dealerParticipantId = roster[normalized.indexOfFirst { it.draftId == initialDealerDraftId }].id,
             creationToken = command.creationToken,
             creationFingerprint = fingerprint,
         ))
@@ -109,14 +116,19 @@ class RoomMatchRepository(
             return@withTransaction ParticipantId(existing.id)
         }
         val match = activeMatch(command.matchId)
-        betweenRounds(match.id)
         if (roster.any { PlayerNameKey.from(it.nameSnapshot) == PlayerNameKey.from(name) }) {
             throw DuplicatePlayerNameException()
         }
-        val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
+        val history = rounds.rounds(match.id)
+        val openRound = history.singleOrNull { it.status == "OPEN" }
+        require(openRound?.isCorrection != true) { "Cannot add players during a historical correction" }
+        val ordinal = openRound?.ordinal ?: ((history.maxOfOrNull { it.ordinal } ?: 0) + 1)
         val now = clock.millis()
         val player = resolvePlayer(name, playerId, now, roster.map { it.playerId }.toSet())
         matches.insertParticipant(MatchParticipantEntity(participantId, match.id, player.id, name, roster.size, ordinal, now))
+        if (openRound != null) {
+            rounds.updateRound(openRound.copy(eligibleParticipantCount = matches.eligibleParticipants(match.id, ordinal).size))
+        }
         matches.updateMatch(match.copy(lastPlayedAt = now))
         ParticipantId(participantId)
     }
@@ -409,8 +421,10 @@ class RoomMatchRepository(
         "$token\u0000$draftId".toByteArray(StandardCharsets.UTF_8),
     ).toString()
 
-    private fun creationFingerprint(players: List<CreateMatchPlayer>): String {
+    private fun creationFingerprint(players: List<CreateMatchPlayer>, initialDealerDraftId: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(initialDealerDraftId.toByteArray(StandardCharsets.UTF_8))
+        digest.update(byteArrayOf(0))
         players.forEach { player ->
             listOf(player.draftId, player.playerId?.value.orEmpty(), player.displayName).forEach { value ->
                 val bytes = value.toByteArray(StandardCharsets.UTF_8)
@@ -433,7 +447,12 @@ class RoomMatchRepository(
                 id = match.id,
                 createdAtEpochMillis = match.createdAt.toEpochMilli(),
                 isFinished = match.isFinished,
-                players = match.participants.sortedBy { it.rosterOrder }.map { participant ->
+                players = match.participants.sortedWith(
+                    compareByDescending<MatchParticipant> { match.totals.getValue(it.id) }
+                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+                        .thenBy { it.displayName }
+                        .thenBy { it.id.value },
+                ).map { participant ->
                     HistoryPlayer(
                         playerId = participant.playerId,
                         displayName = participant.displayName,

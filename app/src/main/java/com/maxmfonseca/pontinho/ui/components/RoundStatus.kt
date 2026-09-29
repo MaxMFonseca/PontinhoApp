@@ -67,27 +67,27 @@ fun RoundStatus(
 
     Surface(
         modifier = modifier
-            .size(28.dp)
+            .size(14.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = description
                 roundStatusContainerColor = background.toArgb()
             },
         shape = CircleShape,
-        border = if (status == RoundStatusKind.EMPTY) BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant) else null,
+        border = if (status == RoundStatusKind.EMPTY) BorderStroke(.5.dp, MaterialTheme.colorScheme.onSurfaceVariant) else null,
         color = background,
         contentColor = foreground,
     ) {
         Box(contentAlignment = Alignment.Center) {
             when (status) {
-                RoundStatusKind.WINNER -> Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
-                RoundStatusKind.LOSS -> Icon(Icons.Filled.Close, null, Modifier.size(18.dp))
-                RoundStatusKind.PENDING -> Canvas(Modifier.size(16.dp)) {
-                    drawCircle(foreground, style = Stroke(1.5.dp.toPx()))
-                    drawLine(foreground, center, Offset(center.x, size.height * .2f), 1.5.dp.toPx(), StrokeCap.Round)
-                    drawLine(foreground, center, Offset(size.width * .7f, center.y), 1.5.dp.toPx(), StrokeCap.Round)
+                RoundStatusKind.WINNER -> Icon(Icons.Filled.Check, null, Modifier.size(9.dp))
+                RoundStatusKind.LOSS -> Icon(Icons.Filled.Close, null, Modifier.size(9.dp))
+                RoundStatusKind.PENDING -> Canvas(Modifier.size(8.dp)) {
+                    drawCircle(foreground, style = Stroke(.75.dp.toPx()))
+                    drawLine(foreground, center, Offset(center.x, size.height * .2f), .75.dp.toPx(), StrokeCap.Round)
+                    drawLine(foreground, center, Offset(size.width * .7f, center.y), .75.dp.toPx(), StrokeCap.Round)
                 }
-                RoundStatusKind.NOT_PARTICIPATING -> Canvas(Modifier.size(14.dp)) {
-                    drawLine(foreground, Offset(0f, center.y), Offset(size.width, center.y), 2.dp.toPx(), StrokeCap.Round)
+                RoundStatusKind.NOT_PARTICIPATING -> Canvas(Modifier.size(7.dp)) {
+                    drawLine(foreground, Offset(0f, center.y), Offset(size.width, center.y), 1.dp.toPx(), StrokeCap.Round)
                 }
                 RoundStatusKind.EMPTY -> Unit
             }

@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextEquals
@@ -168,6 +169,36 @@ class SharedComponentsTest {
     }
 
     @Test
+    fun dealerHandSitsImmediatelyAfterNameAndTotalStaysAtTheTrailingSide() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent {
+            Box(Modifier.width(360.dp)) {
+                PlayerCard(
+                    playerName = "Ana",
+                    total = 42,
+                    isDealer = true,
+                    history = emptyList(),
+                    onAddScore = {},
+                    modifier = Modifier.testTag("dealer_player_card"),
+                )
+            }
+        }
+
+        val name = composeRule.onNodeWithTag("player_name").fetchSemanticsNode().boundsInRoot
+        val hand = composeRule.onNodeWithTag("dealer_hand").assertIsDisplayed()
+            .assertContentDescriptionEquals(context.getString(R.string.deals_cards))
+            .fetchSemanticsNode().boundsInRoot
+        val total = composeRule.onNodeWithTag("player_total").fetchSemanticsNode().boundsInRoot
+        val action = composeRule.onNodeWithTag("player_action").fetchSemanticsNode().boundsInRoot
+
+        assertTrue("Dealer hand must follow the name: $name vs $hand", name.right <= hand.left)
+        val maximumGap = with(composeRule.density) { 8.dp.toPx() } + 1f
+        assertTrue("Dealer hand should stay visually attached to the name", hand.left - name.right <= maximumGap)
+        assertTrue("Total must be pushed to the trailing side after the hand", hand.right < total.left)
+        assertTrue("Score action remains reachable after the trailing total", total.right <= action.left)
+    }
+
+    @Test
     fun longPlayerNameCannotOverlapReservedTotalAtLargeFontScale() {
         val longName = "Alexandre Maximiliano de Albuquerque e Silva"
         composeRule.setContent {
@@ -206,7 +237,7 @@ class SharedComponentsTest {
         val nameLayout = nameLayouts.single()
         val totalLayout = totalLayouts.single()
         assertFalse("Name and total overlap: $nameBounds vs $totalBounds", nameBounds.overlaps(totalBounds))
-        assertTrue("Large text should stack the total below the name", totalBounds.top >= nameBounds.bottom)
+        assertTrue("Name and total should remain on the same identity line", kotlin.math.abs(totalBounds.center.y - nameBounds.center.y) <= totalBounds.height)
         // hasVisualOverflow also reports intentional maxLines ellipsis as height
         // overflow. Check the actual laid-out dimensions while requiring ellipsis.
         assertEquals("Long names remain one line", 1, nameLayout.lineCount)

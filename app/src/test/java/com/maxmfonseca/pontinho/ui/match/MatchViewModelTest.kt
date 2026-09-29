@@ -18,6 +18,190 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun activeRoundAllowsAddButNotReorder() = runTest {
+        val repo = ScoringRepository()
+        val initial = repo.snapshot.value!!
+        repo.snapshot.value = initial.copy(rounds = listOf(repo.round(1, RoundDraft(repo.ids))))
+        val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertTrue(vm.uiState.value.canAddPlayer)
+        assertFalse(vm.uiState.value.canReorderPlayers)
+        vm.openAddPlayer()
+        assertEquals("", vm.uiState.value.playerName)
+        assertFalse(vm.uiState.value.canAddPlayer)
+        vm.updatePlayerName(" Dora ")
+        vm.openAddPlayer()
+        assertEquals(" Dora ", vm.uiState.value.playerName)
+        vm.addScore(repo.ids[0])
+        assertNull(vm.uiState.value.scoreDialog)
+        vm.dismissDialog()
+        vm.reorderPlayers(repo.ids.reversed()); vm.movePlayer(repo.ids[0], 1)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.hasError)
+        assertEquals(initial.participants.map { it.id }, vm.uiState.value.players.map { it.id })
+    }
+
+    @Test fun preparedWildcardSurvivesScoreDismissAndPlayerJoin() = runTest {
+        val repo = ScoringRepository(allowJoin = true)
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        val preparedId = vm.uiState.value.scoreDialog!!.roundId
+        val indicator = Indicator(Rank.KING, CardColor.BLACK)
+        assertEquals(indicator, vm.uiState.value.indicator)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        assertFalse(vm.uiState.value.canAddPlayer)
+        vm.dismissDialog()
+        assertNull(vm.uiState.value.scoreDialog)
+        assertEquals(indicator, vm.uiState.value.indicator)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        assertTrue(vm.uiState.value.canAddPlayer)
+        assertTrue(repo.snapshot.value!!.rounds.isEmpty())
+        vm.openAddPlayer(); vm.updatePlayerName(" Dora ")
+        assertEquals(" Dora ", vm.uiState.value.playerName)
+        vm.confirmPlayerName(); advanceUntilIdle()
+        assertNull(vm.uiState.value.playerName)
+        assertEquals("Dora", vm.uiState.value.players.last().name)
+        assertTrue(vm.uiState.value.canAddPlayer)
+        assertEquals(indicator, vm.uiState.value.indicator)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        assertTrue(repo.snapshot.value!!.rounds.isEmpty())
+        vm.addScore(repo.ids.last())
+        assertNull(vm.uiState.value.picker)
+        assertEquals(preparedId, vm.uiState.value.scoreDialog!!.roundId)
+        assertEquals(indicator, vm.uiState.value.scoreDialog!!.indicator)
+        assertEquals(1, vm.uiState.value.scoreDialog!!.roundNumber)
+        vm.updateScore("7"); vm.confirmScore(); advanceUntilIdle()
+        assertEquals(indicator, repo.snapshot.value!!.openRound!!.indicator)
+        assertEquals(7, vm.uiState.value.players.last().history.single().score)
+        for (id in repo.ids.take(2)) {
+            vm.addScore(id); vm.updateScore("3"); vm.confirmScore(); advanceUntilIdle()
+        }
+        assertEquals(2, vm.uiState.value.roundNumber)
+        assertNull(vm.uiState.value.indicator)
+        vm.addScore(repo.ids[0])
+        assertNotNull(vm.uiState.value.picker)
+        assertNull(vm.uiState.value.scoreDialog)
+    }
+
+    @Test fun preparedWildcardSurvivesFailedAndSuccessfulReorder() = runTest {
+        val storage = ScoringRepository()
+        val initial = storage.snapshot.value!!
+        val original = storage.ids
+        val reordered = original.reversed()
+        var fail = true
+        val repo = object : MatchRepository by storage {
+            override suspend fun reorderParticipants(command: ReorderParticipants) {
+                if (fail) error("Unavailable")
+                storage.snapshot.value = storage.snapshot.value!!.copy(participants = command.participantIds.mapIndexed { index, id ->
+                    initial.participants.single { it.id == id }.copy(rosterOrder = index)
+                })
+            }
+        }
+        val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); prepare(vm, original[0]); advanceUntilIdle()
+        val preparedId = vm.uiState.value.scoreDialog!!.roundId
+        val indicator = Indicator(Rank.KING, CardColor.BLACK)
+        vm.dismissDialog()
+        for (shouldFail in listOf(true, false)) {
+            fail = shouldFail
+            assertTrue(vm.uiState.value.canReorderPlayers)
+            vm.reorderPlayers(reordered); advanceUntilIdle()
+            assertEquals(shouldFail, vm.uiState.value.hasError)
+            assertEquals(if (shouldFail) original else reordered, vm.uiState.value.players.map { it.id })
+            assertEquals(indicator, vm.uiState.value.indicator)
+            assertEquals(1, vm.uiState.value.roundNumber)
+            assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+            vm.addScore(original[1])
+            assertNull(vm.uiState.value.picker)
+            assertEquals(preparedId, vm.uiState.value.scoreDialog!!.roundId)
+            assertEquals(indicator, vm.uiState.value.scoreDialog!!.indicator)
+            assertEquals(1, vm.uiState.value.scoreDialog!!.roundNumber)
+            vm.dismissDialog()
+        }
+    }
+
+    @Test fun joinAfterDesignatedWinnerRendersCurrentRoundEligibility() = runTest {
+        val repo = ScoringRepository(allowJoin = true)
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.wentOut(); advanceUntilIdle()
+        vm.openAddPlayer(); vm.updatePlayerName("Dora")
+        assertEquals("Dora", vm.uiState.value.playerName)
+        vm.confirmPlayerName(); advanceUntilIdle()
+        assertNull(vm.uiState.value.playerName)
+        assertEquals(4, vm.uiState.value.players.size)
+        val joined = vm.uiState.value.players.last()
+        assertEquals("Dora", joined.name)
+        assertTrue(joined.canAddScore)
+        assertEquals(RoundStatusKind.EMPTY, joined.history.single().status)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.indicator)
+        assertEquals(RoundStatusKind.WINNER, vm.uiState.value.players.first().history.single().status)
+        vm.addScore(joined.id)
+        assertFalse(vm.uiState.value.scoreDialog!!.wentOutEnabled)
+        assertEquals(1, vm.uiState.value.scoreDialog!!.roundNumber)
+    }
+
+    @Test fun failedActiveRoundJoinPreservesTypedName() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.updateScore("8"); vm.confirmScore(); advanceUntilIdle()
+        vm.openAddPlayer(); vm.updatePlayerName(" Dora "); vm.confirmPlayerName(); advanceUntilIdle()
+        assertTrue(vm.uiState.value.hasError)
+        assertEquals(" Dora ", vm.uiState.value.playerName)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.indicator)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        assertFalse(vm.uiState.value.isSaving)
+    }
+
+    @Test fun pendingJoinBlocksDuplicateSavesAndOtherModalActions() = runTest {
+        val storage = ScoringRepository(allowJoin = true)
+        val gate = CompletableDeferred<Unit>()
+        val repo = object : MatchRepository by storage {
+            override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId {
+                gate.await()
+                return storage.addPlayerToMatch(command)
+            }
+        }
+        val vm = MatchViewModel(storage.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); prepare(vm, storage.ids[0]); advanceUntilIdle()
+        vm.dismissDialog(); vm.openAddPlayer(); vm.updatePlayerName(" Dora ")
+        vm.confirmPlayerName(); vm.confirmPlayerName(); runCurrent()
+        assertTrue(vm.uiState.value.isSaving)
+        assertFalse(vm.uiState.value.canAddPlayer)
+        assertFalse(vm.uiState.value.canReorderPlayers)
+        vm.openAddPlayer(); vm.dismissDialog(); vm.addScore(storage.ids[1]); vm.updatePlayerName("Eva")
+        assertEquals(" Dora ", vm.uiState.value.playerName)
+        assertNull(vm.uiState.value.picker)
+        assertNull(vm.uiState.value.scoreDialog)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.indicator)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        gate.complete(Unit); advanceUntilIdle()
+        assertEquals(4, vm.uiState.value.players.size)
+        assertEquals("Dora", vm.uiState.value.players.last().name)
+        assertEquals(1, storage.lateJoinAttempts)
+        assertFalse(vm.uiState.value.isSaving)
+        assertTrue(vm.uiState.value.canAddPlayer)
+    }
+
+    @Test fun failedJoinPreservesPreparedWildcardAndTypedNameForRetry() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        val preparedId = vm.uiState.value.scoreDialog!!.roundId
+        vm.dismissDialog()
+        vm.openAddPlayer(); vm.updatePlayerName(" Dora "); vm.confirmPlayerName(); advanceUntilIdle()
+        assertTrue(vm.uiState.value.hasError)
+        assertEquals(" Dora ", vm.uiState.value.playerName)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.indicator)
+        assertEquals(1, vm.uiState.value.roundNumber)
+        assertTrue(repo.snapshot.value!!.rounds.isEmpty())
+        vm.dismissDialog(); vm.addScore(repo.ids[1])
+        assertNull(vm.uiState.value.picker)
+        assertEquals(preparedId, vm.uiState.value.scoreDialog!!.roundId)
+    }
+
     @Test fun directlySelectedJokerIsConvertedToCompatibleIndicatorAndFailedConfirmKeepsSelectionForRetry() = runTest {
         val storage = ScoringRepository()
         var choices = 0
@@ -155,25 +339,31 @@ class MatchViewModelTest {
         assertFalse(vm.uiState.value.duplicateNameError)
     }
 
-    @Test fun rosterGuardTracksOpenPausedAndFinishedState() = runTest {
+    @Test fun rosterGuardsTrackCorrectionPausedAndFinishedState() = runTest {
         val repo = ScoringRepository()
         val initial = repo.snapshot.value!!
         val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
         runCurrent()
-        assertTrue(vm.uiState.value.canManagePlayers)
+        assertTrue(vm.uiState.value.canAddPlayer)
+        assertTrue(vm.uiState.value.canReorderPlayers)
         vm.openAddPlayer()
         assertEquals("", vm.uiState.value.playerName)
         vm.dismissDialog()
-        for (status in listOf(RoundStatus.OPEN, RoundStatus.PAUSED)) {
-            repo.snapshot.value = initial.copy(rounds = listOf(repo.round(1, RoundDraft(repo.ids)).copy(status = status)))
+        for (round in listOf(
+            repo.round(1, RoundDraft(repo.ids)).copy(isCorrection = true),
+            repo.round(1, RoundDraft(repo.ids)).copy(status = RoundStatus.PAUSED),
+        )) {
+            repo.snapshot.value = initial.copy(rounds = listOf(round))
             runCurrent()
-            assertFalse(vm.uiState.value.canManagePlayers)
+            assertFalse(vm.uiState.value.canAddPlayer)
+            assertFalse(vm.uiState.value.canReorderPlayers)
             vm.openAddPlayer(); vm.movePlayer(repo.ids[0], 1)
             assertNull(vm.uiState.value.playerName)
         }
         repo.snapshot.value = initial.copy(isFinished = true)
         runCurrent()
-        assertFalse(vm.uiState.value.canManagePlayers)
+        assertFalse(vm.uiState.value.canAddPlayer)
+        assertFalse(vm.uiState.value.canReorderPlayers)
     }
 
     @Test fun correctionsPreloadExplicitScoreAndProtectAutomaticZero() = runTest {
@@ -198,7 +388,7 @@ class MatchViewModelTest {
         vm.deleteScore(); advanceUntilIdle()
         assertNull(repo.snapshot.value!!.openRound!!.draft.winner)
         assertNull(repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[2]])
-        assertFalse(vm.uiState.value.canManagePlayers)
+        assertFalse(vm.uiState.value.canReorderPlayers)
         assertEquals(listOf(0, 0, 0), vm.uiState.value.players.map { it.total })
         vm.addScore(repo.ids[2]); vm.wentOut(); advanceUntilIdle()
         assertEquals(RoundStatus.COMPLETE, repo.snapshot.value!!.rounds[0].status)
@@ -345,7 +535,10 @@ class MatchViewModelTest {
 }
 
 /** In-memory storage boundary; real RoundEngine handles all transition rules. */
-private class ScoringRepository(private val gate: CompletableDeferred<Unit>? = null) : MatchRepository {
+private class ScoringRepository(
+    private val gate: CompletableDeferred<Unit>? = null,
+    private val allowJoin: Boolean = false,
+) : MatchRepository {
     val snapshot = MutableStateFlow<MatchSnapshot?>(matchSnapshot("match", LocalDate.of(2026, 10, 14), 2,
         listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla")))
     val ids get() = snapshot.value!!.participants.map { it.id }
@@ -395,7 +588,19 @@ private class ScoringRepository(private val gate: CompletableDeferred<Unit>? = n
     override suspend fun addParticipant(command: AddParticipant) = error("unused")
     override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId {
         lateJoinAttempts++
-        error("Storage unavailable")
+        if (!allowJoin) error("Storage unavailable")
+        val before = snapshot.value!!
+        val ordinal = before.openRound?.ordinal ?: ((before.rounds.maxOfOrNull { it.ordinal } ?: 0) + 1)
+        val id = ParticipantId("joined-${command.operationToken}")
+        val participant = before.participants.last().copy(id = id, playerId = PlayerId("joined-player"),
+            displayName = command.displayName, rosterOrder = before.participants.size, eligibleFromRoundOrdinal = ordinal)
+        snapshot.value = before.copy(participants = before.participants + participant,
+            totals = before.totals + (id to 0),
+            rounds = before.rounds.map { round ->
+                if (round.status == RoundStatus.OPEN) round.copy(draft = round.draft.copy(
+                    eligibleParticipants = round.draft.eligibleParticipants + id)) else round
+            })
+        return id
     }
     override suspend fun reorderParticipants(command: ReorderParticipants) = error("unused")
     override suspend fun removeRoundEntry(command: RemoveRoundEntry) {
@@ -409,4 +614,5 @@ private class ScoringRepository(private val gate: CompletableDeferred<Unit>? = n
         persist(r, r.draft.copy(entries = r.draft.entries + (command.participantId to old.copy(points = command.points))))
     }
     override suspend fun acknowledgeResults(matchId: MatchId, revision: Long) = error("unused")
+    override suspend fun deleteMatch(matchId: MatchId) = error("unused")
 }

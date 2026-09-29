@@ -5,8 +5,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -15,9 +13,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.maxmfonseca.pontinho.R
-import com.maxmfonseca.pontinho.ui.components.PontinhoSettingCard
 import com.maxmfonseca.pontinho.ui.components.PontinhoTopBar
 
 @Composable
@@ -34,7 +36,22 @@ fun AboutScreen(versionName: String, onBack: () -> Unit, onLearn: () -> Unit, mo
                     Image(painterResource(R.drawable.ic_launcher), contentDescription = null, modifier = Modifier.size(64.dp))
                     Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
                     Text(stringResource(R.string.about_version, versionName), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(stringResource(R.string.about_purpose), style = MaterialTheme.typography.bodyLarge)
+                    val purpose = stringResource(R.string.about_purpose)
+                    val learnPhrase = stringResource(R.string.route_learn)
+                    Text(buildAnnotatedString {
+                        append(purpose)
+                        val linkStart = purpose.lastIndexOf(learnPhrase)
+                        if (linkStart >= 0) {
+                            addLink(LinkAnnotation.Clickable(
+                                tag = "learn",
+                                styles = TextLinkStyles(SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                )),
+                                linkInteractionListener = { onLearn() },
+                            ), linkStart, linkStart + learnPhrase.length)
+                        }
+                    }, style = MaterialTheme.typography.bodyLarge)
                 }
             }
             Text(stringResource(R.string.about_support), style = MaterialTheme.typography.titleMedium)
@@ -44,8 +61,6 @@ fun AboutScreen(versionName: String, onBack: () -> Unit, onLearn: () -> Unit, mo
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            PontinhoSettingCard(R.string.route_learn, subtitle = R.string.settings_learn_summary,
-                icon = Icons.AutoMirrored.Filled.List, modifier = Modifier.testTag("about_learn"), onClick = onLearn)
         }
     }
 }

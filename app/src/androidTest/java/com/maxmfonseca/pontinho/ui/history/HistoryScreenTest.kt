@@ -25,9 +25,13 @@ import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
 import com.maxmfonseca.pontinho.settings.ThemePreference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import java.time.LocalDate
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.io.FileInputStream
 import java.util.Locale
 
@@ -79,12 +83,17 @@ class HistoryScreenTest {
                     capture("task6-history-$metric-$locale-$scale.png")
             }
             root.performScrollToNode(hasTestTag("history_match_0"))
-            composeRule.onNodeWithText(localized.getString(R.string.history_provisional), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-            composeRule.onNodeWithTag("history_match_0").assertTextContains(localized.getString(R.string.results_total, 999))
-            if (locale == "en-US" && theme == ThemePreference.DARK && scale == 2f) capture("task6-history-provisional-en-dark-200.png")
+            val time = LocalTime.MIDNIGHT.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(Locale.forLanguageTag(locale)))
+            composeRule.onNodeWithTag("history_match_0").assertTextContains("$time · ${localized.getString(R.string.history_in_progress)}")
+            composeRule.onNodeWithText("Julia2 999").performScrollTo().assertIsDisplayed()
+            composeRule.onNodeWithTag("history_delete_active").assertContentDescriptionEquals(localized.getString(R.string.history_delete_description, time))
+            composeRule.onNodeWithText(localized.getString(R.string.history_provisional), useUnmergedTree = true).assertDoesNotExist()
+            if (locale == "en-US" && theme == ThemePreference.DARK && scale == 2f) capture("task6-history-compact-en-dark-200.png")
             for ((index, name) in listOf(1 to "Julia", 2 to "Julia2")) {
                 root.performScrollToNode(hasTestTag("history_match_$index"))
-                composeRule.onNodeWithTag("history_match_$index").assertTextContains(name).assertHeightIsAtLeast(48.dp).performClick()
+                composeRule.onNode(hasText(name, substring = true) and hasAnyAncestor(hasTestTag("history_match_$index"))).performScrollTo().assertIsDisplayed()
+                composeRule.onNodeWithTag("history_match_$index").assertTextContains("$time · ${localized.getString(R.string.history_completed)}")
+                    .assertHeightIsAtLeast(48.dp).performClick()
             }
             composeRule.runOnIdle { assertEquals(listOf("back", "settings", "new", "toggle", "first", "second"), calls) }
         }
@@ -115,7 +124,6 @@ class HistoryScreenTest {
                 ), {}, {}, {}, {}, {},
             )
         }
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
         for ((metric, rows) in listOf(
             "wins" to listOf(Triple("julia", "Julia", 1), Triple("max", "Max", 1), Triple("julia2", "Julia2", 0)),
             "points" to listOf(Triple("julia2", "Julia2", 110), Triple("max", "Max", 110), Triple("julia", "Julia", 33)),
@@ -123,13 +131,12 @@ class HistoryScreenTest {
             composeRule.onNodeWithTag("daily_${metric}_card").performScrollTo().assertExists()
             for ((key, name, value) in rows) {
                 val row = composeRule.onNode(hasTestTag("daily_${metric}_$key") and hasAnyAncestor(hasTestTag("daily_${metric}_card")))
-                row.performScrollTo().assertIsDisplayed().assertTextContains(name)
-                row.assertTextContains(context.getString(if (metric == "wins") R.string.history_wins else R.string.history_penalties) + ": " + value)
+                row.performScrollTo().assertIsDisplayed().assertTextEquals(value.toString(), name)
             }
         }
     }
 
-    @Test fun activeTotalsAreProvisionalAndSummaryExcludesAdvertisement() {
+    @Test fun compactRowsKeepRepositoryOrderAndAnnounceOnlyFinishedResults() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         var toggles = 0
         composeRule.setContent {
@@ -137,10 +144,12 @@ class HistoryScreenTest {
                 state = HistoryUiState(
                     localDate = LocalDate.parse("2026-10-14"),
                     matches = listOf(
-                        HistoryMatch(MatchId("active"), 2, false, listOf(HistoryPlayer(PlayerId("a"), "Ana", 112, false, false))),
+                        HistoryMatch(MatchId("active"), 2, false, listOf(HistoryPlayer(PlayerId("a"), "Ana", 112, true, true))),
                         HistoryMatch(MatchId("done"), 1, true, listOf(
-                            HistoryPlayer(PlayerId("b"), "Bruno", 48, true, false),
                             HistoryPlayer(PlayerId("c"), "Carla", 112, false, true),
+                            HistoryPlayer(PlayerId("d"), "Dora", 112, false, true),
+                            HistoryPlayer(PlayerId("b"), "Bruno", 48, true, false),
+                            HistoryPlayer(PlayerId("e"), "Eva", 48, true, false),
                         )),
                     ),
                     wins = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 1)),
@@ -152,17 +161,101 @@ class HistoryScreenTest {
                 onToggleSummary = { toggles++ },
             )
         }
-        composeRule.onNodeWithTag("history_root").performScrollToNode(hasText(context.getString(R.string.history_provisional), substring = true))
-        composeRule.onNodeWithText(context.getString(R.string.history_provisional), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_0"))
+        composeRule.onNodeWithText(context.getString(R.string.history_provisional), useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Ana 112", useUnmergedTree = true).assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
         composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_1"))
-        composeRule.onNodeWithTag("history_winner_b", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("history_highest_c", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        for (name in listOf("Carla 112", "Dora 112")) {
+            composeRule.onNodeWithText(name).performScrollTo().assertIsDisplayed().assert(
+                SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_highest_penalty)))
+        }
+        for (name in listOf("Bruno 48", "Eva 48")) {
+            composeRule.onNodeWithText(name).performScrollTo().assertIsDisplayed().assert(
+                SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_winner)))
+        }
+        val positions = listOf("Carla 112", "Dora 112", "Bruno 48", "Eva 48").map {
+            composeRule.onNodeWithText(it, useUnmergedTree = true).fetchSemanticsNode().positionInRoot.y
+        }
+        assertTrue(positions.zipWithNext().all { (first, second) -> first < second })
+        for (label in listOf(R.string.results_winner, R.string.results_highest_penalty)) {
+            composeRule.onNodeWithText(context.getString(label), useUnmergedTree = true).assertDoesNotExist()
+        }
         composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("daily_wins_card"))
         composeRule.onNodeWithTag("daily_wins_bruno").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
         composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("daily_summary_toggle"))
         composeRule.onNodeWithTag("daily_summary_toggle").performClick()
         composeRule.runOnIdle { assertEquals(1, toggles) }
+    }
+
+    @Test fun allTiedPlayersAnnounceWinnerBeforeHighestPenalty() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        composeRule.setContent {
+            HistoryScreen(HistoryUiState(LocalDate.parse("2026-10-14"), isLoading = false,
+                matches = listOf(HistoryMatch(MatchId("tie"), 0, true, listOf(
+                    HistoryPlayer(PlayerId("a"), "Ana", 110, true, true),
+                    HistoryPlayer(PlayerId("b"), "Bia", 110, true, true),
+                )))), {}, {}, {}, {}, {})
+        }
+        composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_0"))
+        for (name in listOf("Ana 110", "Bia 110")) composeRule.onNodeWithText(name).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_winner)))
+    }
+
+    @Test fun pendingDeletionShowsConfirmationAndSavingDisablesActions() {
+        var state by mutableStateOf(HistoryUiState(LocalDate.parse("2026-10-14"), isLoading = false,
+            matches = listOf(HistoryMatch(MatchId("active"), 0, false, emptyList())),
+            pendingDeleteMatchId = MatchId("active")))
+        composeRule.setContent { HistoryScreen(state, {}, {}, {}, {}, {}) }
+        composeRule.onNodeWithTag("history_delete_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("history_delete_confirm").assertIsEnabled()
+        composeRule.onNodeWithTag("history_delete_cancel").assertIsEnabled()
+        composeRule.runOnIdle { state = state.copy(isDeleting = true) }
+        composeRule.onNodeWithTag("history_delete_confirm").assertIsNotEnabled()
+        composeRule.onNodeWithTag("history_delete_cancel").assertIsNotEnabled()
+    }
+
+    @Test fun deleteActionsStaySeparateFromOpeningAndFailureAllowsRetry() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val calls = mutableListOf<String>()
+        var state by mutableStateOf(HistoryUiState(LocalDate.parse("2026-10-14"), isLoading = false,
+            matches = listOf(
+                HistoryMatch(MatchId("active"), 0, false, listOf(HistoryPlayer(PlayerId("a"), "Ana", 12, false, false))),
+                HistoryMatch(MatchId("done"), 0, true, listOf(HistoryPlayer(PlayerId("b"), "Bia", 110, true, true))),
+            )))
+        composeRule.setContent {
+            HistoryScreen(state, {}, {}, {}, { calls += "open:${it.value}" }, {},
+                onRequestDelete = { calls += "request:${it.value}"; state = state.copy(pendingDeleteMatchId = it) },
+                onCancelDelete = { calls += "cancel"; state = state.copy(pendingDeleteMatchId = null) },
+                onConfirmDelete = { calls += "confirm"; state = state.copy(isDeleting = true) },
+                onClearDeleteError = { calls += "clear"; state = state.copy(deleteError = false) })
+        }
+        val root = composeRule.onNodeWithTag("history_root")
+        root.performScrollToNode(hasTestTag("history_match_0"))
+        composeRule.onNodeWithTag("history_match_0").performClick()
+        composeRule.onNodeWithTag("history_delete_active").assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            .performTouchInput { click() }
+        composeRule.runOnIdle { assertEquals(listOf("open:active", "request:active"), calls) }
+        composeRule.onNodeWithText(context.getString(R.string.history_delete_message)).assertIsDisplayed()
+        composeRule.onNodeWithTag("history_delete_cancel").performClick()
+        composeRule.onNodeWithTag("history_delete_dialog").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(listOf("open:active", "request:active", "clear", "cancel"), calls); calls.clear() }
+
+        root.performScrollToNode(hasTestTag("history_match_1"))
+        composeRule.onNodeWithTag("history_delete_done").performTouchInput { click() }
+        composeRule.onNodeWithTag("history_delete_confirm").performClick()
+        composeRule.onNodeWithTag("history_delete_cancel").assertIsNotEnabled().performTouchInput { click() }
+        composeRule.onNodeWithTag("history_delete_confirm").assertIsNotEnabled().performTouchInput { click() }
+        composeRule.runOnIdle { assertEquals(listOf("request:done", "clear", "confirm"), calls) }
+        composeRule.onNodeWithTag("history_match_1").assertExists()
+
+        composeRule.runOnIdle { state = state.copy(isDeleting = false, deleteError = true) }
+        composeRule.onNodeWithText(context.getString(R.string.history_delete_error)).assertIsDisplayed()
+        composeRule.onNodeWithTag("history_match_1").assertExists()
+        composeRule.onNodeWithTag("history_delete_confirm").assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("history_delete_error").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(listOf("request:done", "clear", "confirm", "clear", "confirm"), calls) }
+        composeRule.onNodeWithTag("history_delete_dialog").assertIsDisplayed()
     }
 
     @Test fun summaryToggleAnnouncesItsCurrentState() {

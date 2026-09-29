@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.material3.Surface
+import androidx.compose.ui.text.TextLayoutResult
 import com.maxmfonseca.pontinho.settings.ThemePreference
 
 class MatchScreenTest {
@@ -47,7 +48,7 @@ class MatchScreenTest {
     }
 
     @Test fun normalHandleMovementReordersWithoutLongPress() {
-        var state by mutableStateOf(fixture(3).copy(canManagePlayers = true))
+        var state by mutableStateOf(fixture(3).copy(canAddPlayer = true, canReorderPlayers = true))
         val moves = mutableListOf<List<ParticipantId>>()
         compose.setContent { PontinhoTheme {
             MatchScreen(state, {}, {}, {}, {}, {}, {}, {}, {}, {}, onReorderPlayers = { moves.add(it) })
@@ -60,14 +61,14 @@ class MatchScreenTest {
     }
 
     @Test fun dragHandleHasFortyEightDpVisibleTarget() {
-        compose.setContent { PontinhoTheme { Content(fixture(3).copy(canManagePlayers = true)) } }
+        compose.setContent { PontinhoTheme { Content(fixture(3).copy(canAddPlayer = true, canReorderPlayers = true)) } }
         compose.onNodeWithTag("match_drag_p0").assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
     }
 
     @Test fun edgeDragScrollsTwelvePlayersAndCommitsOnceOnRelease() {
         val commits = mutableListOf<List<ParticipantId>>()
         compose.setContent { PontinhoTheme {
-            MatchScreen(fixture(12).copy(canManagePlayers = true), {}, {}, {}, {}, {}, {}, {}, {}, {},
+            MatchScreen(fixture(12).copy(canAddPlayer = true, canReorderPlayers = true), {}, {}, {}, {}, {}, {}, {}, {}, {},
                 onReorderPlayers = { commits.add(it) })
         } }
         val list = compose.onNodeWithTag("match_players")
@@ -85,7 +86,7 @@ class MatchScreenTest {
     }
 
     @Test fun cancellationAndDisablingRestorePreviewAndCardBodyNeverReorders() {
-        var state by mutableStateOf(fixture(3).copy(canManagePlayers = true))
+        var state by mutableStateOf(fixture(3).copy(canAddPlayer = true, canReorderPlayers = true))
         val commits = mutableListOf<List<ParticipantId>>()
         compose.setContent { PontinhoTheme {
             MatchScreen(state, {}, {}, {}, {}, {}, {}, {}, {}, {}, onReorderPlayers = { commits.add(it) })
@@ -101,16 +102,16 @@ class MatchScreenTest {
             handle.performTouchInput { down(center); moveBy(Offset(0f, amount)) }
             compose.waitForIdle()
             assertTrue(row.fetchSemanticsNode().boundsInRoot.top > compose.onNodeWithTag("match_player_p1").fetchSemanticsNode().boundsInRoot.top)
-            if (disable) compose.runOnIdle { state = state.copy(canManagePlayers = false) }
+            if (disable) compose.runOnIdle { state = state.copy(canAddPlayer = false, canReorderPlayers = false) }
             handle.performTouchInput { cancel() }
             compose.runOnIdle { assertTrue(commits.isEmpty()) }
             assertTrue(row.fetchSemanticsNode().boundsInRoot.top < compose.onNodeWithTag("match_player_p1").fetchSemanticsNode().boundsInRoot.top)
         }
         for (guarded in listOf(
-            fixture(3).copy(canManagePlayers = false),
-            fixture(3).copy(canManagePlayers = true, pausedRoundNumbers = listOf(2)),
-            fixture(3).copy(canManagePlayers = true, isCorrectingRound = true),
-            fixture(3).copy(canManagePlayers = true, isFinished = true),
+            fixture(3).copy(canAddPlayer = false, canReorderPlayers = false),
+            fixture(3).copy(canAddPlayer = true, canReorderPlayers = true, pausedRoundNumbers = listOf(2)),
+            fixture(3).copy(canAddPlayer = true, canReorderPlayers = true, isCorrectingRound = true),
+            fixture(3).copy(canAddPlayer = true, canReorderPlayers = true, isFinished = true),
         )) {
             compose.runOnIdle { state = guarded }
             handle.assertIsNotEnabled()
@@ -160,7 +161,8 @@ class MatchScreenTest {
             CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources,
                 LocalDensity provides Density(base.resources.displayMetrics.density, scale)) {
                 PontinhoTheme(theme) { Surface { Box(Modifier.size(320.dp, 568.dp)) {
-                    Content(fixture(12).copy(canManagePlayers = true))
+                    Content(fixture(12).copy(canAddPlayer = true, canReorderPlayers = true,
+                        players = fixture(12).players.map { it.copy(total = 1234) }))
                 } } }
             }
         }
@@ -171,6 +173,14 @@ class MatchScreenTest {
             compose.onNodeWithTag("match_drag_p0").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
             compose.onNode(hasTestTag("player_action") and hasAnyAncestor(hasTestTag("match_player_p0")))
                 .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            val ancestor = hasAnyAncestor(hasTestTag("match_player_p0"))
+            val identity = compose.onNode(hasTestTag("player_identity") and ancestor).fetchSemanticsNode().boundsInRoot
+            val name = compose.onNode(hasTestTag("player_name") and ancestor).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val total = compose.onNode(hasTestTag("player_total") and ancestor).assertIsDisplayed()
+                .assertTextEquals("1234").fetchSemanticsNode().boundsInRoot
+            assertTrue("Name and total must share a horizontal row at $scenario", name.top < total.bottom && total.top < name.bottom)
+            assertTrue("Total must follow the name and fit the identity row at $scenario", total.left >= name.right && total.right <= identity.right)
+            compose.onNode(hasTestTag("round_cell_1") and ancestor).assertIsDisplayed()
             if (locale == "pt-BR" && theme == ThemePreference.LIGHT && scale == 1f ||
                 locale == "en-US" && theme == ThemePreference.DARK && scale == 2f) capture("task5-match-$locale-$scale.png")
             list.performScrollToIndex(12)
@@ -185,11 +195,64 @@ class MatchScreenTest {
         capture.close()
     }
 
+    @Test fun narrowLargeFontKeepsMaximumTotalReadableWithNameAndReachableControls() {
+        var total by mutableIntStateOf(1234)
+        var selected: ParticipantId? = null
+        var corrected: Pair<ParticipantId, Int>? = null
+        val base = context
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(base.resources.displayMetrics.density, 2f)) {
+                PontinhoTheme { Surface { Box(Modifier.size(320.dp, 568.dp)) {
+                    val state = fixture(3).copy(canAddPlayer = true, canReorderPlayers = true,
+                        players = fixture(3).players.map { player -> player.copy(total = total,
+                            history = listOf(PlayerRoundHistory(1, RoundStatusKind.LOSS, 12, canEdit = true))) })
+                    MatchScreen(state, {}, { selected = it }, {}, {}, {}, {}, {}, {}, {},
+                        onEditScore = { id, round -> corrected = id to round })
+                } } }
+            }
+        }
+        for (value in listOf(1234, Int.MAX_VALUE)) {
+            compose.runOnIdle { total = value }
+            val ancestor = hasAnyAncestor(hasTestTag("match_player_p0"))
+            val identity = compose.onNode(hasTestTag("player_identity") and ancestor).fetchSemanticsNode().boundsInRoot
+            val name = compose.onNode(hasTestTag("player_name") and ancestor).assertIsDisplayed().assertWidthIsAtLeast(100.dp)
+            val score = compose.onNode(hasTestTag("player_total") and ancestor).assertIsDisplayed().assertTextEquals(value.toString())
+            val nameLayout = mutableListOf<TextLayoutResult>()
+            val scoreLayout = mutableListOf<TextLayoutResult>()
+            name.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(nameLayout) }
+            score.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(scoreLayout) }
+            assertTrue("At least Alex must remain visible, not just one initial", nameLayout.single().getLineEnd(0, visibleEnd = true) >= 4)
+            assertFalse("The complete accepted total must fit without clipping", scoreLayout.single().hasVisualOverflow)
+            assertEquals(value.toString().length, scoreLayout.single().getLineEnd(0, visibleEnd = true))
+            val nameBounds = name.fetchSemanticsNode().boundsInRoot
+            val scoreBounds = score.fetchSemanticsNode().boundsInRoot
+            assertTrue("Name and total remain inline", nameBounds.top < scoreBounds.bottom && scoreBounds.top < nameBounds.bottom)
+            assertTrue("Total follows name inside identity", nameBounds.right <= scoreBounds.left && scoreBounds.right <= identity.right)
+            val drag = compose.onNodeWithTag("match_drag_p0").assertIsDisplayed().assertIsEnabled()
+                .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            val action = compose.onNode(hasTestTag("player_action") and ancestor).assertIsDisplayed().assertIsEnabled()
+                .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            val correction = compose.onNode(hasTestTag("round_cell_1") and ancestor).assertIsDisplayed()
+                .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            val targets = listOf(drag, action, correction).map { it.fetchSemanticsNode().boundsInRoot }
+            targets.forEach { assertFalse("Controls must not overlap identity", it.overlaps(identity)) }
+            assertFalse(targets[0].overlaps(targets[1]))
+            assertFalse(targets[1].overlaps(targets[2]))
+            action.performClick()
+            correction.performClick()
+            compose.runOnIdle {
+                assertEquals(ParticipantId("p0"), selected)
+                assertEquals(ParticipantId("p0") to 1, corrected)
+            }
+        }
+        capture("final-fix-match-max-total-320dp-2.0.png")
+    }
+
     @Test fun addPlayerIsLastScrollingItemAndGuardedDuringRounds() {
         var allowed by mutableStateOf(true)
         var added = 0
         compose.setContent { PontinhoTheme {
-            MatchScreen(fixture(12).copy(canManagePlayers = allowed), {}, {}, {}, {}, {}, {}, {}, {}, {}, onAddPlayer = { added++ })
+            MatchScreen(fixture(12).copy(canAddPlayer = allowed, canReorderPlayers = allowed), {}, {}, {}, {}, {}, {}, {}, {}, {}, onAddPlayer = { added++ })
         } }
         compose.onNodeWithTag("match_add_player").assertDoesNotExist()
         compose.onNodeWithTag("match_players").performScrollToIndex(12)
@@ -208,7 +271,7 @@ class MatchScreenTest {
         var name by mutableStateOf("")
         var confirmed = false
         compose.setContent { PontinhoTheme {
-            MatchScreen(fixture(3).copy(canManagePlayers = true, playerName = name), {}, {}, {}, {}, {}, {}, {}, {}, {},
+            MatchScreen(fixture(3).copy(canAddPlayer = true, canReorderPlayers = true, playerName = name), {}, {}, {}, {}, {}, {}, {}, {}, {},
                 onPlayerNameChange = { name = it }, onConfirmPlayerName = { confirmed = true })
         } }
         compose.onNodeWithTag("player_name_input").assertIsFocused()
@@ -241,9 +304,16 @@ class MatchScreenTest {
 
         val dot = compose.onNode(hasTestTag("round_dot_1") and ancestor, useUnmergedTree = true)
         val score = compose.onNode(hasTestTag("round_score_1") and ancestor, useUnmergedTree = true)
+        compose.onAllNodesWithText("R1", useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithText("R2", useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithText("R3", useUnmergedTree = true).assertCountEquals(0)
+        dot.assertWidthIsEqualTo(14.dp).assertHeightIsEqualTo(14.dp)
         dot.assertHasNoClickAction().performTouchInput { click(center) }
+        assertEquals(listOf(ParticipantId("p0") to 1), clicks)
         score.assertHasNoClickAction().performTouchInput { click(center) }
         assertEquals(listOf(ParticipantId("p0") to 1, ParticipantId("p0") to 1), clicks)
+        cell.performTouchInput { click(Offset(2f, 2f)) }
+        assertEquals(List(3) { ParticipantId("p0") to 1 }, clicks)
         compose.onNode(hasTestTag("round_cell_2") and ancestor, useUnmergedTree = true).assertHasNoClickAction()
         compose.onNode(hasTestTag("round_cell_3") and ancestor, useUnmergedTree = true).assertHasNoClickAction()
     }
@@ -269,7 +339,7 @@ class MatchScreenTest {
     }
 
     @Test fun dragKeepsParticipantIdentityAcrossRecompositionAndExposesAccessibleMoves() {
-        var state by mutableStateOf(fixture(3).copy(canManagePlayers = true))
+        var state by mutableStateOf(fixture(3).copy(canAddPlayer = true, canReorderPlayers = true))
         val moves = mutableListOf<List<ParticipantId>>()
         compose.setContent { PontinhoTheme {
             MatchScreen(state, {}, {}, {}, {}, {}, {}, {}, {}, {}, onReorderPlayers = { order ->
@@ -293,7 +363,7 @@ class MatchScreenTest {
         handle.performTouchInput { moveBy(androidx.compose.ui.geometry.Offset(0f, height * .1f)); up() }
         assertEquals(listOf("p0", "p1", "p2"), moves.last().map { it.value })
         compose.runOnIdle { assertEquals(listOf("p0", "p1", "p2"), state.players.map { it.id.value }) }
-        compose.runOnIdle { state = state.copy(canManagePlayers = false) }
+        compose.runOnIdle { state = state.copy(canAddPlayer = false, canReorderPlayers = false) }
         assertTrue(row.fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions).isNullOrEmpty())
         handle.assertIsNotEnabled()
     }
@@ -345,6 +415,7 @@ class MatchScreenTest {
         history.performTouchInput { swipeLeft() }
         val afterA = score(0, 2).getUnclippedBoundsInRoot()
         val afterB = score(1, 2).getUnclippedBoundsInRoot()
+        assertTrue("Shared gesture must move the history", afterA.left < a.left)
         assertEquals((afterA.left.value + afterA.right.value) / 2, (afterB.left.value + afterB.right.value) / 2, 1f)
     }
 

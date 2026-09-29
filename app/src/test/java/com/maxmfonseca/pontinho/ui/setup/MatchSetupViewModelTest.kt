@@ -29,6 +29,45 @@ import org.robolectric.annotation.Config
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchSetupViewModelTest {
+    @Test fun openingHandDefaultsToFirstPlayerAndCanChangeWithoutReordering() {
+        val saved = SavedStateHandle()
+        val repo = FakeMatchRepository()
+        val vm = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        add(vm, "Ana"); add(vm, "Bruno"); add(vm, "Carla")
+        val players = vm.uiState.value.players
+
+        assertEquals(players[0].draftId, vm.uiState.value.initialDealerDraftId)
+        vm.selectInitialDealer(players[2].draftId)
+
+        assertEquals(players, vm.uiState.value.players)
+        assertEquals(players[2].draftId, vm.uiState.value.initialDealerDraftId)
+        assertEquals(players[2].draftId, saved.get<String>(MatchSetupViewModel.INITIAL_DEALER_DRAFT_ID))
+        vm.createMatch()
+        assertEquals(players[2].draftId, repo.createdCommands.single().initialDealerDraftId)
+    }
+
+    @Test fun openingHandSurvivesRenameAndReorderButFallsBackAfterRemovalOrReplacement() {
+        val latest = matchSnapshot("latest", LocalDate.parse("2026-10-14"), 20,
+            listOf("p1" to "Diego", "p2" to "Eva"))
+        val repo = FakeMatchRepository(MutableStateFlow(listOf(DaySummary(latest.localDate, listOf(latest)))))
+        val saved = SavedStateHandle()
+        val vm = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        add(vm, "Ana"); add(vm, "Bruno"); add(vm, "Carla")
+        val selected = vm.uiState.value.players[1].draftId
+        vm.selectInitialDealer(selected)
+        vm.openEditPlayer(selected); vm.updateDialogName("BRUNO"); vm.confirmPlayerName()
+        vm.reorderPlayers(vm.uiState.value.players.reversed().map { it.draftId })
+        assertEquals(selected, vm.uiState.value.initialDealerDraftId)
+
+        vm.removePlayer(selected)
+        assertEquals(vm.uiState.value.players.first().draftId, vm.uiState.value.initialDealerDraftId)
+        vm.requestUseLastMatch(); vm.confirmUseLastMatch()
+        assertEquals(vm.uiState.value.players.first().draftId, vm.uiState.value.initialDealerDraftId)
+
+        val restored = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        assertEquals(restored.uiState.value.players.first().draftId, restored.uiState.value.initialDealerDraftId)
+    }
+
     @Test fun reorderPersistsOneExactPermutationAndRetainsPlayerIdentity() {
         val saved = SavedStateHandle()
         val repo = FakeMatchRepository()

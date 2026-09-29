@@ -87,12 +87,13 @@ class ModernVisualJourneyTest {
         var theme by mutableStateOf(ThemePreference.LIGHT)
         var scale by mutableFloatStateOf(1f)
         var screen by mutableStateOf("home")
+        var learnClicks = 0
         compose.setContent {
             val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) })
             CompositionLocalProvider(LocalContext provides context, LocalResources provides context.resources,
                 LocalDensity provides Density(base.resources.displayMetrics.density, scale)) {
                 PontinhoTheme(theme) {
-                    Surface { Box(Modifier.size(320.dp, 568.dp)) { key(locale, theme, scale, screen) { Screen(screen) } } }
+                    Surface { Box(Modifier.size(320.dp, 568.dp)) { key(locale, theme, scale, screen) { Screen(screen, onLearn = { learnClicks++ }) } } }
                 }
             }
         }
@@ -108,16 +109,16 @@ class ModernVisualJourneyTest {
                 screens.filterNot { it == destination || (destination in listOf("picker", "score") && it == "match") }
                     .filterNot { it in listOf("picker", "score") }.forEach { compose.onAllNodesWithTag("${it}_root").assertCountEquals(0) }
                 val actions: List<SemanticsMatcher> = when (destination) {
-                    "home" -> listOf(hasTestTag("home_new_match"), hasTestTag("home_learn"), hasTestTag("home_day_0"))
+                    "home" -> listOf(hasContentDescription(context.getString(R.string.home_learn)), hasTestTag("home_new_match"), hasTestTag("home_day_0"))
                     "setup" -> listOf(hasTestTag("setup_add_player"), hasTestTag("setup_use_last_match"), hasTestTag("setup_create_match"))
                     "match" -> listOf(hasContentDescription(context.getString(R.string.match_add_score, "Julia")), hasTestTag("match_add_player"))
                     "picker", "score" -> listOf(hasText(context.getString(R.string.confirm)), hasText(context.getString(R.string.cancel)))
                     "results" -> listOf(R.string.results_new_match, R.string.results_details, R.string.results_back_history).map { hasText(context.getString(it)) }
-                    "history" -> listOf(hasText(context.getString(R.string.home_new_match)), hasTestTag("daily_summary_toggle"), hasTestTag("history_match_0"))
+                    "history" -> listOf(hasText(context.getString(R.string.home_new_match)), hasTestTag("daily_summary_toggle"), hasTestTag("history_match_0"), hasTestTag("history_delete_match"))
                     "settings" -> listOf(R.string.route_appearance, R.string.route_language, R.string.route_learn, R.string.route_about).map { hasText(context.getString(it)) }
-                    "appearance" -> listOf(R.string.appearance_theme_system, R.string.appearance_theme_light, R.string.appearance_theme_dark).map { hasText(context.getString(it)) } + hasTestTag("reduced_motion_switch")
+                    "appearance" -> listOf(R.string.appearance_theme_system, R.string.appearance_theme_light, R.string.appearance_theme_dark).map { hasText(context.getString(it)) }
                     "language" -> listOf(R.string.language_device, R.string.language_portuguese, R.string.language_english).map { hasText(context.getString(it)) }
-                    "about" -> listOf(hasTestTag("about_learn"))
+                    "about" -> emptyList()
                     else -> listOf(hasContentDescription(context.getString(R.string.match_back)))
                 }
                 inspectVisibleControls(scenario)
@@ -133,6 +134,14 @@ class ModernVisualJourneyTest {
                     node.assertIsDisplayed()
                     assertTarget(node.fetchSemanticsNode(), scenario)
                     inspectVisibleControls(scenario)
+                }
+                if (destination == "appearance") compose.onNodeWithTag("reduced_motion_switch").assertDoesNotExist()
+                if (destination == "about") {
+                    val before = learnClicks
+                    compose.onNodeWithText(context.getString(R.string.about_purpose))
+                        .performScrollTo().assertIsDisplayed().performFirstLinkClick()
+                    compose.runOnIdle { assertEquals(before + 1, learnClicks) }
+                    compose.onNodeWithTag("about_learn").assertDoesNotExist()
                 }
                 if (destination == "picker") {
                     compose.onAllNodes(SemanticsMatcher("rank") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("indicator_rank_") == true }, true).assertCountEquals(13)
@@ -156,7 +165,11 @@ class ModernVisualJourneyTest {
         for (i in visible.indices) for (j in i + 1 until visible.size) {
             val firstRoot = generateSequence(visible[i]) { it.parent }.last().id
             val secondRoot = generateSequence(visible[j]) { it.parent }.last().id
-            if (firstRoot == secondRoot) assertFalse("Controls overlap at $scenario: ${visible[i].boundsInRoot} ${visible[i].config} / ${visible[j].boundsInRoot} ${visible[j].config}", visible[i].boundsInRoot.overlaps(visible[j].boundsInRoot))
+            // A nested action, such as History's delete button, belongs inside its clickable card.
+            // Independent controls must still have separate bounds, and every target is checked above.
+            val nested = generateSequence(visible[i].parent) { it.parent }.any { it.id == visible[j].id } ||
+                generateSequence(visible[j].parent) { it.parent }.any { it.id == visible[i].id }
+            if (firstRoot == secondRoot && !nested) assertFalse("Controls overlap at $scenario: ${visible[i].boundsInRoot} ${visible[i].config} / ${visible[j].boundsInRoot} ${visible[j].config}", visible[i].boundsInRoot.overlaps(visible[j].boundsInRoot))
         }
         val rawControls = setOf("⚙", "✎", "×", "⠿", "←", "＋", "›", "ⓘ", "⇄", "▤")
         compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Text), true).fetchSemanticsNodes().forEach { node ->
@@ -171,14 +184,14 @@ class ModernVisualJourneyTest {
         assertTrue("48dp touch target at $scenario: ${node.config}; actual=$target", target.width >= minimum && target.height >= minimum)
     }
 
-    @Composable private fun Screen(screen: String) {
+    @Composable private fun Screen(screen: String, onLearn: () -> Unit = {}) {
         val today = LocalDate.of(2026, 10, 14)
         val participant = ParticipantId("julia")
         val players = listOf(MatchPlayer(participant, "Julia", 33, true, emptyList(), true), MatchPlayer(ParticipantId("max"), "Max", 70, false, emptyList(), true))
         when (screen) {
             "home" -> HomeScreen(HomeUiState(isLoading = false, dateCards = listOf(HomeDateCard(today, 2, 1, listOf("Julia", "Max")))), {}, {}, {}, onSettings = {})
             "setup" -> MatchSetupScreen(MatchSetupUiState(players = listOf(DraftPlayer("julia", null, "Julia"), DraftPlayer("max", null, "Max"))), {}, {}, {}, {}, { _, _ -> }, {}, {}, {}, {}, {}, {}, {})
-            "match", "picker", "score" -> MatchScreen(MatchUiState(isLoading = false, players = players, canManagePlayers = true,
+            "match", "picker", "score" -> MatchScreen(MatchUiState(isLoading = false, players = players, canAddPlayer = true, canReorderPlayers = true,
                 picker = if (screen == "picker") IndicatorPickerState(participant, Rank.ACE, CardColor.RED) else null,
                 scoreDialog = if (screen == "score") MatchScoreDialogState(participant, "Julia", RoundId("round"), 1, Indicator(Rank.ACE, CardColor.RED), true, "33") else null),
                 {}, {}, {}, {}, {}, {}, {}, {}, {})
@@ -186,10 +199,10 @@ class ModernVisualJourneyTest {
             "history" -> HistoryScreen(HistoryUiState(today, matches = listOf(HistoryMatch(MatchId("match"), 0, true, listOf(HistoryPlayer(PlayerId("julia"), "Julia", 33, true, false), HistoryPlayer(PlayerId("max"), "Max", 110, false, true)))),
                 wins = listOf(DailyStanding(PlayerNameKey.from("Julia"), "Julia", 1)), penalties = listOf(DailyStanding(PlayerNameKey.from("Max"), "Max", 110)), summaryExpanded = true, isLoading = false), {}, {}, {}, {}, {})
             "settings" -> SettingsScreen({}, {}, {}, {}, {})
-            "appearance" -> AppearanceScreen(AppPreferences(), {}, {}, {})
+            "appearance" -> AppearanceScreen(AppPreferences(), {}, {})
             "language" -> LanguageScreen(LanguagePreference.SYSTEM, {}, {})
             "learn" -> LearnScreen({})
-            "about" -> AboutScreen("1.0.0", {}, {})
+            "about" -> AboutScreen("1.0.0", {}, onLearn)
         }
     }
 

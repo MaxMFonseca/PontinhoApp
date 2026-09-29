@@ -10,7 +10,11 @@ data class CreateMatchPlayer(
     val playerId: PlayerId? = null,
     val displayName: String,
 )
-data class CreateMatch(val creationToken: String, val players: List<CreateMatchPlayer>)
+data class CreateMatch(
+    val creationToken: String,
+    val players: List<CreateMatchPlayer>,
+    val initialDealerDraftId: String? = null,
+)
 data class AddParticipant(val matchId: MatchId, val playerId: PlayerId, val rosterOrder: Int)
 data class AddPlayerToMatch(val matchId: MatchId, val operationToken: String, val displayName: String)
 
@@ -103,8 +107,11 @@ interface MatchRepository {
     fun observeDay(localDate: LocalDate): Flow<DayHistory>
     fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?>
     suspend fun createMatch(command: CreateMatch): MatchId
+    /** Deletes an existing active or finished match and its dependent rows, retaining reusable players. */
+    suspend fun deleteMatch(matchId: MatchId)
     suspend fun addParticipant(command: AddParticipant)
-    /** Atomically resolves a named player and appends their participation between rounds.
+    /** Atomically resolves a named player and appends their participation during active live
+     * rounds or between-round preparation. Historical correction remains rejected.
      * The token is scoped to this match: replay with the same trimmed name returns the
      * original participant without writes, even if the roster or match has since changed.
      * A different name for a committed token is rejected. Failure/cancellation before

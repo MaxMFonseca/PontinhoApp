@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.assertIsOn
-import androidx.compose.ui.test.assertIsOff
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.settings.AppPreferences
@@ -57,7 +55,7 @@ class SettingsScreensTest {
                     key(screen, scenario) {
                         when (screen) {
                             "settings" -> SettingsScreen({ calls += "back" }, { calls += "appearance" }, { calls += "language" }, { calls += "learn" }, { calls += "about" })
-                            "appearance" -> AppearanceScreen(preferences, { calls += "back" }, { preferences = preferences.copy(theme = it) }, { preferences = preferences.copy(reducedMotion = it) })
+                            "appearance" -> AppearanceScreen(preferences, { calls += "back" }, { preferences = preferences.copy(theme = it) })
                             "language" -> LanguageScreen(preferences.language, { calls += "back" }, { preferences = preferences.copy(language = it) })
                             "learn" -> LearnScreen({ calls += "back" })
                             "about" -> AboutScreen("1.0.0", { calls += "back" }, { calls += "learn" })
@@ -90,13 +88,11 @@ class SettingsScreensTest {
                     }
                     "appearance" -> {
                         composeRule.onAllNodes(radios).assertCountEquals(3)
-                        composeRule.onAllNodes(switches).assertCountEquals(1)
+                        composeRule.onAllNodes(switches).assertCountEquals(0)
                         for (title in listOf(R.string.appearance_theme_light, R.string.appearance_theme_dark, R.string.appearance_theme_system)) {
                             composeRule.onNodeWithText(localized.getString(title)).performScrollTo().assertHeightIsAtLeast(48.dp).performClick().assertIsSelected()
                         }
-                        composeRule.onNodeWithTag("reduced_motion_switch").performScrollTo().assertIsOn().assertHeightIsAtLeast(48.dp).performClick().assertIsOff()
-                        composeRule.runOnIdle { assertEquals(false, preferences.reducedMotion) }
-                        composeRule.onNodeWithTag("reduced_motion_switch").performClick().assertIsOn()
+                        composeRule.onNodeWithTag("reduced_motion_switch").assertDoesNotExist()
                     }
                     "language" -> {
                         composeRule.onAllNodes(radios).assertCountEquals(3)
@@ -123,7 +119,8 @@ class SettingsScreensTest {
                         composeRule.onNodeWithText(localized.getString(R.string.about_version, "1.0.0")).performScrollTo().assertIsDisplayed()
                         composeRule.onNodeWithText(localized.getString(R.string.about_purpose)).performScrollTo().assertIsDisplayed()
                         composeRule.onNodeWithText("maxmfonseca12@gmail.com").performScrollTo().assertIsDisplayed()
-                        composeRule.onNodeWithTag("about_learn").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+                        composeRule.onNodeWithText(localized.getString(R.string.about_purpose)).performScrollTo().performFirstLinkClick()
+                        composeRule.onNodeWithTag("about_learn").assertDoesNotExist()
                         composeRule.runOnIdle { assertEquals(listOf("back", "learn"), calls) }
                     }
                 }
@@ -161,39 +158,36 @@ class SettingsScreensTest {
         composeRule.runOnIdle { assertEquals(listOf("appearance", "language", "learn", "about"), clicks) }
     }
 
-    @Test fun appearanceSupportsEveryThemeAndMotionChoiceAtLargeText() {
+    @Test fun appearanceSupportsThemesWithoutMotionControlAtLargeText() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         var theme: ThemePreference? = null
-        var motion: Boolean? = false
         composeRule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(density = 1f, fontScale = 2f)) {
                 PontinhoTheme(themePreference = ThemePreference.DARK, reducedMotion = true) {
                     AppearanceScreen(
                         preferences = AppPreferences(theme = ThemePreference.SYSTEM, reducedMotion = null),
-                        onBack = {}, onThemeSelected = { theme = it }, onReducedMotionSelected = { motion = it },
+                        onBack = {}, onThemeSelected = { theme = it },
                     )
                 }
             }
         }
 
         composeRule.onNodeWithText(context.getString(R.string.appearance_theme_dark)).performClick()
-        composeRule.onNodeWithTag("reduced_motion_switch").performScrollTo().assertIsOn().performClick()
+        composeRule.onNodeWithTag("reduced_motion_switch").assertDoesNotExist()
         composeRule.onNodeWithTag("appearance_root").assertIsDisplayed()
         composeRule.runOnIdle {
             assertEquals(ThemePreference.DARK, theme)
-            assertEquals(false, motion)
         }
     }
 
-    @Test fun explicitMotionPreferenceOverridesEffectiveSystemValue() {
-        var selected: Boolean? = null
+    @Test fun storedMotionPreferenceDoesNotExposeAMotionControl() {
         composeRule.setContent {
             PontinhoTheme(reducedMotion = true) {
-                AppearanceScreen(AppPreferences(reducedMotion = false), {}, {}, { selected = it })
+                AppearanceScreen(AppPreferences(reducedMotion = false), {}, {})
             }
         }
-        composeRule.onNodeWithTag("reduced_motion_switch").performScrollTo().assertIsOff().performClick()
-        composeRule.runOnIdle { assertEquals(true, selected) }
+        composeRule.onNodeWithTag("reduced_motion_switch").assertDoesNotExist()
+        composeRule.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)).assertCountEquals(3)
     }
 
     @Test fun languageSupportsDevicePortugueseAndEnglish() {

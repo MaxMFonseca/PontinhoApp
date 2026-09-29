@@ -30,7 +30,13 @@ class MatchSetupViewModel(
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    private val mutableUiState = MutableStateFlow(MatchSetupUiState(players = restoreDraft()))
+    private val restoredDraft = restoreDraft()
+    private val mutableUiState = MutableStateFlow(MatchSetupUiState(
+        players = restoredDraft,
+        initialDealerDraftId = savedStateHandle.get<String>(INITIAL_DEALER_DRAFT_ID)
+            ?.takeIf { selected -> restoredDraft.any { it.draftId == selected } }
+            ?: restoredDraft.firstOrNull()?.draftId,
+    ))
     val uiState: StateFlow<MatchSetupUiState> = mutableUiState.asStateFlow()
     private val eventChannel = Channel<MatchSetupEvent>(Channel.BUFFERED)
     val events: Flow<MatchSetupEvent> = eventChannel.receiveAsFlow()
@@ -50,7 +56,8 @@ class MatchSetupViewModel(
         val token = savedStateHandle.get<String>(CREATION_TOKEN)
         when {
             committed != null -> scope.launch { eventChannel.send(MatchSetupEvent.OpenMatch(MatchId(committed))) }
-            token != null && mutableUiState.value.players.size >= 2 -> beginCreate(token, mutableUiState.value.players)
+            token != null && mutableUiState.value.canCreate -> beginCreate(
+                token, mutableUiState.value.players, requireNotNull(mutableUiState.value.initialDealerDraftId))
         }
     }
 
@@ -89,13 +96,21 @@ class MatchSetupViewModel(
                     ) else it
                 }
             }
+            val selected = state.initialDealerDraftId?.takeIf { id -> players.any { it.draftId == id } }
+                ?: players.firstOrNull()?.draftId
             persisted = players
-            state.copy(players = players, nameDialog = null)
+            state.copy(players = players, initialDealerDraftId = selected, nameDialog = null)
         }
-        persisted?.let(::persistDraft)
+        persisted?.let { persistDraft(it, mutableUiState.value.initialDealerDraftId) }
     }
 
     fun dismissPlayerName() = updateIfEditable { it.copy(nameDialog = null) }
+    fun selectInitialDealer(draftId: String) = updateIfEditable { state ->
+        if (state.players.none { it.draftId == draftId }) state else {
+            savedStateHandle[INITIAL_DEALER_DRAFT_ID] = draftId
+            state.copy(initialDealerDraftId = draftId)
+        }
+    }
     fun removePlayer(draftId: String) = changePlayers { players -> players.filterNot { it.draftId == draftId } }
 
     fun movePlayer(draftId: String, direction: Int) = changePlayers { players ->
@@ -115,12 +130,12 @@ class MatchSetupViewModel(
         val byId = committed.players.associateBy { it.draftId }
         val reordered = orderedDraftIds.map { byId.getValue(it) }
         try {
-            persistDraft(reordered)
+            persistDraft(reordered, committed.initialDealerDraftId)
             mutableUiState.update { it.copy(players = reordered, reorderError = false) }
         } catch (failure: Exception) {
             if (failure is CancellationException) throw failure
             // Saved state may have accepted some fields before an observer failed.
-            runCatching { persistDraft(committed.players) }
+            runCatching { persistDraft(committed.players, committed.initialDealerDraftId) }
             mutableUiState.update { it.copy(players = committed.players, reorderError = true) }
         }
     }
@@ -141,17 +156,17 @@ class MatchSetupViewModel(
     fun cancel() { eventChannel.trySend(MatchSetupEvent.Close) }
 
     fun createMatch() {
-        var roster: List<DraftPlayer>? = null
+        var request: Pair<List<DraftPlayer>, String>? = null
         mutableUiState.update { state ->
             if (!state.canCreate || savedStateHandle.get<String>(COMMITTED_MATCH_ID) != null) state
             else {
-                roster = state.players
+                request = state.players to requireNotNull(state.initialDealerDraftId)
                 state.copy(isCreating = true, createError = false, nameDialog = null)
             }
         }
-        val requested = roster ?: return
+        val (requested, initialDealerDraftId) = request ?: return
         val token = savedStateHandle.get<String>(CREATION_TOKEN) ?: newDraftId().also { savedStateHandle[CREATION_TOKEN] = it }
-        beginCreate(token, requested, stateAlreadyMarkedCreating = true)
+        beginCreate(token, requested, initialDealerDraftId, stateAlreadyMarkedCreating = true)
     }
 
     fun navigationHandled(matchId: MatchId) {
@@ -161,13 +176,15 @@ class MatchSetupViewModel(
         }
     }
 
-    private fun beginCreate(token: String, roster: List<DraftPlayer>, stateAlreadyMarkedCreating: Boolean = false) {
+    private fun beginCreate(token: String, roster: List<DraftPlayer>, initialDealerDraftId: String,
+        stateAlreadyMarkedCreating: Boolean = false) {
         if (!stateAlreadyMarkedCreating) mutableUiState.update { it.copy(isCreating = true, createError = false) }
         scope.launch {
             runCatching {
                 matchRepository.createMatch(CreateMatch(
                     creationToken = token,
                     players = roster.map { CreateMatchPlayer(it.draftId, it.playerId, it.displayName) },
+                    initialDealerDraftId = initialDealerDraftId,
                 ))
             }.onSuccess { matchId ->
                 savedStateHandle[COMMITTED_MATCH_ID] = matchId.value
@@ -189,19 +206,26 @@ class MatchSetupViewModel(
     private fun changePlayers(transform: (List<DraftPlayer>) -> List<DraftPlayer>) {
         var persisted: List<DraftPlayer>? = null
         mutableUiState.update { state ->
-            if (state.isCreating) state else state.copy(players = transform(state.players).also { persisted = it })
+            if (state.isCreating) state else {
+                val players = transform(state.players).also { persisted = it }
+                val selected = state.initialDealerDraftId?.takeIf { id -> players.any { it.draftId == id } }
+                    ?: players.firstOrNull()?.draftId
+                state.copy(players = players, initialDealerDraftId = selected)
+            }
         }
-        persisted?.let(::persistDraft)
+        persisted?.let { persistDraft(it, mutableUiState.value.initialDealerDraftId) }
     }
 
     private fun updateIfEditable(transform: (MatchSetupUiState) -> MatchSetupUiState) {
         mutableUiState.update { if (it.isCreating) it else transform(it) }
     }
 
-    private fun persistDraft(players: List<DraftPlayer>) {
+    private fun persistDraft(players: List<DraftPlayer>, initialDealerDraftId: String?) {
         savedStateHandle[DRAFT_IDS] = ArrayList(players.map { it.draftId })
         savedStateHandle[PLAYER_IDS] = ArrayList(players.map { it.playerId?.value.orEmpty() })
         savedStateHandle[PLAYER_NAMES] = ArrayList(players.map { it.displayName })
+        if (initialDealerDraftId == null) savedStateHandle.remove<String>(INITIAL_DEALER_DRAFT_ID)
+        else savedStateHandle[INITIAL_DEALER_DRAFT_ID] = initialDealerDraftId
     }
 
     private fun restoreDraft(): List<DraftPlayer> {
@@ -221,6 +245,7 @@ class MatchSetupViewModel(
         const val DRAFT_IDS = "match_setup_draft_ids"
         const val PLAYER_IDS = "match_setup_player_ids"
         const val PLAYER_NAMES = "match_setup_player_names"
+        const val INITIAL_DEALER_DRAFT_ID = "match_setup_initial_dealer_draft_id"
         const val CREATION_TOKEN = "match_setup_creation_token"
         const val COMMITTED_MATCH_ID = "match_setup_committed_match_id"
     }

@@ -59,7 +59,7 @@ fun MatchScreen(
     val columnWidth = with(LocalDensity.current) { largestScoreWidth.toDp() + 12.dp }.coerceAtLeast(48.dp)
     val listState = rememberLazyListState()
     var listTop by remember { mutableFloatStateOf(0f) }
-    val canMove = state.canManagePlayers && !state.isFinished && !state.isCorrectingRound &&
+    val canMove = state.canReorderPlayers && !state.isFinished && !state.isCorrectingRound &&
         state.pausedRoundNumbers.isEmpty() && !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
     val reorderState = rememberReorderableListState(listState, state.players.map { it.id },
         enabled = canMove, itemKey = { it.value }, onReorder = onReorderPlayers)
@@ -139,7 +139,7 @@ fun MatchScreen(
                         })
                 }
                 if (!state.isFinished) item(key = "add_player") {
-                    OutlinedButton(onClick = onAddPlayer, enabled = state.canManagePlayers && !state.isSaving,
+                    OutlinedButton(onClick = onAddPlayer, enabled = state.canAddPlayer,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("match_add_player")) {
                         Icon(Icons.Filled.Add, null, Modifier.padding(end = 8.dp))
                         Text(stringResource(R.string.setup_add_player))

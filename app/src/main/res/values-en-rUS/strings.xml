@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Pontinho</string>
     <string name="setup_reorder_error">Could not save the order. The previous order was restored.</string>
-    <string name="match_late_player_help">Starts at zero points. Earlier rounds appear in gray with a minus sign because this player did not participate. Eligible from the next round.</string>
+    <string name="match_late_player_help">Starts at zero points and joins the open round, if there is one. Between rounds, joins the next round. Earlier rounds appear in gray with a minus sign because this player did not participate; prior history stays unchanged.</string>
     <string name="match_edit_score">Correct %1$s’s points in round %2$d</string>
     <string name="player_drag">Drag to reorder %1$s</string>
     <string name="player_edit">Edit %1$s’s name</string>
@@ -43,6 +43,12 @@
     <string name="history_empty">No matches on this day.</string>
     <string name="history_completed">Finished</string>
     <string name="history_in_progress">In progress</string>
+    <string name="history_match_header">%1$s · %2$s</string>
+    <string name="history_delete_description">Delete match from %1$s</string>
+    <string name="history_delete_title">Delete match?</string>
+    <string name="history_delete_message">The match and all its records will be permanently deleted. This action cannot be undone.</string>
+    <string name="history_delete_confirm">Delete</string>
+    <string name="history_delete_error">Could not delete the match. Please try again.</string>
     <string name="history_provisional">Provisional totals</string>
     <string name="results_winner">Winner</string>
     <string name="results_highest_penalty">Highest score</string>
@@ -61,7 +67,7 @@
     <string name="route_language">Language</string>
     <string name="route_learn">Learn to play</string>
     <string name="route_about">About</string>
-    <string name="settings_appearance_summary">Theme and motion</string>
+    <string name="settings_appearance_summary">App theme</string>
     <string name="settings_language_summary">App language</string>
     <string name="settings_learn_summary">Complete rules available offline</string>
     <string name="settings_about_summary">Version, purpose, and support</string>
@@ -69,15 +75,13 @@
     <string name="appearance_theme_system">Use device theme</string>
     <string name="appearance_theme_light">Light</string>
     <string name="appearance_theme_dark">Dark</string>
-    <string name="appearance_motion_reduce">Reduce motion</string>
-    <string name="appearance_motion_explanation">Reduces nonessential movement. Navigation between screens always stays animation-free.</string>
     <string name="learn_corrections_title">Score corrections</string>
     <string name="language_device">Device language</string>
     <string name="language_portuguese">Português (Brasil)</string>
     <string name="language_english">English (United States)</string>
     <string name="language_fallback">If the device language is not supported, the app uses Brazilian Portuguese.</string>
     <string name="about_version">Version %1$s</string>
-    <string name="about_purpose">An offline scorekeeper for in-person Pontinho matches. Points are penalties: the lower the total, the better.</string>
+    <string name="about_purpose">Offline scorekeeper for in-person games of the Pontinho card game. Learn to play.</string>
     <string name="about_support">Support</string>
     <string name="home_settings">Open settings</string>
     <string name="history_summary_expanded">Daily summary expanded</string>
@@ -98,13 +102,13 @@
     <string name="score_label">Points</string>
     <string name="camera">Camera</string>
     <string name="went_out">Went out</string>
-    <string name="setup_first_player_help">The first player will have the opening hand.</string>
+    <string name="setup_first_player_help">Add players in counter-clockwise order and tap the hand to choose who starts.</string>
+    <string name="setup_select_initial_hand">Set %1$s as the opening hand</string>
+    <string name="setup_initial_hand_selected">%1$s has the opening hand</string>
     <string name="setup_players_heading">Players</string>
     <string name="setup_add_player">Add player</string>
     <string name="setup_use_last_match">Use players from last match</string>
-    <string name="setup_replace_helper">Replaces the current list.</string>
     <string name="setup_no_previous_match">No previous match is available.</string>
-    <string name="setup_minimum_players">Minimum 2 players</string>
     <string name="setup_duplicate_names_error">Some names are repeated. Edit a name or remove the duplicate player to create the match.</string>
     <string name="setup_create_match">Create match</string>
     <string name="setup_blank_name_error">Enter a name.</string>
@@ -118,10 +122,10 @@
     <string name="learn_penalties">Points are penalties: the lower the total, the better.</string>
     <string name="learn_round_completion">Went out marks one player as the winner. The round ends when every other eligible player records a score; without a mark, the only player without a score automatically wins with zero.</string>
     <string name="learn_match_end">The match ends after a completed round takes at least one total above 100. Exactly 100 does not end the match.</string>
-    <string name="learn_hand_rotation">The first player starts with the opening hand. After every completed round, the hand advances to the next eligible player in order and wraps after the last.</string>
+    <string name="learn_hand_rotation">When creating a match, choose the opening hand with the icon on a player card. After every completed round, the hand advances to the next eligible player in order and wraps after the last.</string>
     <string name="learn_wildcards">Before each round, choose the wildcard rank and color directly. Both cards of that rank and color are wild and worth 20 points each.</string>
     <string name="learn_card_values">Values: Ace 15; cards 2–10 at face value; Jack, Queen, and King 10; wildcards and printed jokers 20.</string>
-    <string name="learn_late_players">Players added between rounds start at zero. Earlier rounds show gray minus indicators because they did not participate. They become eligible in the next round.</string>
+    <string name="learn_late_players">Added players start at zero points and join the open round, if there is one. Between rounds, they join the next round. Earlier rounds show gray minus indicators because they did not participate and still contribute zero points. Prior history stays unchanged.</string>
     <string name="learn_objective_title">Objective</string>
     <string name="learn_order_title">Order and opening hand</string>
     <string name="learn_wildcard_title">Wildcards</string>

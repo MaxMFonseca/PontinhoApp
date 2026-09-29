@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performFirstLinkClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.runtime.CompositionLocalProvider
@@ -90,7 +91,7 @@ class LearnScreenTest {
 
         composeRule.onNodeWithContentDescription(context.getString(R.string.home_settings)).performClick()
         composeRule.onNodeWithText(context.getString(R.string.route_about)).performScrollTo().performClick()
-        composeRule.onNodeWithTag("about_learn").performScrollTo().performClick()
+        composeRule.onNodeWithText(context.getString(R.string.about_purpose)).performScrollTo().performFirstLinkClick()
 
         composeRule.onNodeWithTag("learn_root").assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.learn_penalties)).assertIsDisplayed()
@@ -99,21 +100,35 @@ class LearnScreenTest {
         composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
         composeRule.onNodeWithTag("settings_root").assertIsDisplayed()
         composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
-        composeRule.onNodeWithText(context.getString(R.string.home_learn)).performClick()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.home_learn)).performClick()
         composeRule.onNodeWithTag("learn_root").assertIsDisplayed()
         composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
     }
 
-    @Test fun latePlayerHelpExplicitlyExplainsGrayMinusAndNextRoundInBothLocales() {
+    @Test fun latePlayerHelpExplainsOpenAndUpcomingRoundsWithoutChangingPriorHistoryInBothLocales() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val portuguese = localizedContext(context, "pt-BR").getString(R.string.learn_late_players)
         val english = localizedContext(context, "en-US").getString(R.string.learn_late_players)
 
         assertTrue(portuguese.contains("sinal de menos cinza"))
+        assertTrue(portuguese.contains("rodada em andamento"))
+        assertTrue(portuguese.contains("zero"))
         assertTrue(portuguese.contains("próxima rodada"))
         assertTrue(english.contains("gray minus"))
+        assertTrue(english.contains("open round"))
+        assertTrue(english.contains("zero"))
         assertTrue(english.contains("next round"))
+        val portugueseDialog = localizedContext(context, "pt-BR").getString(R.string.match_late_player_help)
+        val englishDialog = localizedContext(context, "en-US").getString(R.string.match_late_player_help)
+        assertTrue(portugueseDialog.contains("rodada em andamento"))
+        assertTrue(portugueseDialog.contains("próxima rodada"))
+        assertTrue(portugueseDialog.contains("zero"))
+        assertTrue(portugueseDialog.contains("cinza"))
+        assertTrue(englishDialog.contains("open round"))
+        assertTrue(englishDialog.contains("next round"))
+        assertTrue(englishDialog.contains("zero"))
+        assertTrue(englishDialog.contains("gray"))
     }
 
     @Test fun portugueseCardExamplesExposeLocalizedTalkBackDescriptions() {

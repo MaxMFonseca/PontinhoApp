@@ -126,6 +126,10 @@ class MatchSetupScreenTest {
             composeRule.runOnIdle { scenario = Triple(locale, theme, scale) }
             val list = composeRule.onNodeWithTag("setup_root")
             list.performScrollToIndex(0)
+            val help = if (locale == "pt-BR")
+                "Adicione os jogadores em ordem anti-horária e toque na mão para escolher quem começa."
+            else "Add players in counter-clockwise order and tap the hand to choose who starts."
+            composeRule.onNodeWithText(help).assertIsDisplayed()
             val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) })
             val back = composeRule.onNodeWithContentDescription(localized.getString(R.string.match_back)).fetchSemanticsNode().boundsInRoot
             assertTrue("Back must be below the system status area", back.top >= safeTop)
@@ -162,13 +166,36 @@ class MatchSetupScreenTest {
         composeRule.onNodeWithText(context.getString(R.string.setup_add_player)).assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.setup_use_last_match)).assertIsNotEnabled()
         composeRule.onNodeWithText(context.getString(R.string.setup_no_previous_match)).assertIsDisplayed()
-        composeRule.onNodeWithText(context.getString(R.string.setup_minimum_players)).assertIsDisplayed()
+        composeRule.onNodeWithText("Mínimo de 2 jogadores").assertDoesNotExist()
+        composeRule.onNodeWithText("Minimum 2 players").assertDoesNotExist()
+        composeRule.onNodeWithText("Substitui a lista atual.").assertDoesNotExist()
+        composeRule.onNodeWithText("Replaces the current list.").assertDoesNotExist()
         composeRule.onNodeWithText(context.getString(R.string.cancel)).assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.setup_create_match)).assertIsNotEnabled()
         composeRule.onNodeWithText("Data", substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("Editar jogadores", substring = true).assertDoesNotExist()
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
         composeRule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ToggleableState)).assertCountEquals(0)
+    }
+
+    @Test fun handButtonSelectsOpeningPlayerWithoutMovingCards() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        var selected = "a"
+        val players = listOf(DraftPlayer("a", null, "Ana"), DraftPlayer("b", null, "Bruno"))
+        composeRule.setContent {
+            SetupContent(
+                MatchSetupUiState(players = players, initialDealerDraftId = selected),
+                onSelectInitialDealer = { selected = it },
+            )
+        }
+        composeRule.onNodeWithTag("setup_hand_a")
+            .assertContentDescriptionEquals(context.getString(R.string.setup_initial_hand_selected, "Ana"))
+            .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+        val before = players.map { composeRule.onNodeWithTag("setup_player_${it.draftId}").fetchSemanticsNode().boundsInRoot.top }
+        composeRule.onNodeWithTag("setup_hand_b").performClick()
+        composeRule.runOnIdle { assertEquals("b", selected) }
+        val after = players.map { composeRule.onNodeWithTag("setup_player_${it.draftId}").fetchSemanticsNode().boundsInRoot.top }
+        assertEquals(before, after)
     }
 
     @Test fun backGlyphHasLocalizedTalkBackDescription() {
@@ -452,6 +479,7 @@ class MatchSetupScreenTest {
         onRemovePlayer: (String) -> Unit = {},
         onMovePlayer: (String, Int) -> Unit = { _, _ -> },
         onReorderPlayers: (List<String>) -> Unit = {},
+        onSelectInitialDealer: (String) -> Unit = {},
     ) = MatchSetupScreen(
         state = state,
         onBack = {},
@@ -460,6 +488,7 @@ class MatchSetupScreenTest {
         onRemovePlayer = onRemovePlayer,
         onMovePlayer = onMovePlayer,
         onReorderPlayers = onReorderPlayers,
+        onSelectInitialDealer = onSelectInitialDealer,
         onUseLastMatch = {},
         onDismissReplace = {},
         onConfirmReplace = {},

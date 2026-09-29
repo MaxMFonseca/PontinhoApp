@@ -31,10 +31,12 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.ParticipantId
@@ -214,13 +216,16 @@ class AccessibilityLayoutTest {
         val row = hasAnyAncestor(hasTestTag("match_player_p0"))
         val name = compose.onNode(hasTestTag("player_name") and row, useUnmergedTree = true)
             .fetchSemanticsNode().boundsInRoot
-        val total = compose.onNode(hasTestTag("player_total") and row, useUnmergedTree = true)
-            .fetchSemanticsNode().boundsInRoot
+        val totalNode = compose.onNode(hasTestTag("player_total") and row, useUnmergedTree = true).assertIsDisplayed()
+        val total = totalNode.fetchSemanticsNode().boundsInRoot
         val minimumReadableNameWidth = 100.dp.value * baseContext.resources.displayMetrics.density
         assertTrue("The player name needs readable space at 200% font", name.width >= minimumReadableNameWidth)
         assertFalse("Name and total must not occupy overlapping pixels", name.overlaps(total))
-        assertTrue("At 200% font the total must move below the name instead of squeezing it",
-            total.top >= name.bottom)
+        assertTrue("Name and total must remain inline at 200% font",
+            name.top < total.bottom && total.top < name.bottom && total.left >= name.right)
+        val layouts = mutableListOf<TextLayoutResult>()
+        totalNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertFalse("The total must be fully readable", layouts.single().hasVisualOverflow)
     }
 
     private fun assertStressPlayer(index: Int, scenario: String) {
@@ -252,7 +257,7 @@ class AccessibilityLayoutTest {
     private fun stressFixture(name: String) = MatchUiState(
         isLoading = false,
         roundNumber = 21,
-        canManagePlayers = true,
+        canAddPlayer = true, canReorderPlayers = true,
         players = (0 until 12).map { player ->
             MatchPlayer(
                 id = ParticipantId("p$player"),

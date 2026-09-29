@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 interface MatchDao {
     @Insert suspend fun insertMatch(match: MatchEntity)
     @Update suspend fun updateMatch(match: MatchEntity)
+    @Query("DELETE FROM matches WHERE id = :id") suspend fun deleteMatch(id: String): Int
     @Insert suspend fun insertParticipant(participant: MatchParticipantEntity)
     @Update suspend fun updateParticipant(participant: MatchParticipantEntity)
     @Insert suspend fun insertCorrection(event: CorrectionEventEntity)

@@ -7,6 +7,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import org.junit.Assert.assertEquals
@@ -49,6 +51,7 @@ class HomeScreenTest {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         var scenario by mutableStateOf(Triple("pt-BR", ThemePreference.LIGHT, 1f))
         var opened: LocalDate? = null
+        var learnClicks = 0
         var safeTop = 0
         composeRule.setContent {
             val (locale, theme, scale) = scenario
@@ -61,7 +64,7 @@ class HomeScreenTest {
                     Surface { Box(Modifier.size(320.dp, 568.dp)) {
                         HomeScreen(HomeUiState(isLoading = false, dateCards = listOf(
                             HomeDateCard(LocalDate.of(2026, 10, 14), 2, 1, listOf("Alexandre Maximiliano de Albuquerque", "Bruno")),
-                        )), {}, {}, { opened = it })
+                        )), {}, { learnClicks++ }, { opened = it })
                     } }
                 }
             }
@@ -73,7 +76,20 @@ class HomeScreenTest {
             val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) })
             val settings = composeRule.onNodeWithContentDescription(localized.getString(R.string.home_settings)).fetchSemanticsNode().boundsInRoot
             assertTrue("Settings must be below the system status area", settings.top >= safeTop)
-            listOf("home_new_match", "home_learn").forEach { tag ->
+            val learnLabel = localized.getString(R.string.home_learn)
+            composeRule.onAllNodesWithContentDescription(learnLabel).assertCountEquals(1)
+            val learn = composeRule.onNodeWithContentDescription(learnLabel)
+                .assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+            val learnBounds = learn.fetchSemanticsNode().boundsInRoot
+            assertTrue("Learn must precede Settings in the top bar", learnBounds.right <= settings.left)
+            assertEquals(settings.center.y, learnBounds.center.y, 1f)
+            assertTrue("Learn must be below the system status area", learnBounds.top >= safeTop)
+            val previousClicks = learnClicks
+            learn.performClick()
+            composeRule.runOnIdle { assertEquals(previousClicks + 1, learnClicks) }
+            composeRule.onNodeWithTag("home_learn").assertDoesNotExist()
+            composeRule.onNodeWithText(learnLabel).assertDoesNotExist()
+            listOf("home_new_match").forEach { tag ->
                 list.performScrollToNode(hasTestTag(tag))
                 val node = composeRule.onNodeWithTag(tag).assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
                 val button = node.fetchSemanticsNode().boundsInRoot
@@ -110,7 +126,9 @@ class HomeScreenTest {
         }
 
         composeRule.onNodeWithText(context.getString(R.string.home_new_match)).performClick()
-        composeRule.onNodeWithText(context.getString(R.string.home_learn)).performClick()
+        composeRule.onAllNodesWithContentDescription(context.getString(R.string.home_learn)).assertCountEquals(1)
+        composeRule.onNodeWithContentDescription(context.getString(R.string.home_learn)).performClick()
+        composeRule.onNodeWithTag("home_learn").assertDoesNotExist()
         composeRule.onNodeWithText(context.getString(R.string.home_empty_title)).assertIsDisplayed()
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
         composeRule.runOnIdle {

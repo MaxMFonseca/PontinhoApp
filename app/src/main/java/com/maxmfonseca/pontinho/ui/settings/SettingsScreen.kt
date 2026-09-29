@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -30,7 +29,6 @@ import com.maxmfonseca.pontinho.settings.LanguagePreference
 import com.maxmfonseca.pontinho.settings.ThemePreference
 import com.maxmfonseca.pontinho.ui.components.PontinhoSettingCard
 import com.maxmfonseca.pontinho.ui.components.PontinhoTopBar
-import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
 
 @Composable
 fun SettingsScreen(
@@ -58,11 +56,8 @@ fun AppearanceScreen(
     preferences: AppPreferences,
     onBack: () -> Unit,
     onThemeSelected: (ThemePreference) -> Unit,
-    onReducedMotionSelected: (Boolean?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Null is the migration/default state; the app local already resolves the device setting.
-    val reducedMotion = preferences.reducedMotion ?: LocalReducedMotion.current
     SettingsPage(R.string.route_appearance, "appearance_root", onBack, modifier) {
         Text(stringResource(R.string.appearance_theme_title), style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.semantics { heading() })
@@ -70,21 +65,6 @@ fun AppearanceScreen(
             ChoiceCard(R.string.appearance_theme_system, preferences.theme == ThemePreference.SYSTEM) { onThemeSelected(ThemePreference.SYSTEM) }
             ChoiceCard(R.string.appearance_theme_light, preferences.theme == ThemePreference.LIGHT) { onThemeSelected(ThemePreference.LIGHT) }
             ChoiceCard(R.string.appearance_theme_dark, preferences.theme == ThemePreference.DARK) { onThemeSelected(ThemePreference.DARK) }
-        }
-        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-            Column(Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
-                .testTag("reduced_motion_switch")
-                .toggleable(value = reducedMotion, role = Role.Switch, onValueChange = { onReducedMotionSelected(it) })
-                .padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(R.string.appearance_motion_reduce), style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f))
-                    Switch(checked = reducedMotion, onCheckedChange = null)
-                }
-                Text(stringResource(R.string.appearance_motion_explanation), style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
     }
 }

@@ -277,6 +277,26 @@ class RoomMatchRepositoryTest {
         assertEquals(listOf("Same", "Other"), snapshot(first).participants.map { it.displayName })
     }
 
+    @Test fun createPersistsSelectedOpeningHandWithoutChangingRosterOrder() = runBlocking {
+        val command = CreateMatch(
+            creationToken = "selected-opening-hand",
+            players = listOf(
+                CreateMatchPlayer("ana", displayName = "Ana"),
+                CreateMatchPlayer("bruno", displayName = "Bruno"),
+                CreateMatchPlayer("carla", displayName = "Carla"),
+            ),
+            initialDealerDraftId = "bruno",
+        )
+
+        val id = repo.createMatch(command)
+        val state = snapshot(id)
+
+        assertEquals(listOf("Ana", "Bruno", "Carla"), state.participants.map { it.displayName })
+        assertEquals(state.participants[1].id, state.dealerParticipantId)
+        rejected { repo.createMatch(command.copy(initialDealerDraftId = "carla")) }
+        rejected { repo.createMatch(command.copy(creationToken = "invalid-hand", initialDealerDraftId = "missing")) }
+    }
+
     @Test fun createReuseAfterLegacyPlayerRenameResolvesSnapshotNameWithoutChangingHistory() = runBlocking {
         val a = players.upsert(UpsertPlayer(displayName = " Ana "))
         val b = players.upsert(UpsertPlayer(displayName = "Bia"))

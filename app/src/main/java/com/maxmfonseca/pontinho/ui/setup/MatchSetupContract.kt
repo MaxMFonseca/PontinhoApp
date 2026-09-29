@@ -19,6 +19,7 @@ data class PlayerNameDialogState(
 
 data class MatchSetupUiState(
     val players: List<DraftPlayer> = emptyList(),
+    val initialDealerDraftId: String? = players.firstOrNull()?.draftId,
     val nameDialog: PlayerNameDialogState? = null,
     val latestMatchPlayers: List<DraftPlayer> = emptyList(),
     val showReplaceConfirmation: Boolean = false,
@@ -29,7 +30,8 @@ data class MatchSetupUiState(
     val minimumPlayers: Int get() = 2
     val hasDuplicateNames: Boolean get() =
         players.map { PlayerNameKey.from(it.displayName) }.distinct().size != players.size
-    val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating && !hasDuplicateNames
+    val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating && !hasDuplicateNames &&
+        players.any { it.draftId == initialDealerDraftId }
     val canUseLastMatch: Boolean get() = latestMatchPlayers.isNotEmpty()
     val showNoPreviousMatchExplanation: Boolean get() = !canUseLastMatch
 }

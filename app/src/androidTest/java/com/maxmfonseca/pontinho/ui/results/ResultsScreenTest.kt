@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
@@ -54,14 +55,18 @@ class ResultsScreenTest {
             composeRule.runOnIdle { scenario = Triple(locale, theme, scale); calls.clear() }
             val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) })
             for (id in listOf("a", "b")) {
-                composeRule.onNodeWithTag("results_root").performScrollToNode(hasTestTag("result_winner_$id"))
-                composeRule.onNodeWithTag("result_winner_$id").performScrollTo().assertIsDisplayed()
+                composeRule.onNodeWithTag("results_root").performScrollToNode(hasTestTag("result_player_$id"))
+                composeRule.onNodeWithTag("result_player_$id").performScrollTo().assertIsDisplayed().assert(
+                    SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, localized.getString(R.string.results_winner)))
             }
             for (id in listOf("c", "d")) {
-                composeRule.onNodeWithTag("results_root").performScrollToNode(hasTestTag("result_highest_$id"))
-                composeRule.onNodeWithTag("result_highest_$id").performScrollTo().assertIsDisplayed()
-                composeRule.onNodeWithTag("result_winner_$id").assertDoesNotExist()
+                composeRule.onNodeWithTag("results_root").performScrollToNode(hasTestTag("result_player_$id"))
+                composeRule.onNodeWithTag("result_player_$id").performScrollTo().assertIsDisplayed().assert(
+                    SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, localized.getString(R.string.results_highest_penalty)))
             }
+            composeRule.onNodeWithText(localized.getString(R.string.results_lower_better)).assertDoesNotExist()
+            composeRule.onNodeWithText(localized.getString(R.string.results_winner)).assertDoesNotExist()
+            composeRule.onNodeWithText(localized.getString(R.string.results_highest_penalty)).assertDoesNotExist()
             if (locale == "en-US" && theme == ThemePreference.DARK && scale == 2f) capture("task6-results-en-dark-200.png")
             for (action in listOf(R.string.results_new_match, R.string.results_details, R.string.results_back_history)) {
                 composeRule.onNodeWithTag("results_root").performScrollToNode(hasText(localized.getString(action)))
@@ -99,9 +104,13 @@ class ResultsScreenTest {
                 )
             }
         }
-        composeRule.onNodeWithTag("result_winner_a").assertIsDisplayed()
-        composeRule.onNodeWithTag("result_highest_c").assertIsDisplayed()
-        composeRule.onNodeWithTag("result_winner_c").assertDoesNotExist()
+        composeRule.onNodeWithTag("result_player_a").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_winner)))
+        composeRule.onNodeWithTag("result_player_c").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_highest_penalty)))
+        composeRule.onNodeWithText(context.getString(R.string.results_lower_better)).assertDoesNotExist()
+        composeRule.onNodeWithText(context.getString(R.string.results_winner)).assertDoesNotExist()
+        composeRule.onNodeWithText(context.getString(R.string.results_highest_penalty)).assertDoesNotExist()
         composeRule.onNodeWithTag("results_celebration").assertDoesNotExist()
         for (action in listOf(R.string.results_new_match, R.string.results_details, R.string.results_back_history)) {
             composeRule.onNodeWithTag("results_root").performScrollToNode(hasText(context.getString(action)))

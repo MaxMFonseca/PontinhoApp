@@ -67,6 +67,7 @@ class ResultsViewModelTest {
 }
 
 private class ResultRepository(snapshot: MatchSnapshot) : MatchRepository {
+    override suspend fun deleteMatch(matchId: MatchId) = error("unused")
     val state = MutableStateFlow<MatchSnapshot?>(snapshot)
     val acknowledgements = mutableListOf<Pair<MatchId, Long>>()
     override fun observeMatch(matchId: MatchId) = state
