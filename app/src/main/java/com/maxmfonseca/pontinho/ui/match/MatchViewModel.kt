@@ -55,14 +55,19 @@ class MatchViewModel(
         } else openDialog(participantId, round.id, round.ordinal, round.indicator, round.draft.winner == null)
     }
 
-    fun selectIndicator(indicator: Indicator) {
+    fun selectIndicatorRank(rank: Rank) {
         if (uiState.value.isSaving) return
-        mutableUiState.update { it.copy(picker = it.picker?.copy(selected = indicator)) }
+        mutableUiState.update { it.copy(picker = it.picker?.copy(selectedRank = rank)) }
+    }
+
+    fun selectIndicatorColor(color: CardColor) {
+        if (uiState.value.isSaving) return
+        mutableUiState.update { it.copy(picker = it.picker?.copy(selectedColor = color)) }
     }
 
     fun confirmIndicator() {
         val picker = uiState.value.picker ?: return
-        val indicator = picker.selected ?: return
+        val indicator = picker.indicator ?: return
         if (uiState.value.isSaving) return
         mutableUiState.update { it.copy(isSaving = true, hasError = false) }
         scope.launch {
@@ -156,7 +161,15 @@ class MatchViewModel(
         val to = (from.toLong() + direction).coerceIn(0, order.lastIndex.toLong()).toInt()
         if (from == to) return
         order.add(to, order.removeAt(from))
-        mutate { repository.reorderParticipants(ReorderParticipants(matchId, order)) }
+        reorderPlayers(order)
+    }
+
+    fun reorderPlayers(orderedParticipantIds: List<ParticipantId>) {
+        val state = uiState.value
+        if (!state.canManagePlayers || state.isSaving || state.playerName != null || state.scoreDialog != null || state.picker != null) return
+        val committed = state.players.map { it.id }
+        if (orderedParticipantIds.size != committed.size || orderedParticipantIds.toSet() != committed.toSet() || orderedParticipantIds == committed) return
+        mutate { repository.reorderParticipants(ReorderParticipants(matchId, orderedParticipantIds.toList())) }
     }
 
     fun editScore(id: ParticipantId, ordinal: Int) {

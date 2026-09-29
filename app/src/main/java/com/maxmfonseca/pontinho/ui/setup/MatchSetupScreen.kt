@@ -1,7 +1,6 @@
 package com.maxmfonseca.pontinho.ui.setup
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -32,14 +31,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -60,7 +51,7 @@ import com.maxmfonseca.pontinho.ui.components.ImmediateDragHandle
 import com.maxmfonseca.pontinho.ui.components.PlayerNameDialog
 import com.maxmfonseca.pontinho.ui.components.PontinhoInfoBanner
 import com.maxmfonseca.pontinho.ui.components.PontinhoTopBar
-import kotlinx.coroutines.isActive
+import com.maxmfonseca.pontinho.ui.components.rememberReorderableListState
 
 @Composable
 fun MatchSetupScreen(
@@ -81,60 +72,11 @@ fun MatchSetupScreen(
     onReorderPlayers: (List<String>) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
-    var previewIds by remember { mutableStateOf<List<String>?>(null) }
-    var draggedId by remember { mutableStateOf<String?>(null) }
-    var draggedTop by remember { mutableFloatStateOf(0f) }
-    var draggedHeight by remember { mutableFloatStateOf(0f) }
-    var pointerY by remember { mutableFloatStateOf(0f) }
-    var firstDragDelta by remember { mutableStateOf(false) }
-    val edgeSize = with(LocalDensity.current) { 64.dp.toPx() }
-    val maxScrollPerFrame = with(LocalDensity.current) { 18.dp.toPx() }
+    val reorderState = rememberReorderableListState(listState, state.players.map { it.draftId },
+        enabled = !state.isCreating, itemKey = { it }, onReorder = onReorderPlayers)
     val handleHalfHeight = with(LocalDensity.current) { 24.dp.toPx() }
     val playersById = state.players.associateBy { it.draftId }
-    val visualPlayers = previewIds?.mapNotNull { playersById[it] } ?: state.players
-
-    fun cancelDrag() { draggedId = null; previewIds = null }
-
-    fun updatePreview() {
-        val id = draggedId ?: return
-        val order = previewIds ?: return
-        val from = order.indexOf(id)
-        val center = draggedTop + draggedHeight / 2f
-        val crossed = listState.layoutInfo.visibleItemsInfo.filter { item ->
-            val index = order.indexOf(item.key)
-            index >= 0 && index != from &&
-                if (index > from) center > item.offset + item.size / 2f
-                else center < item.offset + item.size / 2f
-        }
-        val target = crossed.minByOrNull { kotlin.math.abs(center - (it.offset + it.size / 2f)) } ?: return
-        val to = order.indexOf(target.key)
-        // Keep the viewport stationary when its first visible player's index changes.
-        listState.requestScrollToItem(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-        previewIds = order.toMutableList().apply { add(to, removeAt(from)) }
-    }
-
-    LaunchedEffect(state.players, state.isCreating) {
-        if (state.isCreating || previewIds?.toSet()?.let { it != playersById.keys } == true) cancelDrag()
-    }
-    val scrollSpeed by remember(edgeSize, maxScrollPerFrame) { derivedStateOf {
-        val layout = listState.layoutInfo
-        val top = layout.viewportStartOffset + edgeSize
-        val bottom = layout.viewportEndOffset - edgeSize
-        when {
-            draggedId == null -> 0f
-            pointerY < top -> -((top - pointerY) / edgeSize).coerceIn(0f, 1f) * maxScrollPerFrame
-            pointerY > bottom -> ((pointerY - bottom) / edgeSize).coerceIn(0f, 1f) * maxScrollPerFrame
-            else -> 0f
-        }
-    } }
-    LaunchedEffect(draggedId, scrollSpeed) {
-        if (draggedId == null || scrollSpeed == 0f) return@LaunchedEffect
-        while (isActive) {
-            withFrameNanos { }
-            if (listState.scrollBy(scrollSpeed) == 0f) break
-            updatePreview()
-        }
-    }
+    val visualPlayers = reorderState.previewOrder?.mapNotNull { playersById[it] } ?: state.players
 
     Column(modifier.fillMaxSize().safeDrawingPadding()) {
         if (state.reorderError) Text(
@@ -149,7 +91,7 @@ fun MatchSetupScreen(
             modifier = Modifier.weight(1f).testTag("setup_root"),
             contentPadding = PaddingValues(bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            userScrollEnabled = draggedId == null,
+            userScrollEnabled = reorderState.draggedKey == null,
         ) {
             item(key = "top_bar") { PontinhoTopBar(R.string.route_setup, onBack = onBack, enabled = !state.isCreating) }
             item(key = "help") { PontinhoInfoBanner(R.string.setup_first_player_help, Modifier.padding(horizontal = 16.dp)) }
@@ -158,7 +100,7 @@ fun MatchSetupScreen(
                     modifier = Modifier.padding(horizontal = 20.dp).semantics { heading() })
             }
             itemsIndexed(visualPlayers, key = { _, player -> player.draftId }) { index, player ->
-                val dragging = draggedId == player.draftId
+                val dragging = reorderState.draggedKey == player.draftId
                 SetupPlayerRow(
                     player = player, index = index, playerCount = visualPlayers.size, enabled = !state.isCreating,
                     onEdit = { onEditPlayer(player.draftId) }, onRemove = { onRemovePlayer(player.draftId) },
@@ -166,30 +108,15 @@ fun MatchSetupScreen(
                     onDragStart = { offsetY ->
                         val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == player.draftId }
                         if (item != null) {
-                            draggedId = player.draftId
-                            previewIds = state.players.map { it.draftId }
-                            draggedTop = item.offset.toFloat()
-                            draggedHeight = item.size.toFloat()
-                            pointerY = item.offset + item.size / 2f + offsetY - handleHalfHeight
-                            firstDragDelta = true
+                            reorderState.startDrag(player.draftId, item.offset + item.size / 2f + offsetY - handleHalfHeight)
                         }
                     },
-                    onDragDelta = { amount ->
-                        draggedTop += amount
-                        // onDragStart already receives the slop-triggering pointer position.
-                        if (firstDragDelta) firstDragDelta = false else pointerY += amount
-                        updatePreview()
-                    },
-                    onDragEnd = {
-                        val order = previewIds
-                        cancelDrag()
-                        if (order != null) onReorderPlayers(order)
-                    },
-                    onDragCancel = ::cancelDrag,
+                    onDragDelta = reorderState::dragBy,
+                    onDragEnd = reorderState::endDrag,
+                    onDragCancel = reorderState::cancelDrag,
                     modifier = Modifier.zIndex(if (dragging) 1f else 0f)
                         .graphicsLayer {
-                            val rowOffset = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == player.draftId }?.offset ?: 0
-                            translationY = if (dragging) draggedTop - rowOffset else 0f
+                            translationY = reorderState.translationY(player.draftId)
                         }
                         .padding(horizontal = 16.dp),
                 )
@@ -216,6 +143,10 @@ fun MatchSetupScreen(
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.setup_minimum_players), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.hasDuplicateNames) Text(stringResource(R.string.setup_duplicate_names_error),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("setup_duplicate_names_error")
+                            .semantics { liveRegion = LiveRegionMode.Polite })
                     if (state.createError) Text(stringResource(R.string.setup_create_error), color = MaterialTheme.colorScheme.error)
                     Button(onClick = onCreateMatch, enabled = state.canCreate,
                         modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp).testTag("setup_create_match")) {

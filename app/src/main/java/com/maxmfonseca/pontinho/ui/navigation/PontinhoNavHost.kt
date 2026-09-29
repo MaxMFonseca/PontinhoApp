@@ -137,11 +137,12 @@ fun PontinhoNavHost(
                 }
             }
             MatchScreen(state, { navController.popBackStack() }, matchViewModel::addScore,
-                matchViewModel::selectIndicator, matchViewModel::confirmIndicator, matchViewModel::dismissDialog,
+                matchViewModel::selectIndicatorRank, matchViewModel::confirmIndicator, matchViewModel::dismissDialog,
                 matchViewModel::updateScore, matchViewModel::confirmScore, matchViewModel::wentOut, matchViewModel::viewResults,
                 onAddPlayer = matchViewModel::openAddPlayer, onPlayerNameChange = matchViewModel::updatePlayerName,
-                onConfirmPlayerName = matchViewModel::confirmPlayerName, onMovePlayer = matchViewModel::movePlayer,
-                onEditScore = matchViewModel::editScore, onDeleteScore = matchViewModel::deleteScore)
+                onConfirmPlayerName = matchViewModel::confirmPlayerName, onReorderPlayers = matchViewModel::reorderPlayers,
+                onEditScore = matchViewModel::editScore, onDeleteScore = matchViewModel::deleteScore,
+                onSelectIndicatorColor = matchViewModel::selectIndicatorColor)
         }
         composable(Destination.DayHistory.route, arguments = listOf(navArgument(Destination.DayHistory.LOCAL_DATE) { type = NavType.StringType })) { entry ->
             val localDate = LocalDate.parse(requireNotNull(entry.arguments?.getString(Destination.DayHistory.LOCAL_DATE)))
@@ -220,7 +221,8 @@ fun PontinhoNavHost(
             val version = remember(context) {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
             }
-            AboutScreen(versionName = version, onBack = { navController.popBackStack() })
+            AboutScreen(versionName = version, onBack = { navController.popBackStack() },
+                onLearn = { navController.navigate(Destination.Learn.route) })
         }
     }
 }

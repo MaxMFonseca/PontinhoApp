@@ -18,6 +18,82 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun directlySelectedJokerIsConvertedToCompatibleIndicatorAndFailedConfirmKeepsSelectionForRetry() = runTest {
+        val storage = ScoringRepository()
+        var choices = 0
+        var fail = true
+        val repository = object : MatchRepository by storage {
+            override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound {
+                choices++
+                if (fail) error("Unavailable")
+                return storage.chooseIndicator(command)
+            }
+        }
+        val vm = MatchViewModel(storage.snapshot.value!!.id, repository, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.addScore(storage.ids[0]); vm.selectIndicatorRank(Rank.ACE); vm.confirmIndicator(); advanceUntilIdle()
+        assertNull(vm.uiState.value.picker!!.indicator)
+        assertEquals(0, choices)
+        vm.dismissDialog()
+        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+        vm.addScore(storage.ids[0]); vm.selectIndicatorColor(CardColor.BLACK); vm.confirmIndicator(); advanceUntilIdle()
+        assertNull(vm.uiState.value.picker!!.indicator)
+        assertEquals(0, choices)
+        vm.selectIndicatorRank(Rank.ACE); vm.confirmIndicator(); advanceUntilIdle()
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.picker!!.indicator)
+        assertTrue(vm.uiState.value.hasError)
+        assertEquals(1, choices)
+        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+        fail = false
+        vm.confirmIndicator(); advanceUntilIdle()
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.scoreDialog!!.indicator)
+        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+        vm.dismissDialog()
+        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+    }
+
+    @Test fun finalPermutationIsValidatedCommittedOnceAndFailureKeepsCommittedOrder() = runTest {
+        val storage = ScoringRepository()
+        val initial = storage.snapshot.value!!
+        val original = storage.ids
+        val final = listOf(original[1], original[2], original[0])
+        val gate = CompletableDeferred<Unit>()
+        val commands = mutableListOf<ReorderParticipants>()
+        var fail = false
+        val repository = object : MatchRepository by storage {
+            override suspend fun reorderParticipants(command: ReorderParticipants) {
+                commands += command
+                gate.await()
+                if (fail) error("Unavailable")
+                storage.snapshot.value = storage.snapshot.value!!.copy(participants = command.participantIds.mapIndexed { index, id ->
+                    initial.participants.single { it.id == id }.copy(rosterOrder = index)
+                })
+            }
+        }
+        val vm = MatchViewModel(initial.id, repository, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.reorderPlayers(original); vm.reorderPlayers(original.take(2)); vm.reorderPlayers(listOf(original[0], original[0], original[2]))
+        runCurrent(); assertTrue(commands.isEmpty())
+        vm.reorderPlayers(final); vm.reorderPlayers(original.reversed()); runCurrent()
+        assertEquals(listOf(ReorderParticipants(initial.id, final)), commands)
+        assertEquals(original, vm.uiState.value.players.map { it.id })
+        assertTrue(vm.uiState.value.isSaving)
+        gate.complete(Unit); advanceUntilIdle()
+        assertEquals(final, vm.uiState.value.players.map { it.id })
+        fail = true
+        vm.reorderPlayers(original); advanceUntilIdle()
+        assertEquals(final, vm.uiState.value.players.map { it.id })
+        assertTrue(vm.uiState.value.hasError)
+        assertFalse(vm.uiState.value.isSaving)
+        for (status in listOf(RoundStatus.OPEN, RoundStatus.PAUSED)) {
+            storage.snapshot.value = initial.copy(rounds = listOf(storage.round(1, RoundDraft(original)).copy(status = status)))
+            runCurrent(); vm.reorderPlayers(final); advanceUntilIdle()
+        }
+        storage.snapshot.value = initial.copy(isFinished = true)
+        runCurrent(); vm.reorderPlayers(final); advanceUntilIdle()
+        assertEquals(2, commands.size)
+    }
+
     @Test fun repositoryDuplicateShowsInlineErrorAndStopsRetryingAfterRosterRefresh() = runTest {
         val storage = ScoringRepository()
         val initial = storage.snapshot.value!!
@@ -138,10 +214,10 @@ class MatchViewModelTest {
         assertNull(vm.uiState.value.picker)
         assertTrue(repo.snapshot.value!!.rounds.isEmpty())
         vm.addScore(repo.ids[0])
-        vm.selectIndicator(Indicator(Rank.KING, CardColor.RED))
+        vm.selectIndicatorRank(Rank.KING); vm.selectIndicatorColor(CardColor.RED)
         vm.confirmIndicator()
         advanceUntilIdle()
-        assertEquals(Indicator(Rank.KING, CardColor.RED), vm.uiState.value.scoreDialog?.indicator)
+        assertEquals(Indicator(Rank.QUEEN, CardColor.RED), vm.uiState.value.scoreDialog?.indicator)
         assertTrue(repo.snapshot.value!!.rounds.isEmpty())
         vm.dismissDialog()
         assertTrue(repo.snapshot.value!!.rounds.isEmpty())
@@ -263,7 +339,7 @@ class MatchViewModelTest {
 
     private fun prepare(vm: MatchViewModel, id: ParticipantId) {
         vm.addScore(id)
-        vm.selectIndicator(Indicator(Rank.ACE, CardColor.BLACK))
+        vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.BLACK)
         vm.confirmIndicator()
     }
 }

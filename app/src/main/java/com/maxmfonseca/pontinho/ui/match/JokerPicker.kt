@@ -1,53 +1,132 @@
 package com.maxmfonseca.pontinho.ui.match
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.*
 
 @Composable
-fun JokerPicker(selected: Indicator?, isSaving: Boolean, hasError: Boolean,
-    onSelect: (Indicator) -> Unit, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = { if (!isSaving) onDismiss() },
-        title = { Text(stringResource(R.string.indicator_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                LazyColumn(Modifier.heightIn(max = 360.dp).testTag("joker_options")) {
-                    CardColor.entries.forEach { color ->
-                        item { Text(colorLabel(color), style = MaterialTheme.typography.titleMedium) }
-                        items(Rank.entries.chunked(4)) { ranks ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                ranks.forEach { rank ->
-                                    val indicator = Indicator(rank, color)
-                                    val label = "${rankLabel(rank)} ${colorLabel(color)}"
-                                    FilterChip(selected == indicator, { onSelect(indicator) },
-                                        label = { Text(rankLabel(rank)) }, enabled = !isSaving,
-                                        modifier = Modifier.weight(1f).heightIn(min = 48.dp)
-                                            .testTag("indicator_${color.name}_${rank.name}")
-                                            .semantics { contentDescription = label })
-                                }
-                                repeat(4 - ranks.size) { Spacer(Modifier.weight(1f)) }
+fun JokerPicker(
+    selectedRank: Rank?, selectedColor: CardColor?, isSaving: Boolean, hasError: Boolean,
+    onSelectRank: (Rank) -> Unit, onSelectColor: (CardColor) -> Unit,
+    onConfirm: () -> Unit, onDismiss: () -> Unit,
+) {
+    val joker = selectedRank?.let { rank -> selectedColor?.let { rank to it } }
+    Dialog(onDismissRequest = { if (!isSaving) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        BoxWithConstraints(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            // A short window needs the available width: two rank rows and one row of controls.
+            val shortWindow = maxHeight < 480.dp && maxWidth >= 480.dp
+            val largeFont = LocalDensity.current.fontScale >= 1.5f
+            val compactSpacing = shortWindow || (maxHeight < 600.dp && largeFont && hasError)
+            val title: @Composable (Modifier) -> Unit = { modifier ->
+                Text(stringResource(R.string.indicator_title), style = MaterialTheme.typography.titleSmall,
+                    modifier = modifier.semantics { heading() })
+            }
+            val preview: @Composable (Modifier) -> Unit = { modifier ->
+                val help = stringResource(R.string.indicator_select_help)
+                val description = joker?.let { jokerDescription(it.first, it.second) } ?: help
+                Text(joker?.let { compactJokerPreview(it.first, it.second) } ?: help,
+                    style = MaterialTheme.typography.bodySmall, modifier = modifier.testTag("joker_preview")
+                        .clearAndSetSemantics { contentDescription = description })
+            }
+            val colors: @Composable RowScope.() -> Unit = {
+                CardColor.entries.forEach { color ->
+                    PickerOption(colorLabel(color), selectedColor == color, !isSaving,
+                        { onSelectColor(color) }, Modifier.weight(1f).testTag("indicator_color_${color.name}"))
+                }
+            }
+            val cancelAction: @Composable (Modifier) -> Unit = { modifier ->
+                TextButton(onClick = onDismiss, enabled = !isSaving,
+                    modifier = modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+            val confirmAction: @Composable (Modifier) -> Unit = { modifier ->
+                Button(onClick = onConfirm, enabled = joker != null && !isSaving,
+                    modifier = modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) {
+                    Text(stringResource(R.string.confirm))
+                }
+            }
+            Surface(modifier = Modifier.widthIn(max = if (shortWindow) 640.dp else 400.dp).fillMaxWidth()
+                .testTag("joker_dialog"), shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+              Column(Modifier.padding(if (compactSpacing) 8.dp else 16.dp),
+                  verticalArrangement = Arrangement.spacedBy(if (compactSpacing) 4.dp else 8.dp)) {
+                if (shortWindow) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        title(Modifier.weight(0.4f))
+                        preview(Modifier.weight(0.6f))
+                    }
+                } else title(Modifier)
+                Column(Modifier.fillMaxWidth().testTag("joker_options"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val columns = if (shortWindow) 7 else 5
+                    Rank.entries.chunked(columns).forEach { ranks ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            ranks.forEach { rank ->
+                                PickerOption(rankLabel(rank), selectedRank == rank, !isSaving,
+                                    { onSelectRank(rank) }, Modifier.weight(1f).testTag("indicator_rank_${rank.name}"))
                             }
+                            repeat(columns - ranks.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
                 }
-                selected?.let { Text(wildcardPreview(it), Modifier.testTag("joker_preview")) }
-                if (hasError) Text(stringResource(R.string.match_save_error), color = MaterialTheme.colorScheme.error)
+                if (shortWindow) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        colors()
+                        cancelAction(Modifier.weight(1.2f))
+                        confirmAction(Modifier.weight(1.2f))
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), content = colors)
+                    preview(Modifier)
+                }
+                if (hasError) Text(stringResource(R.string.match_save_error), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                if (!shortWindow && largeFont) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        cancelAction(Modifier.fillMaxWidth())
+                        confirmAction(Modifier.fillMaxWidth())
+                    }
+                } else if (!shortWindow) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        cancelAction(Modifier.weight(1f))
+                        confirmAction(Modifier.weight(1f))
+                    }
+                }
+              }
             }
-        },
-        confirmButton = { Button(onClick = onConfirm, enabled = selected != null && !isSaving) { Text(stringResource(R.string.confirm)) } },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !isSaving) { Text(stringResource(R.string.cancel)) } },
-    )
+        }
+    }
+}
+
+@Composable private fun PickerOption(label: String, selected: Boolean, enabled: Boolean,
+    onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(onClick = onClick, enabled = enabled, shape = MaterialTheme.shapes.small,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        border = BorderStroke(if (selected) 2.dp else 1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+        modifier = modifier.heightIn(min = 48.dp).semantics {
+            this.selected = selected
+            role = Role.RadioButton
+            contentDescription = label
+        }) {
+        Box(contentAlignment = androidx.compose.ui.Alignment.Center, modifier = Modifier.padding(vertical = 4.dp)) {
+            Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.clearAndSetSemantics {})
+        }
+    }
 }
 
 internal fun rankLabel(rank: Rank): String = when (rank) {
@@ -63,7 +142,31 @@ internal fun rankLabel(rank: Rank): String = when (rank) {
 
 @Composable internal fun wildcardPreview(indicator: Indicator): String {
     val rank = rankLabel(indicator.rank.next())
-    val first = if (indicator.color == CardColor.RED) "$rank♥" else "$rank♠"
-    val second = if (indicator.color == CardColor.RED) "$rank♦" else "$rank♣"
-    return stringResource(R.string.indicator_preview, rankLabel(indicator.rank), colorLabel(indicator.color), first, second)
+    return jokerPreview(rank, indicator.color)
 }
+
+@Composable internal fun compactWildcardPreview(indicator: Indicator): String {
+    return compactJokerPreview(indicator.rank.next(), indicator.color)
+}
+
+@Composable internal fun wildcardDescription(indicator: Indicator): String =
+    jokerDescription(indicator.rank.next(), indicator.color)
+
+@Composable private fun jokerPreview(rank: String, color: CardColor): String = stringResource(
+    R.string.indicator_preview,
+    if (color == CardColor.RED) "$rank♥\uFE0E" else "$rank♠\uFE0E",
+    if (color == CardColor.RED) "$rank♦\uFE0E" else "$rank♣\uFE0E",
+)
+
+@Composable private fun compactJokerPreview(rank: Rank, color: CardColor): String =
+    compactJokerPreview(rankLabel(rank), color)
+
+@Composable private fun compactJokerPreview(rank: String, color: CardColor): String = stringResource(
+    R.string.indicator_preview_compact,
+    if (color == CardColor.RED) "$rank♥\uFE0E $rank♦\uFE0E" else "$rank♠\uFE0E $rank♣\uFE0E",
+)
+
+@Composable private fun jokerDescription(rank: Rank, color: CardColor): String = stringResource(
+    if (color == CardColor.RED) R.string.indicator_preview_red_accessible else R.string.indicator_preview_black_accessible,
+    rankLabel(rank),
+)

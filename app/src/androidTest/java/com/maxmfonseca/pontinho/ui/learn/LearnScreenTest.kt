@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
@@ -48,6 +49,7 @@ class LearnScreenTest {
         composeRule.setContent { LearnScreen(onBack = {}) }
 
         composeRule.onNodeWithTag("learn_root").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).assertIsDisplayed()
         listOf(
             R.string.learn_penalties,
             R.string.learn_round_completion,
@@ -56,7 +58,8 @@ class LearnScreenTest {
             R.string.learn_wildcards,
             R.string.learn_card_values,
             R.string.learn_late_players,
-        ).forEach { composeRule.onNodeWithText(context.getString(it)).assertIsDisplayed() }
+            R.string.score_correction_help,
+        ).forEach { composeRule.onNodeWithText(context.getString(it)).performScrollTo().assertIsDisplayed() }
         listOf(
             R.string.learn_objective_title,
             R.string.learn_order_title,
@@ -65,12 +68,12 @@ class LearnScreenTest {
             R.string.learn_round_title,
             R.string.learn_finish_title,
             R.string.learn_late_title,
-        ).forEach { composeRule.onNodeWithText(context.getString(it)).assertIsDisplayed() }
-        composeRule.onNodeWithTag("learn_card_examples").assertIsDisplayed()
+        ).forEach { composeRule.onNodeWithText(context.getString(it)).performScrollTo().assertIsDisplayed() }
+        composeRule.onNodeWithTag("learn_card_examples").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.route_placeholder)).assertDoesNotExist()
     }
 
-    @Test fun homeLearnActionNavigatesToRuleContent() {
+    @Test fun aboutAndHomeLearnActionsNavigateToRulesAndBackToTheirSource() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val preferences = object : PreferencesRepository {
             override val preferences = MutableStateFlow(AppPreferences())
@@ -85,10 +88,21 @@ class LearnScreenTest {
         }
         composeRule.setContent { PontinhoNavHost(container) }
 
-        composeRule.onNodeWithText(context.getString(R.string.home_learn)).performClick()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.home_settings)).performClick()
+        composeRule.onNodeWithText(context.getString(R.string.route_about)).performScrollTo().performClick()
+        composeRule.onNodeWithTag("about_learn").performScrollTo().performClick()
 
         composeRule.onNodeWithTag("learn_root").assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.learn_penalties)).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
+        composeRule.onNodeWithTag("about_root").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
+        composeRule.onNodeWithTag("settings_root").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
+        composeRule.onNodeWithText(context.getString(R.string.home_learn)).performClick()
+        composeRule.onNodeWithTag("learn_root").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
+        composeRule.onNodeWithTag("home_root").assertIsDisplayed()
     }
 
     @Test fun latePlayerHelpExplicitlyExplainsGrayMinusAndNextRoundInBothLocales() {
@@ -110,8 +124,8 @@ class LearnScreenTest {
             R.string.learn_example_two_diamonds_description,
             R.string.learn_example_king_spades_description,
             R.string.learn_example_printed_joker_description,
-        ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).assertIsDisplayed() }
-        composeRule.onNodeWithText("A♥", useUnmergedTree = true).assertDoesNotExist()
+        ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).performScrollTo().assertIsDisplayed() }
+        composeRule.onNodeWithText("A♥", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun englishCardExamplesExposeLocalizedTalkBackDescriptions() {
@@ -122,8 +136,8 @@ class LearnScreenTest {
             R.string.learn_example_two_diamonds_description,
             R.string.learn_example_king_spades_description,
             R.string.learn_example_printed_joker_description,
-        ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).assertIsDisplayed() }
-        composeRule.onNodeWithText("A♥", useUnmergedTree = true).assertDoesNotExist()
+        ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).performScrollTo().assertIsDisplayed() }
+        composeRule.onNodeWithText("A♥", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
 
     private fun showLearnInLocale(tag: String) {

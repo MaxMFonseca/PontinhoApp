@@ -4,7 +4,7 @@
 
 - Native Android application shell for `com.maxmfonseca.pontinho`.
 - Offline match creation with reusable player identities, editable names, removal from the setup draft, and accessible drag/reorder alternatives.
-- Manual scoring with indicator selection, explicit zero, `Bateu a rodada`, automatic winner inference, dealer rotation, and the strict greater-than-100 finish rule.
+- Manual scoring with direct wildcard selection, explicit zero, `Bateu a rodada`, automatic winner inference, dealer rotation, and the strict greater-than-100 finish rule.
 - Between-round player addition with zero starting total, historical gray-minus nonparticipation, and next-round eligibility.
 - In-context historical score correction, including reopening and resuming a later round when required.
 - Room persistence for active and completed matches, result acknowledgement, daily history, wins, and accumulated penalty summaries.

@@ -5,7 +5,15 @@ import com.maxmfonseca.pontinho.ui.components.PlayerRoundHistory
 
 data class MatchPlayer(val id: ParticipantId, val name: String, val total: Int,
     val isDealer: Boolean, val history: List<PlayerRoundHistory>, val canAddScore: Boolean)
-data class IndicatorPickerState(val participantId: ParticipantId, val selected: Indicator? = null)
+data class IndicatorPickerState(
+    val participantId: ParticipantId,
+    val selectedRank: Rank? = null,
+    val selectedColor: CardColor? = null,
+) {
+    val indicator: Indicator? get() = selectedRank?.let { jokerRank ->
+        selectedColor?.let { Indicator(jokerRank.previous(), it) }
+    }
+}
 data class MatchScoreDialogState(
     val participantId: ParticipantId, val playerName: String, val roundId: RoundId,
     val roundNumber: Int, val indicator: Indicator, val wentOutEnabled: Boolean, val value: String = "",

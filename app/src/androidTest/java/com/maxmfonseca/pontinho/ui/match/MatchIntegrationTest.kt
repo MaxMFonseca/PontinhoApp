@@ -33,6 +33,44 @@ class MatchIntegrationTest {
     @Before fun setup() { db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java).build() }
     @After fun close() { stores.forEach { it.clear() }; db.close() }
 
+    @Test fun immediateDragCommitsOneRoomPermutationAndFailedReleaseRestoresCommittedOrder() {
+        val storage = RoomMatchRepository(db)
+        val id = runBlocking { storage.createMatch(CreateMatch("drag", listOf("Ana", "Bruno", "Carla").mapIndexed { index, name ->
+            CreateMatchPlayer("drag-$index", displayName = name)
+        })) }
+        val original = runBlocking { storage.observeMatch(id).first()!!.participants.sortedBy { it.rosterOrder }.map { it.id } }
+        val commands = java.util.concurrent.atomic.AtomicInteger(0)
+        var fail = false
+        val repository = object : MatchRepository by storage {
+            override suspend fun reorderParticipants(command: ReorderParticipants) {
+                commands.incrementAndGet()
+                if (fail) error("Unavailable")
+                storage.reorderParticipants(command)
+            }
+        }
+        compose.setContent { PontinhoNavHost(container(repository), startDestination = Destination.Match.createRoute(id.value)) }
+        val first = compose.onNodeWithTag("match_player_${original[0].value}")
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("match_player_${original[0].value}").fetchSemanticsNodes().isNotEmpty() }
+        val height = first.fetchSemanticsNode().boundsInRoot.height
+        val handle = compose.onNodeWithTag("match_drag_${original[0].value}")
+        handle.performTouchInput { down(center); moveBy(androidx.compose.ui.geometry.Offset(0f, height * 1.2f)) }
+        compose.waitForIdle()
+        assertEquals(0, commands.get())
+        assertEquals(original, runBlocking { storage.observeMatch(id).first()!!.participants.sortedBy { it.rosterOrder }.map { it.id } })
+        handle.performTouchInput { up() }
+        compose.waitUntil(5_000) { commands.get() == 1 && compose.onAllNodes(hasTestTag("match_drag_${original[0].value}") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+        val committed = listOf(original[1], original[0], original[2])
+        assertEquals(committed, runBlocking { storage.observeMatch(id).first()!!.participants.sortedBy { it.rosterOrder }.map { it.id } })
+        fail = true
+        compose.onNodeWithTag("match_drag_${original[1].value}").performTouchInput {
+            down(center); moveBy(androidx.compose.ui.geometry.Offset(0f, height * 1.2f)); up()
+        }
+        compose.waitUntil(5_000) { commands.get() == 2 }
+        compose.onNodeWithText(InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.match_save_error)).assertIsDisplayed()
+        assertEquals(committed, runBlocking { storage.observeMatch(id).first()!!.participants.sortedBy { it.rosterOrder }.map { it.id } })
+        assertTrue(compose.onNodeWithTag("match_player_${original[1].value}").fetchSemanticsNode().boundsInRoot.top < first.fetchSemanticsNode().boundsInRoot.top)
+    }
+
     @Test fun duplicateDialogsShowLocalizedInlineErrorKeepInputAndAllowCorrection() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val repo = RoomMatchRepository(db)
@@ -257,7 +295,7 @@ class MatchIntegrationTest {
         val model = vm(id, repo)
         val ids = model.uiState.first { !it.isLoading }.players.map { it.id }
         suspend fun settled() = withTimeout(5_000) { model.uiState.first { !it.isSaving && it.scoreDialog == null && it.playerName == null } }
-        model.addScore(ids[0]); model.selectIndicator(Indicator(Rank.ACE, CardColor.BLACK)); model.confirmIndicator()
+        model.addScore(ids[0]); model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         model.uiState.first { it.scoreDialog != null && !it.isSaving }
         model.updateScore("10"); model.confirmScore(); settled()
         assertFalse(model.uiState.value.canManagePlayers)
@@ -275,7 +313,7 @@ class MatchIntegrationTest {
         model.movePlayer(late.id, -1); settled()
         assertEquals(listOf(ids[0], ids[1], late.id, ids[2]), model.uiState.value.players.map { it.id })
         assertEquals(original, repo.observeMatch(id).first()!!.rounds.single())
-        model.addScore(late.id); model.selectIndicator(Indicator(Rank.KING, CardColor.RED)); model.confirmIndicator()
+        model.addScore(late.id); model.selectIndicatorRank(Rank.KING); model.selectIndicatorColor(CardColor.RED); model.confirmIndicator()
         model.uiState.first { it.scoreDialog != null && !it.isSaving }
         model.updateScore("7"); model.confirmScore(); settled()
         val later = repo.observeMatch(id).first()!!.openRound!!
@@ -309,7 +347,7 @@ class MatchIntegrationTest {
         val id = repo.createMatch(CreateMatch("finished-edit", listOf("Ana", "Bruno").mapIndexed { i, name -> CreateMatchPlayer("$i", displayName = name) }))
         val model = vm(id, repo)
         val ids = model.uiState.first { !it.isLoading }.players.map { it.id }
-        model.addScore(ids[0]); model.selectIndicator(Indicator(Rank.ACE, CardColor.BLACK)); model.confirmIndicator()
+        model.addScore(ids[0]); model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         model.uiState.first { it.scoreDialog != null && !it.isSaving }
         model.updateScore("101"); model.confirmScore()
         withTimeout(5_000) { model.uiState.first { it.isFinished && !it.isSaving } }
@@ -340,11 +378,11 @@ class MatchIntegrationTest {
         val vm = vm(id, repository)
         val initial = vm.uiState.first { !it.isLoading }
         val ids = initial.players.map { it.id }
-        vm.addScore(ids[0]); vm.selectIndicator(Indicator(Rank.KING, CardColor.RED)); vm.confirmIndicator()
+        vm.addScore(ids[0]); vm.selectIndicatorRank(Rank.KING); vm.selectIndicatorColor(CardColor.RED); vm.confirmIndicator()
         vm.uiState.first { it.scoreDialog != null && !it.isSaving }
         vm.dismissDialog()
         assertTrue(repository.observeMatch(id).first()!!.rounds.isEmpty())
-        vm.addScore(ids[0]); vm.selectIndicator(Indicator(Rank.KING, CardColor.RED)); vm.confirmIndicator()
+        vm.addScore(ids[0]); vm.selectIndicatorRank(Rank.KING); vm.selectIndicatorColor(CardColor.RED); vm.confirmIndicator()
         vm.uiState.first { it.scoreDialog != null && !it.isSaving }
         vm.updateScore("0"); vm.confirmScore(); vm.confirmScore()
         vm.uiState.first { !it.isSaving && it.scoreDialog == null }
@@ -355,7 +393,7 @@ class MatchIntegrationTest {
         assertEquals(RoundStatusKind.PENDING, restored.uiState.value.players[0].history[0].status)
         restored.addScore(ids[1])
         assertNull(restored.uiState.value.picker)
-        assertEquals(Indicator(Rank.KING, CardColor.RED), restored.uiState.value.scoreDialog!!.indicator)
+        assertEquals(Indicator(Rank.QUEEN, CardColor.RED), restored.uiState.value.scoreDialog!!.indicator)
         restored.wentOut()
         restored.uiState.first { !it.isSaving && it.scoreDialog == null }
         assertFalse(repository.observeMatch(id).first()!!.isFinished)

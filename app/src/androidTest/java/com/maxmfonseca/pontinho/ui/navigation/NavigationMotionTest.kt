@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
@@ -36,7 +37,7 @@ class NavigationMotionTest {
         compose.onNodeWithTag("home_root").assertDoesNotExist()
         compose.onAllNodesWithTag("learn_root").assertCountEquals(1)
 
-        compose.onNodeWithText("←").performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.match_back)).performClick()
         settleNavigationComposition()
         compose.onNodeWithTag("learn_root").assertDoesNotExist()
         compose.onAllNodesWithTag("home_root").assertCountEquals(1)

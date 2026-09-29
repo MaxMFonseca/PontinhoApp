@@ -14,6 +14,33 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HistoryViewModelTest {
+    @Test fun normalizedNameProjectionKeepsSnapshotNamesAndActiveTotalsSeparateAfterRefresh() = runTest {
+        val date = LocalDate.parse("2026-10-14")
+        val day = MutableStateFlow(DayHistory(date,
+            matches = listOf(
+                HistoryMatch(MatchId("active"), 300L, false, listOf(HistoryPlayer(PlayerId("shared"), "Julia2", 999, false, false))),
+                HistoryMatch(MatchId("new"), 200L, true, listOf(HistoryPlayer(PlayerId("shared"), "Julia2", 110, false, true))),
+                HistoryMatch(MatchId("old"), 100L, true, listOf(HistoryPlayer(PlayerId("shared"), "Julia", 33, true, false))),
+            ),
+            wins = listOf(DailyStanding(PlayerNameKey("julia"), "Julia", 1), DailyStanding(PlayerNameKey("max"), "Max", 1), DailyStanding(PlayerNameKey("julia2"), "Julia2", 0)),
+            penalties = listOf(DailyStanding(PlayerNameKey("julia2"), "Julia2", 110), DailyStanding(PlayerNameKey("max"), "Max", 110), DailyStanding(PlayerNameKey("julia"), "Julia", 33)),
+        ))
+        val vm = HistoryViewModel(date, HistoryRepository(day), StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.toggleSummary()
+        day.value = day.value.copy(matches = day.value.matches.map { match ->
+            if (match.isFinished) match else match.copy(players = match.players.map { it.copy(total = 1000) })
+        })
+        runCurrent()
+        val state = vm.uiState.value
+        assertEquals(listOf("julia" to 1, "max" to 1, "julia2" to 0), state.wins.map { it.playerKey.value to it.value })
+        assertEquals(listOf("julia2" to 110, "max" to 110, "julia" to 33), state.penalties.map { it.playerKey.value to it.value })
+        assertEquals(listOf("Julia2", "Julia2", "Julia"), state.matches.map { it.players.single().displayName })
+        assertEquals(1000, state.matches.first().players.single().total)
+        assertTrue(state.summaryExpanded)
+        assertFalse(state.isLoading)
+    }
+
     @Test fun projectionIsPreservedAndExpansionIsTheOnlyLocalHistoryState() = runTest {
         val date = LocalDate.parse("2026-10-14")
         val projection = DayHistory(

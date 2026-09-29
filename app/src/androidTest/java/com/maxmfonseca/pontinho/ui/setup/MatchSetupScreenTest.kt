@@ -59,6 +59,22 @@ class MatchSetupScreenTest {
     @get:Rule
     val composeRule = createComposeRule()
 
+    @Test fun duplicateRosterExplainsDisabledCreateAndClearsAfterNameIsResolved() {
+        var state by mutableStateOf(MatchSetupUiState(players = listOf(
+            DraftPlayer("a", null, "Max Fonseca"), DraftPlayer("b", null, "  MAX fonseca "),
+        )))
+        composeRule.setContent { SetupContent(state) }
+        val list = composeRule.onNodeWithTag("setup_root")
+        list.performScrollToNode(hasTestTag("setup_create_match"))
+        composeRule.onNodeWithTag("setup_create_match").assertIsNotEnabled()
+        composeRule.onNodeWithTag("setup_duplicate_names_error").assertIsDisplayed()
+        composeRule.runOnIdle {
+            state = state.copy(players = state.players.map { if (it.draftId == "b") it.copy(displayName = "Julia") else it })
+        }
+        composeRule.onNodeWithTag("setup_duplicate_names_error").assertDoesNotExist()
+        composeRule.onNodeWithTag("setup_create_match").assertIsEnabled()
+    }
+
     @Test fun reorderFailureIsVisibleEvenWhenTheRosterHasTwelvePlayers() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         composeRule.setContent {
@@ -319,6 +335,61 @@ class MatchSetupScreenTest {
             assertEquals(1, commits.size)
             assertEquals((1..11).map { "p$it" } + "p0", commits.single())
         }
+    }
+
+    @Test fun edgeDragReachesLastPositionWithTallRowsAtTwoHundredPercent() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val commits = mutableListOf<List<String>>()
+        val players = (0..11).map { DraftPlayer("p$it", null, "Player $it Alexandre Maximiliano de Albuquerque") }
+        composeRule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(context.resources.displayMetrics.density, 2f)) {
+                Box(Modifier.size(320.dp, 568.dp)) {
+                    SetupContent(MatchSetupUiState(players = players), onReorderPlayers = { commits.add(it) })
+                }
+            }
+        }
+        val list = composeRule.onNodeWithTag("setup_root")
+        list.performScrollToNode(hasTestTag("setup_player_p0"))
+        val bounds = list.fetchSemanticsNode().boundsInRoot
+        val handle = composeRule.onNodeWithContentDescription(context.getString(R.string.player_drag, players.first().displayName))
+        val start = handle.fetchSemanticsNode().boundsInRoot.center
+        composeRule.mainClock.autoAdvance = false
+        handle.performTouchInput { down(center); moveBy(Offset(0f, bounds.bottom - start.y - 12f)) }
+        repeat(360) { composeRule.mainClock.advanceTimeByFrame(); composeRule.waitForIdle() }
+        composeRule.runOnIdle { assertTrue(commits.isEmpty()) }
+        list.performTouchInput { up() }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            assertEquals(listOf((1..11).map { "p$it" } + "p0"), commits)
+        }
+    }
+
+    @Test fun edgeDragEvaluatesFinalViewportEvenWhenNoScrollRemains() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val commits = mutableListOf<List<String>>()
+        val players = (0..9).map { DraftPlayer("p$it", null, "Player $it") }
+        composeRule.setContent { SetupContent(MatchSetupUiState(players = players), onReorderPlayers = { commits.add(it) }) }
+        val list = composeRule.onNodeWithTag("setup_root")
+        list.performScrollToNode(hasTestTag("setup_player_p0"))
+        // Capture the layout driver before dragging disables user scrolling. This
+        // models a pending scroll/layout settling without injecting another pointer move.
+        val settleViewport = list.fetchSemanticsNode().config[SemanticsActions.ScrollToIndex].action!!
+        val bounds = list.fetchSemanticsNode().boundsInRoot
+        val handle = composeRule.onNodeWithContentDescription(context.getString(R.string.player_drag, "Player 0"))
+        val start = handle.fetchSemanticsNode().boundsInRoot.center
+        composeRule.mainClock.autoAdvance = false
+        handle.performTouchInput { down(center); moveBy(Offset(0f, bounds.bottom - start.y - 12f)) }
+        // Settle the final viewport before the next edge frame. The scroll attempt in
+        // that frame consumes zero, but these newly laid-out midpoints still count.
+        repeat(2) { composeRule.mainClock.advanceTimeByFrame(); composeRule.waitForIdle() }
+        composeRule.runOnIdle { settleViewport(3 + players.size + 2) } // Three headers, then the final footer.
+        repeat(4) { composeRule.mainClock.advanceTimeByFrame(); composeRule.waitForIdle() }
+        composeRule.runOnIdle { assertTrue(commits.isEmpty()) }
+        list.performTouchInput { up() }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { assertEquals(listOf((1..9).map { "p$it" } + "p0"), commits) }
     }
 
     private fun roster() = listOf(DraftPlayer("a", null, "Ana"), DraftPlayer("b", null, "Bruno"), DraftPlayer("c", null, "Carla"))

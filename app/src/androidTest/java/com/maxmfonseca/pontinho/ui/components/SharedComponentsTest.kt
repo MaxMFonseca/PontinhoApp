@@ -77,10 +77,10 @@ class SharedComponentsTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_winner)).assertTextEquals("✓")
-        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_loss)).assertTextEquals("×")
-        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_pending)).assertTextEquals("◷")
-        composeRule.onNodeWithContentDescription(context.getString(R.string.round_status_not_participating)).assertTextEquals("−")
+        listOf(R.string.round_status_winner, R.string.round_status_loss, R.string.round_status_pending,
+            R.string.round_status_not_participating).forEach {
+            composeRule.onNodeWithContentDescription(context.getString(it)).assertIsDisplayed()
+        }
     }
 
     @Test
@@ -207,10 +207,14 @@ class SharedComponentsTest {
         val totalLayout = totalLayouts.single()
         assertFalse("Name and total overlap: $nameBounds vs $totalBounds", nameBounds.overlaps(totalBounds))
         assertTrue("Large text should stack the total below the name", totalBounds.top >= nameBounds.bottom)
-        assertFalse(
-            "Player name overflowed visually: layout=${nameLayout.size}, node=$nameBounds",
-            nameLayout.hasVisualOverflow,
-        )
+        // hasVisualOverflow also reports intentional maxLines ellipsis as height
+        // overflow. Check the actual laid-out dimensions while requiring ellipsis.
+        assertEquals("Long names remain one line", 1, nameLayout.lineCount)
+        assertTrue("Long names must end in an ellipsis", nameLayout.isLineEllipsized(0))
+        assertFalse("Player name exceeded its measured width", nameLayout.didOverflowWidth)
+        assertTrue("Name glyph layout must fit its measured height",
+            nameLayout.multiParagraph.height <= nameLayout.size.height)
+        assertTrue("Name layout must fit its visible node", nameLayout.size.height <= nameBounds.height)
         assertFalse("Player total was ellipsized", totalLayout.isLineEllipsized(0))
         assertFalse(
             "Player total overflowed its measured width: layout=${totalLayout.size}, node=$totalBounds",

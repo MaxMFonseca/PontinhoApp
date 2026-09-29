@@ -29,6 +29,7 @@ enum class Rank(val canonicalValue: Int) {
     ;
 
     fun next(): Rank = if (this == KING) ACE else entries[ordinal + 1]
+    fun previous(): Rank = if (this == ACE) KING else entries[ordinal - 1]
 }
 
 sealed interface Card {

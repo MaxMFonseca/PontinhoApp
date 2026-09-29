@@ -14,6 +14,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LocalPinnableContainer
+import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
@@ -34,22 +36,26 @@ fun ImmediateDragHandle(
     val delta by rememberUpdatedState(onDragDelta)
     val end by rememberUpdatedState(onDragEnd)
     val cancel by rememberUpdatedState(onDragCancel)
+    val container by rememberUpdatedState(LocalPinnableContainer.current)
     Box(
         modifier.size(48.dp).semantics {
             this.contentDescription = contentDescription
             if (!enabled) disabled()
         }.pointerInput(enabled) {
             var dragging = false
+            var pin: PinnableContainer.PinnedHandle? = null
+            fun releasePin() { pin?.release(); pin = null }
             try {
                 if (enabled) detectVerticalDragGestures(
-                    onDragStart = { dragging = true; start(it) },
+                    // Reordering across a viewport edge must not dispose this pointer owner.
+                    onDragStart = { dragging = true; pin = container?.pin(); start(it) },
                     onVerticalDrag = { change, amount -> change.consume(); delta(amount) },
-                    onDragEnd = { dragging = false; end() },
-                    onDragCancel = { dragging = false; cancel() },
+                    onDragEnd = { dragging = false; end(); releasePin() },
+                    onDragCancel = { dragging = false; cancel(); releasePin() },
                 )
             } finally {
                 // Disabling/removing the handle cancels the pointer coroutine itself.
-                if (dragging) cancel()
+                try { if (dragging) cancel() } finally { releasePin() }
             }
         },
         contentAlignment = Alignment.Center,

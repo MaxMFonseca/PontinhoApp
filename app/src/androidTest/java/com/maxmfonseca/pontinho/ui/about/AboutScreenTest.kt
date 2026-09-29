@@ -22,13 +22,14 @@ class AboutScreenTest {
 
     @Test fun aboutContainsOnlyKnownFactsAndSupportAddress() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        composeRule.setContent { AboutScreen(versionName = "1.0.0", onBack = {}) }
+        composeRule.setContent { AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {}) }
 
         composeRule.onNodeWithTag("about_root").assertIsDisplayed()
         composeRule.onNodeWithText("Pontinho").assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.about_version, "1.0.0")).assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.about_purpose)).assertIsDisplayed()
         composeRule.onNodeWithText("maxmfonseca12@gmail.com").assertIsDisplayed()
+        composeRule.onNodeWithTag("about_learn").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Privacidade").assertDoesNotExist()
         composeRule.onNodeWithText("Licenças").assertDoesNotExist()
         composeRule.onNodeWithText("Câmera").assertDoesNotExist()
@@ -38,7 +39,7 @@ class AboutScreenTest {
         composeRule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, 1.5f)) {
                 Box(Modifier.size(width = 320.dp, height = 480.dp)) {
-                    AboutScreen(versionName = "1.0.0", onBack = {})
+                    AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {})
                 }
             }
         }

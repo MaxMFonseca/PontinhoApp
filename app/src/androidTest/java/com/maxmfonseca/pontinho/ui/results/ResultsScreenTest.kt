@@ -1,24 +1,86 @@
 package com.maxmfonseca.pontinho.ui.results
 
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.test.assertIsDisplayed
+import android.content.res.Configuration
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.assert
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
 import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
+import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
+import com.maxmfonseca.pontinho.settings.ThemePreference
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import java.io.FileInputStream
 import java.time.LocalDate
+import java.util.Locale
 
 class ResultsScreenTest {
     @get:Rule val composeRule = createComposeRule()
+
+    @Test fun tiedExtremesAndAllActionsRemainReachableAcrossLocalesThemesAndFontScales() {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        var scenario by mutableStateOf(Triple("pt-BR", ThemePreference.LIGHT, 1f))
+        val calls = mutableListOf<String>()
+        composeRule.setContent {
+            val (locale, theme, scale) = scenario
+            val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) })
+            CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources,
+                LocalDensity provides Density(base.resources.displayMetrics.density, scale)) {
+                PontinhoTheme(theme) { Surface { Box(Modifier.size(320.dp, 568.dp)) {
+                    ResultsScreen(ResultsUiState(MatchId("ties"), players = listOf(
+                        ResultPlayer(PlayerId("a"), "Julia", 33, 1, true, false),
+                        ResultPlayer(PlayerId("b"), "Max", 33, 1, true, false),
+                        ResultPlayer(PlayerId("c"), "Julia2", 110, 3, false, true),
+                        ResultPlayer(PlayerId("d"), "Nome longo para verificar a leitura completa", 110, 3, false, true),
+                    ), isFinished = true, isLoading = false),
+                        { calls += "new" }, { calls += "details" }, { calls += "history" })
+                } } }
+            }
+        }
+        for (locale in listOf("pt-BR", "en-US")) for (theme in listOf(ThemePreference.LIGHT, ThemePreference.DARK)) for (scale in listOf(1f, 1.5f, 2f)) {
+            composeRule.runOnIdle { scenario = Triple(locale, theme, scale); calls.clear() }
+            val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) })
+            for (id in listOf("a", "b")) {
+                composeRule.onNodeWithTag("results_root").performScrollToNode(hasTestTag("result_winner_$id"))
+                composeRule.onNodeWithTag("result_winner_$id").performScrollTo().assertIsDisplayed()
+            }
+            for (id in listOf("c", "d")) {
+                composeRule.onNodeWithTag("results_root").performScrollToNode(hasTestTag("result_highest_$id"))
+                composeRule.onNodeWithTag("result_highest_$id").performScrollTo().assertIsDisplayed()
+                composeRule.onNodeWithTag("result_winner_$id").assertDoesNotExist()
+            }
+            if (locale == "en-US" && theme == ThemePreference.DARK && scale == 2f) capture("task6-results-en-dark-200.png")
+            for (action in listOf(R.string.results_new_match, R.string.results_details, R.string.results_back_history)) {
+                composeRule.onNodeWithTag("results_root").performScrollToNode(hasText(localized.getString(action)))
+                composeRule.onNodeWithText(localized.getString(action)).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+            }
+            composeRule.runOnIdle { assertEquals(listOf("new", "details", "history"), calls) }
+            if (locale == "pt-BR" && theme == ThemePreference.LIGHT && scale == 1f) {
+                composeRule.onNodeWithTag("results_root").performScrollToIndex(0)
+                capture("task6-results-pt-light-100.png")
+            }
+        }
+    }
+
+    private fun capture(name: String) {
+        composeRule.waitForIdle()
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("screencap -p /sdcard/Download/$name")
+        FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
+        descriptor.close()
+    }
 
     @Test fun fixtureShowsWinnerAndHighestPenaltyWithoutCelebratingTheLoss() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -41,13 +103,14 @@ class ResultsScreenTest {
         composeRule.onNodeWithTag("result_highest_c").assertIsDisplayed()
         composeRule.onNodeWithTag("result_winner_c").assertDoesNotExist()
         composeRule.onNodeWithTag("results_celebration").assertDoesNotExist()
-        composeRule.onNodeWithText(context.getString(R.string.results_new_match)).assertIsDisplayed()
-        composeRule.onNodeWithText(context.getString(R.string.results_details)).assertIsDisplayed()
-        composeRule.onNodeWithText(context.getString(R.string.results_back_history)).assertIsDisplayed()
+        for (action in listOf(R.string.results_new_match, R.string.results_details, R.string.results_back_history)) {
+            composeRule.onNodeWithTag("results_root").performScrollToNode(hasText(context.getString(action)))
+            composeRule.onNodeWithText(context.getString(action)).performScrollTo().assertIsDisplayed()
+        }
         composeRule.onNodeWithTag("advertisement").assertDoesNotExist()
     }
 
-    @Test fun celebrationIsVisibleWithoutReducedMotionButDecorativeForTalkBack() {
+    @Test fun finishedResultsHaveNoCelebrationEvenWithoutReducedMotion() {
         composeRule.setContent {
             CompositionLocalProvider(LocalReducedMotion provides false) {
                 ResultsScreen(
@@ -64,7 +127,6 @@ class ResultsScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("results_celebration", useUnmergedTree = true)
-            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Text))
+        composeRule.onNodeWithTag("results_celebration", useUnmergedTree = true).assertDoesNotExist()
     }
 }

@@ -27,8 +27,9 @@ data class MatchSetupUiState(
     val reorderError: Boolean = false,
 ) {
     val minimumPlayers: Int get() = 2
-    val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating &&
-        players.map { PlayerNameKey.from(it.displayName) }.distinct().size == players.size
+    val hasDuplicateNames: Boolean get() =
+        players.map { PlayerNameKey.from(it.displayName) }.distinct().size != players.size
+    val canCreate: Boolean get() = players.size >= minimumPlayers && !isCreating && !hasDuplicateNames
     val canUseLastMatch: Boolean get() = latestMatchPlayers.isNotEmpty()
     val showNoPreviousMatchExplanation: Boolean get() = !canUseLastMatch
 }

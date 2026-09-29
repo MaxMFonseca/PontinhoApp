@@ -2,7 +2,6 @@
 <resources>
     <string name="app_name">Pontinho</string>
     <string name="match_back">Voltar</string>
-    <string name="match_round">Rodada %1$d</string>
     <string name="match_round_short">R%1$d</string>
     <string name="match_add_score">Adicionar pontos de %1$s</string>
     <string name="match_finished">Partida encerrada</string>
@@ -19,10 +18,14 @@
     <string name="match_correcting_round">Corrigindo a rodada %1$d</string>
     <string name="match_paused_rounds">Rodadas pausadas: %1$s. Serão retomadas após a correção, se a partida continuar.</string>
     <string name="score_invalid">Digite um número inteiro de 0 a 2147483647.</string>
-    <string name="indicator_title">Carta que define o coringa</string>
+    <string name="indicator_title">Escolher coringa</string>
+    <string name="indicator_select_help">Escolha a figura e a cor do coringa</string>
+    <string name="indicator_preview_compact">%1$s · 20 cada</string>
+    <string name="indicator_preview_red_accessible">Coringas: %1$s de copas e %1$s de ouros, valendo 20 pontos cada.</string>
+    <string name="indicator_preview_black_accessible">Coringas: %1$s de espadas e %1$s de paus, valendo 20 pontos cada.</string>
     <string name="indicator_red">vermelho</string>
     <string name="indicator_black">preto</string>
-    <string name="indicator_preview">%1$s %2$s → %3$s e %4$s valem 20</string>
+    <string name="indicator_preview">Coringas: %1$s e %2$s · 20 cada</string>
     <string name="home_title">Início</string>
     <string name="home_new_match">Nova partida</string>
     <string name="home_learn">Aprenda a jogar</string>
@@ -32,6 +35,8 @@
     <string name="home_today">Hoje</string>
     <string name="history_daily_summary">Resumo do dia</string>
     <string name="history_wins">Vitórias</string>
+    <string name="history_metric_value">%1$s: %2$d</string>
+    <string name="results_total">Pontos: %1$d</string>
     <string name="history_penalties">Pontos acumulados</string>
     <string name="history_summary_empty">Nenhuma partida foi encerrada ainda.</string>
     <string name="history_empty">Nenhuma partida neste dia.</string>
@@ -51,7 +56,7 @@
     <string name="route_day_history">Histórico do dia</string>
     <string name="route_results">Resultado</string>
     <string name="route_settings">Configurações</string>
-    <string name="route_appearance">Aparência e acessibilidade</string>
+    <string name="route_appearance">Aparência</string>
     <string name="route_language">Idioma</string>
     <string name="route_learn">Aprenda a jogar</string>
     <string name="route_about">Sobre</string>
@@ -63,10 +68,9 @@
     <string name="appearance_theme_system">Usar tema do dispositivo</string>
     <string name="appearance_theme_light">Claro</string>
     <string name="appearance_theme_dark">Escuro</string>
-    <string name="appearance_motion_title">Movimento</string>
-    <string name="appearance_motion_system">Usar configuração do dispositivo</string>
     <string name="appearance_motion_reduce">Reduzir movimento</string>
-    <string name="appearance_motion_full">Permitir movimento</string>
+    <string name="appearance_motion_explanation">Reduz movimentos não essenciais. A navegação entre telas permanece sem animação.</string>
+    <string name="learn_corrections_title">Correções de pontos</string>
     <string name="language_device">Idioma do dispositivo</string>
     <string name="language_portuguese">Português (Brasil)</string>
     <string name="language_english">English (United States)</string>
@@ -101,6 +105,7 @@
     <string name="setup_replace_helper">Substitui a lista atual.</string>
     <string name="setup_no_previous_match">Nenhuma partida anterior disponível.</string>
     <string name="setup_minimum_players">Mínimo de 2 jogadores</string>
+    <string name="setup_duplicate_names_error">Há nomes repetidos. Edite um dos nomes ou remova o jogador repetido para criar a partida.</string>
     <string name="setup_create_match">Criar partida</string>
     <string name="setup_blank_name_error">Digite um nome.</string>
     <string name="setup_replace_title">Substituir jogadores?</string>
@@ -114,12 +119,12 @@
     <string name="learn_round_completion">Bateu a rodada marca um jogador como vencedor. A rodada termina quando todos os outros jogadores elegíveis registram seus pontos; sem marcação, o único jogador sem pontos vence automaticamente com zero.</string>
     <string name="learn_match_end">A partida termina após uma rodada completa levar pelo menos um total acima de 100. Exatamente 100 não encerra a partida.</string>
     <string name="learn_hand_rotation">O primeiro jogador começa com a mão. Depois de cada rodada completa, a mão avança ao próximo jogador elegível na ordem e volta ao início após o último.</string>
-    <string name="learn_wildcards">A carta uma posição acima do indicador e da mesma cor é coringa; depois do rei, volta ao ás.</string>
+    <string name="learn_wildcards">Antes de cada rodada, escolha diretamente a figura e a cor do coringa. As duas cartas dessa figura e cor são coringas e valem 20 pontos cada.</string>
     <string name="learn_card_values">Valores: ás 15; cartas de 2 a 10 valem o número; valete, dama e rei valem 10; coringas e curingas impressos valem 20.</string>
     <string name="learn_late_players">Jogadores adicionados entre rodadas começam com zero. As rodadas anteriores mostram indicadores com sinal de menos cinza, pois eles não participaram. Eles passam a ser elegíveis na próxima rodada.</string>
     <string name="learn_objective_title">Objetivo</string>
     <string name="learn_order_title">Ordem e mão</string>
-    <string name="learn_wildcard_title">Indicador e coringas</string>
+    <string name="learn_wildcard_title">Coringas</string>
     <string name="learn_values_title">Valor das cartas</string>
     <string name="learn_round_title">Como a rodada termina</string>
     <string name="learn_finish_title">Como a partida termina</string>

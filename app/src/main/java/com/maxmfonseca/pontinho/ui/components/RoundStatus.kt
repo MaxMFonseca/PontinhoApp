@@ -7,7 +7,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -17,7 +24,6 @@ import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.ui.theme.Coral
@@ -28,14 +34,13 @@ val RoundStatusContainerColorKey = SemanticsPropertyKey<Int>("RoundStatusContain
 var SemanticsPropertyReceiver.roundStatusContainerColor by RoundStatusContainerColorKey
 
 enum class RoundStatusKind(
-    val symbol: String,
     @StringRes val description: Int,
 ) {
-    WINNER("✓", R.string.round_status_winner),
-    LOSS("×", R.string.round_status_loss),
-    PENDING("◷", R.string.round_status_pending),
-    EMPTY("", R.string.round_status_empty),
-    NOT_PARTICIPATING("−", R.string.round_status_not_participating),
+    WINNER(R.string.round_status_winner),
+    LOSS(R.string.round_status_loss),
+    PENDING(R.string.round_status_pending),
+    EMPTY(R.string.round_status_empty),
+    NOT_PARTICIPATING(R.string.round_status_not_participating),
 }
 
 @Composable
@@ -73,7 +78,19 @@ fun RoundStatus(
         contentColor = foreground,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(status.symbol, fontWeight = FontWeight.Bold)
+            when (status) {
+                RoundStatusKind.WINNER -> Icon(Icons.Filled.Check, null, Modifier.size(18.dp))
+                RoundStatusKind.LOSS -> Icon(Icons.Filled.Close, null, Modifier.size(18.dp))
+                RoundStatusKind.PENDING -> Canvas(Modifier.size(16.dp)) {
+                    drawCircle(foreground, style = Stroke(1.5.dp.toPx()))
+                    drawLine(foreground, center, Offset(center.x, size.height * .2f), 1.5.dp.toPx(), StrokeCap.Round)
+                    drawLine(foreground, center, Offset(size.width * .7f, center.y), 1.5.dp.toPx(), StrokeCap.Round)
+                }
+                RoundStatusKind.NOT_PARTICIPATING -> Canvas(Modifier.size(14.dp)) {
+                    drawLine(foreground, Offset(0f, center.y), Offset(size.width, center.y), 2.dp.toPx(), StrokeCap.Round)
+                }
+                RoundStatusKind.EMPTY -> Unit
+            }
         }
     }
 }

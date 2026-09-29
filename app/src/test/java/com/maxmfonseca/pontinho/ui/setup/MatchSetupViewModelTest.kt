@@ -167,17 +167,40 @@ class MatchSetupViewModelTest {
         assertEquals(listOf("Max", "Julia"), vm.uiState.value.players.map { it.displayName })
     }
 
-    @Test fun restoredDuplicateRosterCannotCreate() {
+    @Test fun restoredDuplicateRosterCannotCreateUntilNameIsResolved() {
         val saved = SavedStateHandle(mapOf(
             MatchSetupViewModel.DRAFT_IDS to arrayListOf("a", "b"),
             MatchSetupViewModel.PLAYER_IDS to arrayListOf("", ""),
-            MatchSetupViewModel.PLAYER_NAMES to arrayListOf("Max", " max "),
+            MatchSetupViewModel.PLAYER_NAMES to arrayListOf("Max Fonseca", " MAX fonseca "),
         ))
         val repo = FakeMatchRepository()
         val vm = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
         assertFalse(vm.uiState.value.canCreate)
         vm.createMatch()
         assertTrue(repo.createdCommands.isEmpty())
+        vm.openEditPlayer("b")
+        vm.updateDialogName("Julia")
+        vm.confirmPlayerName()
+        assertTrue(vm.uiState.value.canCreate)
+        assertEquals(listOf("Max Fonseca", "Julia"), vm.uiState.value.players.map { it.displayName })
+        val restored = MatchSetupViewModel(saved, repo, Dispatchers.Unconfined)
+        assertTrue(restored.uiState.value.canCreate)
+    }
+
+    @Test fun legacyDuplicateRosterFromLastMatchCannotCreateUntilConflictingPlayerIsRemoved() {
+        val latest = matchSnapshot("legacy", LocalDate.parse("2026-10-14"), 20,
+            listOf("p1" to "Max Fonseca", "p2" to " MAX fonseca ", "p3" to "Julia"))
+        val repo = FakeMatchRepository(MutableStateFlow(listOf(DaySummary(latest.localDate, listOf(latest)))))
+        val vm = viewModel(matches = repo)
+        vm.requestUseLastMatch()
+        assertEquals(3, vm.uiState.value.players.size)
+        assertFalse(vm.uiState.value.canCreate)
+        vm.createMatch()
+        assertTrue(repo.createdCommands.isEmpty())
+        vm.removePlayer(vm.uiState.value.players[1].draftId)
+        assertTrue(vm.uiState.value.canCreate)
+        vm.createMatch()
+        assertEquals(listOf("Max Fonseca", "Julia"), repo.createdCommands.single().players.map { it.displayName })
     }
 
     @Test
