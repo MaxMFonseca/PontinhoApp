@@ -1,5 +1,6 @@
 *.iml
 .gradle/
+.gradle-user-home/
 .kotlin/
 .idea/
 /build/
@@ -8,3 +9,24 @@ captures/
 .externalNativeBuild/
 .cxx/
 local.properties
+
+# Card-recognition ML workspace: keep inputs, derived data, and local tooling out of Git.
+ml/card-recognition/.venv/
+ml/card-recognition/.pytest_cache/
+ml/card-recognition/.ruff_cache/
+ml/card-recognition/.cache/
+ml/card-recognition/tensorboard/
+ml/card-recognition/**/__pycache__/
+ml/card-recognition/**/*.egg-info/
+ml/card-recognition/datasets/raw/
+ml/card-recognition/datasets/normalized/
+ml/card-recognition/datasets/generated/*
+!ml/card-recognition/datasets/generated/test-fixtures/
+!ml/card-recognition/datasets/generated/test-fixtures/**
+!ml/card-recognition/datasets/sources.json
+ml/card-recognition/artifacts/
+ml/card-recognition/checkpoints/
+ml/card-recognition/reports/*
+!ml/card-recognition/reports/dataset-audit.md
+!ml/card-recognition/reports/release/
+!ml/card-recognition/reports/release/**

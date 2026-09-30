@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools==75.8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pontinho-card-recognition"
+version = "0.1.0"
+description = "Offline training workspace for Pontinho playing-card recognition"
+readme = "README.md"
+requires-python = ">=3.9,<3.10"
+dependencies = [
+  "numpy==1.23.3",
+  "opencv-python==4.7.0.72",
+  "Pillow==10.4.0",
+  "PyYAML==6.0.2",
+  "tensorflow==2.8.4",
+  "tensorflow-addons==0.16.1",
+  "tensorflow-datasets==4.5.2",
+  "tensorflow-hub==0.12.0",
+  "tensorflow-model-optimization==0.7.1",
+  "tf-models-official==2.3.0",
+  "tflite-model-maker==0.4.3",
+  "tflite-support==0.4.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.5",
+  "ruff==0.8.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+  # Known messages observed with requirements.lock; new dependency warnings stay visible.
+  "ignore:^You are using a non-supported Python version \\(3\\.9\\.25\\)\\. Google will not post any further updates to google\\.api_core supporting this Python version\\. Please upgrade to the latest Python version, or at least Python 3\\.11, and then update google\\.api_core\\.$:FutureWarning",
+  "ignore:^You are using a Python version 3\\.9 past its end of life\\. Google will update google-auth with critical bug fixes on a best-effort basis, but not with any other fixes or features\\. Please upgrade your Python version, and then update google-auth\\.$:FutureWarning",
+  # Encode colons as regex hex escapes because pytest uses colons to separate fields.
+  "ignore:^`np\\.object` is a deprecated alias for the builtin `object`\\. To silence this warning, use `object` by itself\\. Doing this will not modify any behavior and is safe\\. \\nDeprecated in NumPy 1\\.20; for more details and guidance\\x3a https\\x3a//numpy\\.org/devdocs/release/1\\.20\\.0-notes\\.html#deprecations$:DeprecationWarning:tensorflowjs\\.read_weights$",
+  "ignore:^`np\\.bool` is a deprecated alias for the builtin `bool`\\. To silence this warning, use `bool` by itself\\. Doing this will not modify any behavior and is safe\\. If you specifically wanted the numpy scalar type, use `np\\.bool_` here\\.\\nDeprecated in NumPy 1\\.20; for more details and guidance\\x3a https\\x3a//numpy\\.org/devdocs/release/1\\.20\\.0-notes\\.html#deprecations$:DeprecationWarning:tensorflowjs\\.read_weights$",
+  "ignore:^`np\\.object` is a deprecated alias for the builtin `object`\\. To silence this warning, use `object` by itself\\. Doing this will not modify any behavior and is safe\\. \\nDeprecated in NumPy 1\\.20; for more details and guidance\\x3a https\\x3a//numpy\\.org/devdocs/release/1\\.20\\.0-notes\\.html#deprecations$:DeprecationWarning:tensorflowjs\\.write_weights$",
+  "ignore:^`np\\.bool` is a deprecated alias for the builtin `bool`\\. To silence this warning, use `bool` by itself\\. Doing this will not modify any behavior and is safe\\. If you specifically wanted the numpy scalar type, use `np\\.bool_` here\\.\\nDeprecated in NumPy 1\\.20; for more details and guidance\\x3a https\\x3a//numpy\\.org/devdocs/release/1\\.20\\.0-notes\\.html#deprecations$:DeprecationWarning:tensorflowjs\\.write_weights$",
+  "ignore:^'setParseAction' deprecated - use 'set_parse_action'$:pyparsing.PyparsingDeprecationWarning",
+  "ignore:^'parseString' deprecated - use 'parse_string'$:pyparsing.PyparsingDeprecationWarning",
+  "ignore:^'resetCache' deprecated - use 'reset_cache'$:pyparsing.PyparsingDeprecationWarning",
+  "ignore:^'enablePackrat' deprecated - use 'enable_packrat'$:pyparsing.PyparsingDeprecationWarning",
+  "ignore:^distutils Version classes are deprecated\\. Use packaging\\.version instead\\.$:DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
