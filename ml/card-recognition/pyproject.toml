@@ -12,6 +12,7 @@ dependencies = [
   "numpy==1.23.3",
   "opencv-python==4.7.0.72",
   "Pillow==10.4.0",
+  "pycocotools==2.0.7",
   "PyYAML==6.0.2",
   "tensorflow==2.8.4",
   "tensorflow-addons==0.16.1",

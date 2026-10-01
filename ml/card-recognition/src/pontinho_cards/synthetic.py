@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 from pontinho_cards.labels import parse_card_label
@@ -39,6 +41,18 @@ class CardCrop:
     crop_box: tuple[int, int, int, int]
     box_index: int
     partition: str = "train"
+
+
+@dataclass(frozen=True)
+class PlacedCard:
+    """A transformed card layer placed at one scene coordinate."""
+
+    image: Image.Image
+    x: int
+    y: int
+
+
+_LEAKAGE_KEYS = ("imageSha256", "sourceDerivativeId", "deckGroupId", "splitGroupId")
 
 
 def _load_document(value: Mapping[str, Any] | str | Path) -> Mapping[str, Any]:
@@ -71,6 +85,58 @@ def _required_text(record: Mapping[str, Any], field: str) -> str:
     return value
 
 
+def _validate_partition_isolation(partitions: Mapping[str, Any]) -> None:
+    records: list[tuple[str, Mapping[str, Any]]] = []
+    for partition in ("train", "validation", "test"):
+        for record in partitions[partition]:
+            if not isinstance(record, Mapping):
+                raise SyntheticDataError(f"{partition} record must be an object")
+            records.append((partition, record))
+
+    for key in _LEAKAGE_KEYS:
+        owners: dict[str, str] = {}
+        for partition, record in records:
+            value = _required_text(record, key)
+            previous = owners.setdefault(value, partition)
+            if previous != partition:
+                raise SyntheticDataError(f"{key} crosses dataset partitions")
+
+    image_owners: dict[str, str] = {}
+    parent: dict[str, str] = {}
+
+    def find(item: str) -> str:
+        parent.setdefault(item, item)
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for partition, record in records:
+        image_id = _required_text(record, "imageId")
+        previous = image_owners.setdefault(image_id, partition)
+        if previous != partition:
+            raise SyntheticDataError("imageId crosses dataset partitions")
+        find(image_id)
+        augmentation_parent = record.get("augmentationParentId")
+        if augmentation_parent is not None:
+            if not isinstance(augmentation_parent, str) or not augmentation_parent.strip():
+                raise SyntheticDataError("augmentationParentId must be null or non-empty text")
+            union(image_id, augmentation_parent)
+
+    component_partitions: dict[str, set[str]] = {}
+    for partition, record in records:
+        root = find(str(record["imageId"]))
+        component_partitions.setdefault(root, set()).add(partition)
+    if any(len(names) > 1 for names in component_partitions.values()):
+        raise SyntheticDataError("augmentation parent/ancestor relation crosses dataset partitions")
+
+
 def _crop_coordinate(value: Any, *, lower: int, upper: int, edge: str) -> int:
     if type(value) not in {int, float} or not math.isfinite(value):
         raise SyntheticDataError(f"crop {edge} must be finite")
@@ -92,13 +158,7 @@ def load_training_crops(
     for name in ("train", "validation", "test"):
         if not isinstance(partitions.get(name), list):
             raise SyntheticDataError(f"partition {name!r} must be a list")
-
-    non_training_hashes = {
-        record.get("imageSha256")
-        for name in ("validation", "test")
-        for record in partitions[name]
-        if isinstance(record, Mapping)
-    }
+    _validate_partition_isolation(partitions)
     root = Path(image_root)
     crops: list[CardCrop] = []
     for record in partitions["train"]:
@@ -107,8 +167,6 @@ def load_training_crops(
         digest = record.get("imageSha256")
         if not isinstance(digest, str) or len(digest) != 64:
             raise SyntheticDataError("training record requires an image SHA-256")
-        if digest in non_training_hashes:
-            raise SyntheticDataError("a training crop shares pixels with validation/test")
         image_id = _required_text(record, "imageId")
         source_id = _required_text(record, "sourceId")
         source_path = _required_text(record, "path")
@@ -178,6 +236,101 @@ def _adjust_white_balance(image: Image.Image, red: float, blue: float) -> Image.
     return Image.merge("RGBA", (r, g, b, a))
 
 
+def _visible_alpha_box(image: Image.Image, *, threshold: int = 8) -> tuple[int, int, int, int]:
+    alpha = np.asarray(image.getchannel("A"))
+    locations = np.argwhere(alpha > threshold)
+    if len(locations) == 0:
+        raise SyntheticDataError("a transformed card unexpectedly has no visible pixels")
+    ymin, xmin = locations.min(axis=0)
+    ymax, xmax = locations.max(axis=0)
+    return int(xmin), int(ymin), int(xmax) + 1, int(ymax) + 1
+
+
+def render_card(
+    image: Image.Image,
+    *,
+    target_size: tuple[int, int],
+    rotation_degrees: float,
+    perspective_offsets: Sequence[tuple[float, float]],
+    brightness: float,
+    white_balance_red: float,
+    white_balance_blue: float,
+    blur_radius: float,
+) -> Image.Image:
+    """Forward-warp a card onto padding while preserving all four source corners."""
+
+    target_width, target_height = target_size
+    if target_width <= 0 or target_height <= 0:
+        raise SyntheticDataError("target card dimensions must be positive")
+    if len(perspective_offsets) != 4 or any(len(offset) != 2 for offset in perspective_offsets):
+        raise SyntheticDataError("perspective_offsets must contain four (x, y) pairs")
+    if not -12.0 <= rotation_degrees <= 12.0:
+        raise SyntheticDataError("rotation must stay between -12 and 12 degrees")
+    if not 0.82 <= brightness <= 1.18:
+        raise SyntheticDataError("brightness is outside the realistic bound")
+    if not 0.92 <= white_balance_red <= 1.08 or not 0.92 <= white_balance_blue <= 1.08:
+        raise SyntheticDataError("white balance is outside the realistic bound")
+    if not 0.0 <= blur_radius <= 0.6:
+        raise SyntheticDataError("blur radius is outside the realistic bound")
+    if any(abs(component) > 0.04 for offset in perspective_offsets for component in offset):
+        raise SyntheticDataError("perspective offset is outside the realistic bound")
+
+    resized = image.convert("RGBA").resize(
+        (target_width, target_height), Image.Resampling.LANCZOS
+    )
+    resized = ImageEnhance.Brightness(resized).enhance(brightness)
+    resized = _adjust_white_balance(resized, white_balance_red, white_balance_blue)
+
+    padding = max(4, math.ceil(max(target_width, target_height) * 0.25))
+    output_width = target_width + 2 * padding
+    output_height = target_height + 2 * padding
+    source = np.float32(
+        [
+            [0, 0],
+            [target_width - 1, 0],
+            [target_width - 1, target_height - 1],
+            [0, target_height - 1],
+        ]
+    )
+    unit = float(min(target_width, target_height))
+    base_destination = (
+        (padding, padding),
+        (padding + target_width - 1, padding),
+        (padding + target_width - 1, padding + target_height - 1),
+        (padding, padding + target_height - 1),
+    )
+    destination = np.float32(
+        [
+            [
+                base_x + x_fraction * unit,
+                base_y + y_fraction * unit,
+            ]
+            for (base_x, base_y), (x_fraction, y_fraction) in zip(
+                base_destination, perspective_offsets
+            )
+        ]
+    )
+    matrix = cv2.getPerspectiveTransform(source, destination)
+    warped_array = cv2.warpPerspective(
+        np.asarray(resized),
+        matrix,
+        (output_width, output_height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0),
+    )
+    warped = Image.fromarray(warped_array, mode="RGBA")
+    transformed = warped.rotate(
+        rotation_degrees,
+        resample=Image.Resampling.BICUBIC,
+        expand=True,
+        fillcolor=(0, 0, 0, 0),
+    )
+    if blur_radius > 0.01:
+        transformed = transformed.filter(ImageFilter.GaussianBlur(blur_radius))
+    return transformed.crop(_visible_alpha_box(transformed))
+
+
 def _transform_crop(
     crop: CardCrop,
     *,
@@ -185,7 +338,7 @@ def _transform_crop(
     scene_size: tuple[int, int],
     card_count: int,
     jpeg_quality: int,
-) -> tuple[Image.Image, dict[str, float | int]]:
+) -> tuple[Image.Image, dict[str, Any]]:
     width, height = scene_size
     if card_count <= 4:
         base_height = height * 0.27
@@ -196,53 +349,36 @@ def _transform_crop(
     scale = rng.uniform(0.75, 1.15)
     target_height = max(18, round(base_height * scale))
     target_width = max(12, round(target_height * crop.image.width / crop.image.height))
-    resized = crop.image.resize((target_width, target_height), Image.Resampling.LANCZOS)
-
     brightness = rng.uniform(0.82, 1.18)
     red = rng.uniform(0.92, 1.08)
     blue = rng.uniform(0.92, 1.08)
     blur = rng.uniform(0.0, 0.6)
     perspective = rng.uniform(0.0, 0.04)
     rotation = rng.uniform(-12.0, 12.0)
-    resized = ImageEnhance.Brightness(resized).enhance(brightness)
-    resized = _adjust_white_balance(resized, red, blue)
-
-    padding = max(4, round(max(target_width, target_height) * 0.12))
-    canvas = Image.new(
-        "RGBA", (target_width + 2 * padding, target_height + 2 * padding), (0, 0, 0, 0)
+    perspective_offsets = tuple(
+        (rng.uniform(-perspective, perspective), rng.uniform(-perspective, perspective))
+        for _ in range(4)
     )
-    canvas.alpha_composite(resized, (padding, padding))
-    jitter = perspective * min(target_width, target_height)
-    quad = (
-        padding + rng.uniform(-jitter, jitter),
-        padding + rng.uniform(-jitter, jitter),
-        padding + target_width + rng.uniform(-jitter, jitter),
-        padding + rng.uniform(-jitter, jitter),
-        padding + target_width + rng.uniform(-jitter, jitter),
-        padding + target_height + rng.uniform(-jitter, jitter),
-        padding + rng.uniform(-jitter, jitter),
-        padding + target_height + rng.uniform(-jitter, jitter),
+    transformed = render_card(
+        crop.image,
+        target_size=(target_width, target_height),
+        rotation_degrees=rotation,
+        perspective_offsets=perspective_offsets,
+        brightness=brightness,
+        white_balance_red=red,
+        white_balance_blue=blue,
+        blur_radius=blur,
     )
-    warped = canvas.transform(
-        canvas.size,
-        Image.Transform.QUAD,
-        quad,
-        resample=Image.Resampling.BICUBIC,
-        fillcolor=(0, 0, 0, 0),
-    )
-    transformed = warped.rotate(rotation, resample=Image.Resampling.BICUBIC, expand=True)
-    if blur > 0.01:
-        transformed = transformed.filter(ImageFilter.GaussianBlur(blur))
-    alpha_box = transformed.getchannel("A").getbbox()
-    if alpha_box is None:
-        raise SyntheticDataError("a transformed card unexpectedly has no visible pixels")
-    transformed = transformed.crop(alpha_box)
     if transformed.width > width or transformed.height > height:
         raise SyntheticDataError("transformed card cannot fit fully inside the scene")
     return transformed, {
         "scale": round(scale, 6),
         "rotationDegrees": round(rotation, 6),
         "perspectiveFraction": round(perspective, 6),
+        "perspectiveOffsets": [
+            [round(x_offset, 6), round(y_offset, 6)]
+            for x_offset, y_offset in perspective_offsets
+        ],
         "brightness": round(brightness, 6),
         "whiteBalanceRed": round(red, 6),
         "whiteBalanceBlue": round(blue, 6),
@@ -318,6 +454,46 @@ def _place_without_overlap(
     raise SyntheticDataError("could not place every card without clipping or overlap")
 
 
+def composite_placed_cards(
+    background: Image.Image,
+    placements: Sequence[PlacedCard],
+    *,
+    shadow_blur_radius: float = 2.0,
+    shadow_offset: tuple[int, int] = (2, 3),
+    shadow_opacity: float = 0.28,
+) -> Image.Image:
+    """Render every shadow first, then cards, so no shadow can occlude a card."""
+
+    if shadow_blur_radius < 0 or not 0.0 <= shadow_opacity <= 1.0:
+        raise SyntheticDataError("shadow parameters are outside their valid bounds")
+    width, height = background.size
+    for placement in placements:
+        if (
+            placement.x < 0
+            or placement.y < 0
+            or placement.x + placement.image.width > width
+            or placement.y + placement.image.height > height
+        ):
+            raise SyntheticDataError("placed card is clipped by the scene")
+
+    scene = background.convert("RGBA")
+    shadow_layer = Image.new("RGBA", background.size, (0, 0, 0, 0))
+    for placement in placements:
+        shadow_alpha = placement.image.getchannel("A").filter(
+            ImageFilter.GaussianBlur(shadow_blur_radius)
+        )
+        shadow = Image.new("RGBA", placement.image.size, (0, 0, 0, 0))
+        shadow.putalpha(shadow_alpha.point(lambda value: round(value * shadow_opacity)))
+        shadow_layer.alpha_composite(
+            shadow,
+            (placement.x + shadow_offset[0], placement.y + shadow_offset[1]),
+        )
+    scene.alpha_composite(shadow_layer)
+    for placement in placements:
+        scene.alpha_composite(placement.image, (placement.x, placement.y))
+    return scene
+
+
 def compose_scene(
     crops: Sequence[CardCrop],
     *,
@@ -349,9 +525,9 @@ def compose_scene(
         "generator": "pontinho_cards.synthetic.tabletop-v1",
         "seed": background_seed,
     }
-    scene = background.convert("RGBA")
     annotations: list[dict[str, Any]] = []
     boxes: list[Mapping[str, int]] = []
+    placements: list[PlacedCard] = []
     jpeg_quality = rng.randint(82, 96)
     for instance_index in range(card_count):
         crop = crops[rng.randrange(len(crops))]
@@ -364,15 +540,7 @@ def compose_scene(
         )
         box = _place_without_overlap(transformed, rng=rng, scene_size=size, existing=boxes)
         x, y = box["xmin"], box["ymin"]
-        shadow_alpha = transformed.getchannel("A").filter(ImageFilter.GaussianBlur(2.0))
-        shadow = Image.new("RGBA", transformed.size, (0, 0, 0, 0))
-        shadow.putalpha(shadow_alpha.point(lambda value: round(value * 0.28)))
-        shadow_position = (
-            min(width - transformed.width, x + 2),
-            min(height - transformed.height, y + 3),
-        )
-        scene.alpha_composite(shadow, shadow_position)
-        scene.alpha_composite(transformed, (x, y))
+        placements.append(PlacedCard(transformed, x=x, y=y))
         instance_id = f"card-{instance_index:02d}"
         pixel_source = {
             "kind": "cardCrop",
@@ -392,7 +560,6 @@ def compose_scene(
                 "pixelSource": pixel_source,
                 "transform": transform,
                 "finalBox": box,
-                "visiblePixelBounds": dict(box),
             }
         )
         boxes.append(box)
@@ -407,6 +574,7 @@ def compose_scene(
         "pixelSources": [background_provenance, *[card["pixelSource"] for card in annotations]],
     }
     validate_annotations(metadata, width=width, height=height)
+    scene = composite_placed_cards(background, placements)
     buffer = io.BytesIO()
     scene.convert("RGB").save(
         buffer,
