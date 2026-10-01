@@ -116,12 +116,24 @@ def test_normalize_records_writes_deterministic_jsonl_and_rejection_report(
         "schemaVersion": 1,
         "rejections": [
             {
+                "imageId": "image-1",
+                "reason": "one or more boxes rejected",
+                "rejectedBoxes": [
+                    {"index": 2, "reason": "zero-area box after bounds clamping"}
+                ],
+            },
+            {
                 "imageId": "image-2",
                 "reason": "no usable standard-card boxes",
                 "rejectedBoxes": [],
             }
         ],
     }
+
+
+def test_non_mapping_record_fails_with_normalization_error(tmp_path: Path) -> None:
+    with pytest.raises(NormalizationError, match="record must be an object"):
+        normalize_records([None], out=tmp_path / "normalized")  # type: ignore[list-item]
 
 
 def test_cli_preserves_truthful_empty_manifest_as_empty_normalized_output(

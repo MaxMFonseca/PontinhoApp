@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from pontinho_cards.normalize import NormalizationError, normalize_record
+
 
 class SplitError(ValueError):
     """Raised when records cannot be partitioned without ambiguity or leakage."""
@@ -46,7 +48,26 @@ _RATIOS = {"train": 0.70, "validation": 0.15, "test": 0.15}
 
 
 def _validate_records(records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    normalized = [dict(record) for record in records]
+    raw_records = list(records)
+    if not all(isinstance(record, Mapping) for record in raw_records):
+        raise SplitError("record must be an object")
+    normalized: list[dict[str, Any]] = []
+    for record in raw_records:
+        try:
+            result = normalize_record(record)
+        except NormalizationError as error:
+            raise SplitError(str(error)) from error
+        if result.rejected_boxes:
+            raise SplitError(result.rejected_boxes[0]["reason"])
+        if result.record is None:
+            raise SplitError(result.exclusion_reason or "record has no usable boxes")
+        for raw_box, canonical_box in zip(record["boxes"], result.record["boxes"]):
+            if any(
+                raw_box[field] != canonical_box[field]
+                for field in ("xmin", "ymin", "xmax", "ymax")
+            ):
+                raise SplitError("boxes must use canonical in-bounds geometry")
+        normalized.append(result.record)
     normalized.sort(key=lambda record: str(record.get("imageId", "")))
     seen: set[str] = set()
     for record in normalized:
@@ -81,6 +102,17 @@ def _components(records: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             token = (key, str(value))
             previous = owners.setdefault(token, index)
             union_find.union(previous, index)
+    image_owners = {record["imageId"]: index for index, record in enumerate(records)}
+    for index, record in enumerate(records):
+        parent_id = record["augmentationParentId"]
+        if parent_id is None:
+            continue
+        parent_index = image_owners.get(parent_id)
+        if parent_index is None:
+            raise SplitError(
+                f"missing augmentation parent {parent_id!r} for {record['imageId']!r}"
+            )
+        union_find.union(index, parent_index)
     grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for index, record in enumerate(records):
         grouped[union_find.find(index)].append(record)

@@ -56,12 +56,10 @@ def _fixture_records() -> list[dict[str, object]]:
             deck="deck-j",
             label="7H",
             derivative="shared-derivative",
-            parent="parent-chain",
+            parent="image-10",
         )
     )
-    records.append(
-        _record(12, deck="deck-k", label="8S", real=False, parent="parent-chain")
-    )
+    records.append(_record(12, deck="deck-k", label="8S", real=False, parent="image-11"))
     return records
 
 
@@ -94,6 +92,30 @@ def test_grouped_split_is_deterministic_and_leakage_identifiers_are_disjoint() -
         assert values[1].isdisjoint(values[2])
 
 
+def test_augmentation_parent_chain_and_siblings_remain_in_one_partition() -> None:
+    records = [
+        _record(1, deck="deck-a", label="AC"),
+        _record(2, deck="deck-b", label="2D", parent="image-1"),
+        _record(3, deck="deck-c", label="3H", parent="image-2"),
+        _record(4, deck="deck-d", label="4S", parent="image-1"),
+    ]
+    split = create_splits(records, seed=20261014)
+
+    locations = {
+        record["imageId"]: partition
+        for partition, partition_records in split.items()
+        for record in partition_records
+    }
+    assert len({locations[f"image-{index}"] for index in range(1, 5)}) == 1
+
+
+def test_missing_augmentation_parent_fails_closed() -> None:
+    child = _record(1, deck="deck-a", label="AC", parent="absent-parent")
+
+    with pytest.raises(SplitError, match="missing augmentation parent"):
+        create_splits([child], seed=20261014)
+
+
 def test_test_partition_is_real_photo_only() -> None:
     split = create_splits(_fixture_records(), seed=20261014)
 
@@ -107,6 +129,47 @@ def test_split_rejects_a_duplicate_image_id_with_different_content() -> None:
 
     with pytest.raises(SplitError, match="duplicate imageId"):
         create_splits(records, seed=1)
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    [
+        (lambda record: record.update(path="../escape.jpg"), "safe relative path"),
+        (lambda record: record.update(width=True), "positive integer"),
+        (lambda record: record.update(imageSha256="not-a-hash"), "SHA-256"),
+        (lambda record: record.update(isRealPhoto="yes"), "boolean"),
+        (lambda record: record.update(boxes=[]), "no usable standard-card boxes"),
+        (
+            lambda record: record["boxes"][0].update(label="joker"),
+            "Unsupported card label",
+        ),
+        (
+            lambda record: record["boxes"][0].update(xmin=float("nan")),
+            "finite numeric coordinates",
+        ),
+        (
+            lambda record: record["boxes"][0].update(xmin=-1),
+            "canonical in-bounds geometry",
+        ),
+        (
+            lambda record: record["boxes"][0].update(xmax=1),
+            "zero-area box",
+        ),
+    ],
+)
+def test_split_rejects_noncanonical_normalized_records(
+    mutation: object, message: str
+) -> None:
+    record = _record(1, deck="deck-a", label="AC")
+    mutation(record)  # type: ignore[operator]
+
+    with pytest.raises(SplitError, match=message):
+        create_splits([record], seed=20261014)
+
+
+def test_split_rejects_non_mapping_jsonl_entry() -> None:
+    with pytest.raises(SplitError, match="record must be an object"):
+        create_splits([None], seed=20261014)  # type: ignore[list-item]
 
 
 def test_final_holdout_is_frozen_and_empty_audit_stays_truthfully_empty(tmp_path: Path) -> None:

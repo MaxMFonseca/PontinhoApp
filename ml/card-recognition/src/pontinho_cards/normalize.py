@@ -187,10 +187,13 @@ def normalize_records(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Normalize records and atomically write deterministic data and rejection files."""
 
+    raw_records = list(records)
+    if not all(isinstance(record, Mapping) for record in raw_records):
+        raise NormalizationError("record must be an object")
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    for raw in sorted(records, key=lambda item: str(item.get("imageId", ""))):
+    for raw in sorted(raw_records, key=lambda item: str(item.get("imageId", ""))):
         image_id = raw.get("imageId")
         if isinstance(image_id, str) and image_id in seen_ids:
             raise NormalizationError(f"duplicate imageId: {image_id}")
@@ -199,6 +202,14 @@ def normalize_records(
         result = normalize_record(raw, image_root=image_root)
         if result.record is not None:
             accepted.append(result.record)
+            if result.rejected_boxes:
+                rejected.append(
+                    {
+                        "imageId": image_id,
+                        "reason": "one or more boxes rejected",
+                        "rejectedBoxes": result.rejected_boxes,
+                    }
+                )
         else:
             rejected.append(
                 {
