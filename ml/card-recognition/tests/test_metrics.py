@@ -66,7 +66,7 @@ def test_real_split_producer_and_evaluator_share_one_frozen_schema(tmp_path: Pat
             {
                 "schemaVersion": 1,
                 "modelSha256": hashlib.sha256(model.read_bytes()).hexdigest(),
-                "inputManifestSha256": holdout["splitManifestSha256"],
+                "splitManifestSha256": holdout["splitManifestSha256"],
                 "scoreThreshold": 0.5,
                 "iouThreshold": 0.5,
                 "thresholdProvenance": "configured-not-validation-selected",
@@ -227,9 +227,7 @@ def test_semantically_identical_reformatted_holdout_has_same_receipt_identity(
         _write_exclusive(receipt, b"{}\n")
     holdout.write_text(json.dumps(second, indent=4), encoding="utf-8")
     with pytest.raises(EvaluationError, match="already evaluated"):
-        with _evaluation_claim(
-            holdout, "3" * 64, second_identity, tmp_path / "second.json"
-        ):
+        with _evaluation_claim(holdout, "3" * 64, second_identity, tmp_path / "second.json"):
             pass
 
 
@@ -509,7 +507,7 @@ def _write_evaluation_inputs(
             {
                 "schemaVersion": 1,
                 "modelSha256": _sha(model),
-                "inputManifestSha256": hashlib.sha256(split_payload).hexdigest(),
+                "splitManifestSha256": hashlib.sha256(split_payload).hexdigest(),
                 "scoreThreshold": 0.5,
                 "iouThreshold": 0.5,
                 "thresholdProvenance": "configured-not-validation-selected",
@@ -544,6 +542,27 @@ def test_holdout_requires_200_distinct_real_photo_hashes(tmp_path: Path) -> None
     report = tmp_path / "validation.json"
 
     with pytest.raises(EvaluationError, match="200 distinct real photos"):
+        main(["--model", str(model), "--test-manifest", str(manifest), "--report", str(report)])
+
+    assert not report.exists()
+
+
+def test_release_candidate_evaluation_requires_bound_threshold_and_source_evidence(
+    tmp_path: Path,
+) -> None:
+    model, manifest = _write_evaluation_inputs(tmp_path, _records(200))
+    contract_path = model.with_name("model-contract.json")
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    contract["thresholdProvenance"] = "validation-selected"
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    report = tmp_path / "validation.json"
+
+    with pytest.raises(EvaluationError, match="threshold evidence"):
+        main(["--model", str(model), "--test-manifest", str(manifest), "--report", str(report)])
+
+    contract["thresholdSelectionSha256"] = "a" * 64
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    with pytest.raises(EvaluationError, match="source manifest"):
         main(["--model", str(model), "--test-manifest", str(manifest), "--report", str(report)])
 
     assert not report.exists()

@@ -18,15 +18,22 @@ from pontinho_cards.train import (
     TrainingConfigError,
     TrainingOutcome,
     assert_model_maker_label_maps,
+    capture_synthetic_evidence,
     load_training_config,
     main,
+    merge_approved_synthetic_training,
     prepare_training_run,
     run_training,
     validate_validation_metrics,
     write_model_maker_csv,
+    write_model_maker_pascal,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _canonical_json(value: object) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
 def _record(
@@ -81,6 +88,248 @@ def _split_document(tmp_path: Path, *, full_vocabulary: bool = False) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _reviewed_synthetic_bundle(
+    root: Path,
+    split_path: Path,
+    records: list[dict[str, object]],
+) -> tuple[Path, Path]:
+    root.mkdir(exist_ok=True)
+    split_hash = hashlib.sha256(split_path.read_bytes()).hexdigest()
+    generation_config = {
+        "generator": "pontinho_cards.synthetic.tabletop-v1",
+        "seed": 123,
+        "requestedSceneCount": len(records),
+        "sceneSize": [32, 32],
+        "baseSplitManifestSha256": split_hash,
+    }
+    generation_hash = hashlib.sha256(
+        (json.dumps(generation_config, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    train_parent = json.loads(split_path.read_text())["partitions"]["train"][0]
+    for index, record in enumerate(records):
+        metadata = {
+            "schemaVersion": 1,
+            "seed": 1000 + index,
+            "width": 32,
+            "height": 32,
+            "background": {
+                "kind": "procedural",
+                "source": "procedural-tabletop-v1",
+                "license": "CC0-1.0",
+                "generator": "pontinho_cards.synthetic.tabletop-v1",
+                "seed": 2000 + index,
+            },
+            "cards": [],
+            "pixelSources": [],
+            "image": str(record["path"]),
+        }
+        parents: list[dict[str, object]] = []
+        if record["boxes"]:
+            parents = [
+                {
+                    "imageId": train_parent["imageId"],
+                    "imageSha256": train_parent["imageSha256"],
+                    "sourceId": train_parent["sourceId"],
+                }
+            ]
+            metadata["cards"] = [
+                {
+                    "instanceId": f"card-{index:02d}",
+                    "label": box["label"],
+                    "partition": "train",
+                    "parentImageSha256": train_parent["imageSha256"],
+                    "pixelSource": {
+                        "kind": "cardCrop",
+                        "instanceId": f"card-{index:02d}",
+                        "parentImageSha256": train_parent["imageSha256"],
+                        "parentImageId": train_parent["imageId"],
+                        "sourceId": train_parent["sourceId"],
+                        "sourcePath": train_parent["path"],
+                        "cropBox": [2, 3, 22, 25],
+                        "boxIndex": 0,
+                    },
+                    "transform": {},
+                    "finalBox": {
+                        key: box[key] for key in ("xmin", "ymin", "xmax", "ymax")
+                    },
+                }
+                for box in record["boxes"]
+            ]
+        metadata_path = root / f"scene-{index:05d}.json"
+        metadata_path.write_bytes(_canonical_json(metadata))
+        record.update(
+            {
+                "sourceId": "synthetic-tabletop-v1",
+                "deckGroupId": "synthetic-mixed-training-decks",
+                "splitGroupId": "synthetic-run-123",
+                "sourceDerivativeId": record["imageSha256"],
+                "augmentationParentId": parents[0]["imageId"] if len(parents) == 1 else None,
+                "augmentationParentIds": [parent["imageId"] for parent in parents],
+                "isRealPhoto": False,
+                "syntheticProvenance": {
+                    "generator": "pontinho_cards.synthetic.tabletop-v1",
+                    "seed": metadata["seed"],
+                    "metadata": metadata_path.name,
+                    "metadataSha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
+                    "parentImageIds": [parent["imageId"] for parent in parents],
+                    "parents": parents,
+                    "background": metadata["background"],
+                },
+            }
+        )
+    has_cards = any(record["boxes"] for record in records)
+    scene_count = max(100, len(records)) if has_cards else len(records)
+    distribution_document = {
+        "schemaVersion": 1,
+        "seed": 123,
+        "requestedSceneCount": scene_count,
+        "sceneCount": scene_count,
+        "audit": {
+            "minimumScenes": 100,
+            "reviewedScenes": 0,
+            "status": "PENDING_HUMAN_REVIEW",
+            "issues": [],
+        },
+        "trainingBlocked": True,
+    }
+    distribution = root / "distribution.json"
+    distribution.write_bytes(_canonical_json(distribution_document))
+    contact = root / "contact-sheet.jpg"
+    Image.new("RGB", (32, 32), "black").save(contact)
+    manifest_document = {
+        "schemaVersion": 1,
+        "kind": "pontinho-synthetic-training",
+        "partition": "train",
+        "seed": 123,
+        "generation": {**generation_config, "configSha256": generation_hash},
+        "records": records,
+        "audit": {
+            "status": "PENDING_HUMAN_REVIEW",
+            "minimumScenes": 100,
+            "sceneCount": scene_count,
+            "distributionSha256": hashlib.sha256(distribution.read_bytes()).hexdigest(),
+            "contactSheetSha256": hashlib.sha256(contact.read_bytes()).hexdigest(),
+        },
+    }
+    manifest = root / "training-manifest.json"
+    manifest.write_bytes(_canonical_json(manifest_document))
+    review_document = {
+        "schemaVersion": 1,
+        "status": "HUMAN_APPROVED",
+        "syntheticManifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "generationConfigSha256": generation_hash,
+        "distributionSha256": manifest_document["audit"]["distributionSha256"],
+        "contactSheetSha256": manifest_document["audit"]["contactSheetSha256"],
+    }
+    review = root / "human-review.json"
+    review.write_bytes(_canonical_json(review_document))
+    return manifest, review
+
+
+def _merge_bundle(split: Path, manifest: Path, review: Path) -> dict[str, object]:
+    evidence = capture_synthetic_evidence(
+        split_payload=split.read_bytes(),
+        synthetic_manifest=manifest,
+        human_review=review,
+    )
+    return merge_approved_synthetic_training(evidence)
+
+
+@pytest.mark.parametrize(
+    "linked_name",
+    ["training-manifest.json", "human-review.json", "distribution.json", "contact-sheet.jpg"],
+)
+def test_synthetic_authorization_rejects_symlinked_evidence(
+    tmp_path: Path, linked_name: str
+) -> None:
+    split = _split_document(tmp_path)
+    root = tmp_path / "synthetic-symlink"
+    image = root / "scene.png"
+    root.mkdir()
+    Image.new("RGB", (32, 32), "black").save(image)
+    record = _record(image)
+    record["path"] = image.name
+    record["boxes"] = []
+    manifest, review = _reviewed_synthetic_bundle(root, split, [record])
+    selected = root / linked_name
+    outside = tmp_path / f"outside-{linked_name}"
+    selected.replace(outside)
+    selected.symlink_to(outside)
+
+    with pytest.raises(TrainingConfigError, match="cannot snapshot"):
+        capture_synthetic_evidence(
+            split_payload=split.read_bytes(),
+            synthetic_manifest=manifest,
+            human_review=review,
+        )
+
+
+def test_merge_uses_only_captured_bytes_after_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    split = _split_document(tmp_path)
+    root = tmp_path / "synthetic-immutable"
+    root.mkdir()
+    image = root / "scene.png"
+    Image.new("RGB", (32, 32), "black").save(image)
+    record = _record(image)
+    record["path"] = image.name
+    record["boxes"] = []
+    manifest, review = _reviewed_synthetic_bundle(root, split, [record])
+    evidence = capture_synthetic_evidence(
+        split_payload=split.read_bytes(),
+        synthetic_manifest=manifest,
+        human_review=review,
+    )
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("authorization reopened live evidence")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    monkeypatch.setattr(Path, "is_file", forbidden)
+    merged = merge_approved_synthetic_training(evidence)
+
+    assert merged["partitions"]["train"][-1]["path"] == "synthetic-evidence/scene.png"
+
+
+def test_split_swap_after_initial_capture_cannot_change_synthetic_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    split = _split_document(tmp_path)
+    original_split = split.read_bytes()
+    root = tmp_path / "synthetic-swap"
+    root.mkdir()
+    image = root / "scene.png"
+    Image.new("RGB", (32, 32), "black").save(image)
+    record = _record(image)
+    record["path"] = image.name
+    record["boxes"] = []
+    manifest, review = _reviewed_synthetic_bundle(root, split, [record])
+    original_reader = train_module.secure_read_bytes
+    swapped = False
+
+    def swapping_reader(path: Path, *, root: Path | None = None) -> bytes:
+        nonlocal swapped
+        payload = original_reader(path, root=root)
+        if not swapped:
+            split.write_text('{"schemaVersion":1,"seed":0,"partitions":{}}')
+            swapped = True
+        return payload
+
+    monkeypatch.setattr(train_module, "secure_read_bytes", swapping_reader)
+    evidence = capture_synthetic_evidence(
+        split_payload=original_split,
+        synthetic_manifest=manifest,
+        human_review=review,
+    )
+    merged = merge_approved_synthetic_training(evidence)
+
+    assert merged["seed"] == 20261014
+    assert merged["syntheticManifestSha256"] == hashlib.sha256(
+        evidence.manifest_payload
+    ).hexdigest()
 
 
 def test_repository_config_defines_a_bounded_reproducible_training_contract() -> None:
@@ -198,6 +447,249 @@ def test_model_maker_csv_reads_only_train_and_validation(tmp_path: Path) -> None
     assert lines[1].startswith("VAL,")
     assert all("TEST" not in line for line in lines)
     assert "final-holdout-must-not-be-read" not in csv_path.read_text(encoding="utf-8")
+
+
+def test_approved_synthetic_manifest_merges_only_into_train_and_keeps_negative(
+    tmp_path: Path,
+) -> None:
+    split_path = _split_document(tmp_path, full_vocabulary=True)
+    synthetic_root = tmp_path / "synthetic"
+    negative = synthetic_root / "negative.png"
+    second_negative = synthetic_root / "negative-2.png"
+    synthetic_root.mkdir()
+    Image.new("RGB", (32, 32), "black").save(negative)
+    Image.new("RGB", (32, 32), "navy").save(second_negative)
+    record = _record(negative)
+    record["imageId"] = "synthetic-negative"
+    record["isRealPhoto"] = False
+    record["boxes"] = []
+    record["path"] = negative.name
+    second_record = _record(second_negative)
+    second_record.update(
+        {
+            "imageId": "synthetic-negative-2",
+            "path": second_negative.name,
+            "sourceDerivativeId": "synthetic-negative-2",
+            "isRealPhoto": False,
+            "boxes": [],
+        }
+    )
+    manifest, review = _reviewed_synthetic_bundle(
+        synthetic_root, split_path, [record, second_record]
+    )
+
+    merged = _merge_bundle(split_path, manifest, review)
+
+    original = json.loads(split_path.read_text(encoding="utf-8"))
+    assert merged["partitions"]["validation"] == original["partitions"]["validation"]
+    assert merged["partitions"]["test"] == original["partitions"]["test"]
+    assert [record["imageId"] for record in merged["partitions"]["train"][-2:]] == [
+        "synthetic-negative",
+        "synthetic-negative-2",
+    ]
+    assert merged["syntheticManifestSha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert merged["syntheticReviewSha256"] == hashlib.sha256(review.read_bytes()).hexdigest()
+
+    merged_path = tmp_path / "merged.json"
+    merged_path.write_text(json.dumps(merged), encoding="utf-8")
+    evidence_root = tmp_path / "synthetic-evidence"
+    evidence_root.mkdir()
+    (evidence_root / negative.name).write_bytes(negative.read_bytes())
+    (evidence_root / second_negative.name).write_bytes(second_negative.read_bytes())
+    annotations = tmp_path / "pascal"
+    counts = write_model_maker_pascal(
+        merged_path,
+        annotations,
+        train_partition="train",
+        validation_partition="validation",
+    )
+    assert counts == {"train": 3, "validation": 1, "negativeTrain": 2}
+    empty_xml = (annotations / "train" / "synthetic-negative.xml").read_text()
+    assert "<object>" not in empty_xml
+    assert ".jpg" in empty_xml
+
+
+def test_reviewed_positive_and_empty_negative_bind_separate_training_hashes(
+    tmp_path: Path,
+) -> None:
+    split_path = _split_document(tmp_path, full_vocabulary=True)
+    synthetic_root = tmp_path / "synthetic-reviewed"
+    synthetic_root.mkdir()
+    records: list[dict[str, object]] = []
+    for index in range(101):
+        image = synthetic_root / f"scene-{index:05d}.png"
+        Image.new(
+            "RGB",
+            (32, 32),
+            (index % 256, (index * 3) % 256, (index * 7) % 256),
+        ).save(image)
+        record = _record(image)
+        record["imageId"] = f"synthetic-123-{index:05d}"
+        record["path"] = image.name
+        if index == 0:
+            record["boxes"] = []
+        records.append(record)
+    manifest, review = _reviewed_synthetic_bundle(synthetic_root, split_path, records)
+
+    prepared = prepare_training_run(
+        config_path=PROJECT_ROOT / "config" / "model.yaml",
+        splits_path=split_path,
+        run_id="synthetic-reviewed",
+        checkpoint_root=tmp_path / "checkpoints",
+        requirements_lock=PROJECT_ROOT / "requirements.lock",
+        git_commit="856f3f9",
+        synthetic_manifest=manifest,
+        synthetic_review=review,
+    )
+
+    metadata = json.loads((prepared.staging_dir / "run-metadata.json").read_text())
+    assert metadata["splitManifestSha256"] == hashlib.sha256(split_path.read_bytes()).hexdigest()
+    assert metadata["trainingInputSha256"] == hashlib.sha256(
+        prepared.splits_path.read_bytes()
+    ).hexdigest()
+    assert metadata["trainingInputSha256"] != metadata["splitManifestSha256"]
+    assert metadata["syntheticManifestSha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert metadata["syntheticReviewSha256"] == hashlib.sha256(review.read_bytes()).hexdigest()
+    merged = json.loads(prepared.splits_path.read_text())
+    assert merged["partitions"]["train"][-101]["boxes"] == []
+    assert merged["partitions"]["validation"] == json.loads(split_path.read_text())[
+        "partitions"
+    ]["validation"]
+
+    from pontinho_cards.release import (
+        ReleaseInputs,
+        _validate_threshold_selection,
+        _validate_training_input,
+    )
+    from pontinho_cards.thresholds import produce_validation_manifest
+
+    validation_path = tmp_path / "validation-manifest.json"
+    validation = produce_validation_manifest(split_path, validation_path)
+    selected = {
+        "scoreThreshold": 0.5,
+        "iouThreshold": 0.5,
+        "exactHandTotalAccuracy": 0.9,
+        "exactCardMultisetAccuracy": 0.9,
+        "abstentionRate": 0.0,
+    }
+    _validate_threshold_selection(
+        {
+            "schemaVersion": 1,
+            "modelSha256": "a" * 64,
+            "checkpointSha256": "b" * 64,
+            "configSha256": "c" * 64,
+            "splitManifestSha256": validation["splitManifestSha256"],
+            "validationManifestSha256": hashlib.sha256(validation_path.read_bytes()).hexdigest(),
+            "rows": [selected],
+            "selected": selected,
+        },
+        model_hash="a" * 64,
+        checkpoint_hash="b" * 64,
+        config_hash="c" * 64,
+        split_hash=validation["splitManifestSha256"],
+        validation_hash=hashlib.sha256(validation_path.read_bytes()).hexdigest(),
+        score_threshold=0.5,
+        iou_threshold=0.5,
+    )
+    contract = {
+        key: metadata[key]
+        for key in (
+            "splitManifestSha256",
+            "trainingInputSha256",
+            "syntheticManifestSha256",
+            "syntheticReviewSha256",
+            "syntheticGenerationConfigSha256",
+        )
+    }
+    dummy = tmp_path / "unused"
+    release_inputs = ReleaseInputs(
+        model=dummy,
+        report=dummy,
+        contract=dummy,
+        source_manifest=dummy,
+        split_manifest=split_path,
+        holdout_manifest=dummy,
+        validation_receipt=dummy,
+        candidate_contract=dummy,
+        comparison=dummy,
+        validation_manifest=validation_path,
+        assets_dir=tmp_path / "assets",
+        training_input=prepared.splits_path,
+        synthetic_manifest=manifest,
+        synthetic_review=review,
+    )
+    reconstructed, payload, *_ = _validate_training_input(
+        release_inputs,
+        split_payload=split_path.read_bytes(),
+        contract=contract,
+    )
+    assert hashlib.sha256(payload).hexdigest() == metadata["trainingInputSha256"]
+    assert reconstructed["partitions"]["train"][-101]["boxes"] == []
+
+
+def test_synthetic_parent_cannot_be_rebound_to_validation_even_with_rehashed_receipt(
+    tmp_path: Path,
+) -> None:
+    split_path = _split_document(tmp_path, full_vocabulary=True)
+    synthetic_root = tmp_path / "synthetic-leak"
+    synthetic_root.mkdir()
+    records: list[dict[str, object]] = []
+    for index in range(100):
+        image = synthetic_root / f"scene-{index:05d}.png"
+        Image.new("RGB", (32, 32), (index, 10, 20)).save(image)
+        record = _record(image)
+        record["imageId"] = f"synthetic-leak-{index:05d}"
+        record["path"] = image.name
+        records.append(record)
+    manifest, review = _reviewed_synthetic_bundle(synthetic_root, split_path, records)
+    document = json.loads(manifest.read_text())
+    validation_id = json.loads(split_path.read_text())["partitions"]["validation"][0]["imageId"]
+    document["records"][0]["syntheticProvenance"]["parents"][0]["imageId"] = validation_id
+    manifest.write_bytes(_canonical_json(document))
+    receipt = json.loads(review.read_text())
+    receipt["syntheticManifestSha256"] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    review.write_bytes(_canonical_json(receipt))
+
+    with pytest.raises(TrainingConfigError, match="held-out"):
+        _merge_bundle(split_path, manifest, review)
+
+
+def test_synthetic_metadata_card_ancestry_cannot_hide_validation_pixels(
+    tmp_path: Path,
+) -> None:
+    split_path = _split_document(tmp_path, full_vocabulary=True)
+    synthetic_root = tmp_path / "synthetic-metadata-leak"
+    synthetic_root.mkdir()
+    records: list[dict[str, object]] = []
+    for index in range(100):
+        image = synthetic_root / f"scene-{index:05d}.png"
+        Image.new("RGB", (32, 32), (index, 30, 40)).save(image)
+        record = _record(image)
+        record["imageId"] = f"synthetic-metadata-leak-{index:05d}"
+        record["path"] = image.name
+        records.append(record)
+    manifest, review = _reviewed_synthetic_bundle(synthetic_root, split_path, records)
+    split = json.loads(split_path.read_text())
+    validation = split["partitions"]["validation"][0]
+    metadata_path = synthetic_root / "scene-00000.json"
+    metadata = json.loads(metadata_path.read_text())
+    pixel_source = metadata["cards"][0]["pixelSource"]
+    pixel_source["parentImageId"] = validation["imageId"]
+    pixel_source["parentImageSha256"] = validation["imageSha256"]
+    pixel_source["sourceId"] = validation["sourceId"]
+    metadata["cards"][0]["parentImageSha256"] = validation["imageSha256"]
+    metadata_path.write_bytes(_canonical_json(metadata))
+    manifest_document = json.loads(manifest.read_text())
+    manifest_document["records"][0]["syntheticProvenance"]["metadataSha256"] = hashlib.sha256(
+        metadata_path.read_bytes()
+    ).hexdigest()
+    manifest.write_bytes(_canonical_json(manifest_document))
+    receipt = json.loads(review.read_text())
+    receipt["syntheticManifestSha256"] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    review.write_bytes(_canonical_json(receipt))
+
+    with pytest.raises(TrainingConfigError, match="metadata card ancestry"):
+        _merge_bundle(split_path, manifest, review)
 
 
 def test_model_maker_label_first_occurrences_are_canonical_when_boxes_are_shuffled(
@@ -355,9 +847,13 @@ def test_run_metadata_hashes_every_reproducibility_input_atomically(tmp_path: Pa
     metadata = json.loads((prepared.staging_dir / "run-metadata.json").read_text(encoding="utf-8"))
     assert metadata == {
         "gitCommit": "0123456789abcdef",
-        "inputManifestSha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
+        "splitManifestSha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
+        "trainingInputSha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
+        "syntheticManifestSha256": None,
+        "syntheticReviewSha256": None,
+        "syntheticGenerationConfigSha256": None,
         "requirementsLockSha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
-        "schemaVersion": 1,
+        "schemaVersion": 2,
     }
     assert (prepared.staging_dir / "resolved-config.yaml").exists()
     assert not prepared.output_dir.exists()
@@ -526,8 +1022,6 @@ def test_validation_metrics_require_aggregate_and_exactly_52_per_class_ap() -> N
     with pytest.raises(TrainingConfigError, match="aggregate AP"):
         validate_validation_metrics({key: value for key, value in valid.items() if key != "AP"})
     with pytest.raises(TrainingConfigError, match="52 canonical per-class AP"):
-        validate_validation_metrics(
-            {key: value for key, value in valid.items() if key != "AP_/KS"}
-        )
+        validate_validation_metrics({key: value for key, value in valid.items() if key != "AP_/KS"})
     with pytest.raises(TrainingConfigError, match="finite"):
         validate_validation_metrics({**valid, "AP_/KS": math.nan})

@@ -1,8 +1,10 @@
-"""Evaluate detector candidates once against a frozen, real-photo holdout.
+"""Produce Stage 7 detector evidence against a frozen, real-photo holdout.
 
 The Android UI asks for the wildcard (coringa) directly. Android stores the
 preceding indicator internally, so this module accepts the chosen wildcard
 rank/color and mirrors the effective CardValueCalculator result.
+Stage 8 independently replays the exact model and securely snapshotted images;
+the Stage 7 one-use receipt prevents retuning but is not release authority.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import numpy as np
 from PIL import Image
 
 from pontinho_cards.labels import CARD_LABELS, RANK_CODES, parse_card_label
+from pontinho_cards.secure_io import SecureReadError, secure_read_bytes
 
 _COLORS = {"C": "BLACK", "D": "RED", "H": "RED", "S": "BLACK"}
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -151,60 +154,10 @@ def _digest(path: Path) -> str:
 
 
 def _read_regular_bytes(path: Path, *, root: Path | None = None) -> bytes:
-    if os.name != "posix":
-        # Windows does not expose an openat-style relative open in the Python
-        # standard library. This reader is retained for fail-closed preflight
-        # diagnostics only; evaluate_candidate refuses to evaluate below.
-        return _read_regular_bytes_windows_preflight(path, root=root)
-    if not _HAS_SECURE_COMPONENT_OPEN:
-        raise EvaluationError("secure component-relative open is unsupported on this platform")
-
-    absolute = Path(os.path.abspath(path))
-    root_absolute = Path(os.path.abspath(root if root is not None else absolute.parent))
     try:
-        relative = absolute.relative_to(root_absolute)
-    except ValueError as error:
-        raise EvaluationError(f"path escapes trusted root: {path}") from error
-    parts = relative.parts
-    if not parts or any(part in ("", ".", "..") for part in parts):
-        raise EvaluationError(f"required input path is invalid: {path}")
-
-    root_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    file_flags = os.O_RDONLY | os.O_NOFOLLOW
-    descriptors: list[int] = []
-    try:
-        anchor = Path(root_absolute.anchor)
-        current = os.open(anchor, root_flags)
-        descriptors.append(current)
-        if not stat.S_ISDIR(os.fstat(current).st_mode):
-            raise EvaluationError(f"filesystem anchor must be a directory: {anchor}")
-        for component in root_absolute.parts[1:]:
-            current = os.open(component, root_flags, dir_fd=current)
-            descriptors.append(current)
-            if not stat.S_ISDIR(os.fstat(current).st_mode):
-                raise EvaluationError(f"trusted root must be a directory: {root_absolute}")
-        for component in parts[:-1]:
-            current = os.open(component, root_flags, dir_fd=current)
-            descriptors.append(current)
-            if not stat.S_ISDIR(os.fstat(current).st_mode):
-                raise EvaluationError(f"required input parent must be a directory: {path}")
-        descriptor = os.open(parts[-1], file_flags, dir_fd=current)
-        descriptors.append(descriptor)
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise EvaluationError(f"required input must be a regular file: {path}")
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            return handle.read()
-    except OSError as error:
-        raise EvaluationError(
-            f"cannot securely read required input {path}; symbolic links or replaced path "
-            f"components are rejected: {error}"
-        ) from error
-    finally:
-        for descriptor in reversed(descriptors):
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
+        return secure_read_bytes(path, root=root)
+    except SecureReadError as error:
+        raise EvaluationError(f"cannot securely read required input {path}: {error}") from error
 
 
 def _read_regular_bytes_windows_preflight(path: Path, *, root: Path | None = None) -> bytes:
@@ -284,7 +237,7 @@ def postprocess_detections(
     iou_threshold: float,
     maximum_card_count: int = 15,
 ) -> PostprocessResult:
-    """Apply validation-selected thresholds without deduplicating by class label."""
+    """Apply caller-supplied thresholds without deduplicating by class label."""
 
     confidence_threshold = _unit(confidence_threshold, "confidence threshold")
     iou_threshold = _unit(iou_threshold, "IoU threshold")
@@ -694,8 +647,16 @@ def _validate_inputs(
         raise EvaluationError("model contract provenance or label order is invalid")
     _unit(contract.get("scoreThreshold"), "contract score threshold")
     _unit(contract.get("iouThreshold"), "contract IoU threshold")
-    if contract.get("thresholdProvenance") != "configured-not-validation-selected":
+    threshold_provenance = contract.get("thresholdProvenance")
+    if threshold_provenance not in {
+        "configured-not-validation-selected",
+        "validation-selected",
+    }:
         raise EvaluationError("model threshold provenance is missing or unsupported")
+    if threshold_provenance == "validation-selected" and not _SHA256_PATTERN.fullmatch(
+        str(contract.get("thresholdSelectionSha256", ""))
+    ):
+        raise EvaluationError("validation-selected contract lacks threshold evidence")
     manifest_bytes = _read_regular_bytes(manifest_path)
     manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
     manifest = _json_bytes(manifest_bytes, "frozen holdout manifest")
@@ -714,7 +675,7 @@ def _validate_inputs(
     split_hash = hashlib.sha256(split_bytes).hexdigest()
     if manifest.get("splitManifestSha256") != split_hash:
         raise EvaluationError("holdout split manifest hash is invalid")
-    if contract.get("inputManifestSha256") != split_hash:
+    if contract.get("splitManifestSha256") != split_hash:
         raise EvaluationError("model contract is not bound to the frozen split manifest")
     split = _json_bytes(split_bytes, "split manifest")
     if split.get("schemaVersion") != 1 or split.get("seed") != manifest.get("seed"):
@@ -1004,7 +965,13 @@ def _markdown(report: Mapping[str, Any]) -> str:
     )
 
 
-def evaluate_candidate(model: Path, manifest_path: Path, report_path: Path) -> dict[str, Any]:
+def evaluate_candidate(
+    model: Path,
+    manifest_path: Path,
+    report_path: Path,
+    *,
+    source_manifest: Path | None = None,
+) -> dict[str, Any]:
     report_path, _ = _report_paths(report_path)
     (
         contract,
@@ -1015,6 +982,12 @@ def evaluate_candidate(model: Path, manifest_path: Path, report_path: Path) -> d
         manifest_hash,
         holdout_identity,
     ) = _validate_inputs(model, manifest_path)
+    release_candidate = contract["thresholdProvenance"] == "validation-selected"
+    source_manifest_hash: str | None = None
+    if release_candidate:
+        if source_manifest is None:
+            raise EvaluationError("release-candidate evaluation requires the source manifest")
+        source_manifest_hash = hashlib.sha256(_read_regular_bytes(source_manifest)).hexdigest()
     if not _HAS_SECURE_COMPONENT_OPEN:
         raise EvaluationError(
             "secure component-relative open is unsupported on this platform; "
@@ -1033,7 +1006,9 @@ def evaluate_candidate(model: Path, manifest_path: Path, report_path: Path) -> d
         )
         report = {
             "schemaVersion": 1,
-            "status": "NOT_APPROVED_CONFIGURED_THRESHOLDS",
+            "status": "RELEASE_CANDIDATE"
+            if release_candidate
+            else "NOT_APPROVED_CONFIGURED_THRESHOLDS",
             "modelSha256": model_hash,
             "modelContractSha256": contract_hash,
             "testManifestSha256": manifest_hash,
@@ -1041,15 +1016,15 @@ def evaluate_candidate(model: Path, manifest_path: Path, report_path: Path) -> d
             "splitManifestSha256": manifest["splitManifestSha256"],
             "testPartitionSha256": manifest["testPartitionSha256"],
             "holdoutRecordCount": len(manifest["test"]),
-            "holdoutUniquePhotoCount": len(
-                {record["imageSha256"] for record in manifest["test"]}
-            ),
+            "holdoutUniquePhotoCount": len({record["imageSha256"] for record in manifest["test"]}),
             "holdoutDeckGroupCount": len({record["deckGroupId"] for record in manifest["test"]}),
             "thresholdProvenance": contract["thresholdProvenance"],
             "scoreThreshold": contract["scoreThreshold"],
             "iouThreshold": contract["iouThreshold"],
             "metrics": metrics,
         }
+        if source_manifest_hash is not None:
+            report["sourceManifestSha256"] = source_manifest_hash
         payload = (json.dumps(report, indent=2, sort_keys=True) + "\n").encode()
         markdown_payload = _markdown(report).encode()
         transaction_marker = _publish_report_pair(report_path, payload, markdown_payload)
@@ -1076,8 +1051,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--test-manifest", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--source-manifest", type=Path)
     args = parser.parse_args(argv)
-    evaluate_candidate(args.model, args.test_manifest, args.report)
+    evaluate_candidate(
+        args.model,
+        args.test_manifest,
+        args.report,
+        source_manifest=args.source_manifest,
+    )
     return 0
 
 

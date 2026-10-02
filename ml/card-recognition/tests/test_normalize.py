@@ -50,9 +50,7 @@ def test_normalize_clamps_bounds_rejects_zero_area_and_keeps_duplicate_cards(
         {"label": "AC", "xmin": 0.0, "ymin": 10.0, "xmax": 100.0, "ymax": 70.0},
         {"label": "AC", "xmin": 20.0, "ymin": 20.0, "xmax": 40.0, "ymax": 60.0},
     ]
-    assert result.rejected_boxes == [
-        {"index": 2, "reason": "zero-area box after bounds clamping"}
-    ]
+    assert result.rejected_boxes == [{"index": 2, "reason": "zero-area box after bounds clamping"}]
 
 
 def test_image_with_no_usable_standard_cards_is_excluded_with_reason(tmp_path: Path) -> None:
@@ -64,6 +62,19 @@ def test_image_with_no_usable_standard_cards_is_excluded_with_reason(tmp_path: P
 
     assert result.record is None
     assert result.exclusion_reason == "no usable standard-card boxes"
+
+
+def test_normalization_preserves_audited_archive_member_provenance(tmp_path: Path) -> None:
+    path, digest = _write_image(tmp_path)
+    record = _record(path, digest)
+    record["sourceArchiveMember"] = "photos/table.png"
+    record["sourceArchiveMemberSha256"] = digest
+
+    result = normalize_record(record, image_root=tmp_path)
+
+    assert result.record is not None
+    assert result.record["sourceArchiveMember"] == "photos/table.png"
+    assert result.record["sourceArchiveMemberSha256"] == digest
 
 
 @pytest.mark.parametrize(
@@ -86,6 +97,21 @@ def test_unsafe_paths_and_false_image_metadata_fail_closed(
     mutation(record)  # type: ignore[operator]
 
     with pytest.raises(NormalizationError, match=message):
+        normalize_record(record, image_root=tmp_path)
+
+
+@pytest.mark.parametrize("field", ["sourceId", "deckGroupId", "splitGroupId"])
+@pytest.mark.parametrize(
+    "unsafe", [".", "..", "../../outside", "C:/cards", "//server/share", "bad:name"]
+)
+def test_canonical_identity_fields_cannot_be_paths(
+    tmp_path: Path, field: str, unsafe: str
+) -> None:
+    path, digest = _write_image(tmp_path)
+    record = _record(path, digest)
+    record[field] = unsafe
+
+    with pytest.raises(NormalizationError, match="safe name"):
         normalize_record(record, image_root=tmp_path)
 
 
@@ -118,15 +144,13 @@ def test_normalize_records_writes_deterministic_jsonl_and_rejection_report(
             {
                 "imageId": "image-1",
                 "reason": "one or more boxes rejected",
-                "rejectedBoxes": [
-                    {"index": 2, "reason": "zero-area box after bounds clamping"}
-                ],
+                "rejectedBoxes": [{"index": 2, "reason": "zero-area box after bounds clamping"}],
             },
             {
                 "imageId": "image-2",
                 "reason": "no usable standard-card boxes",
                 "rejectedBoxes": [],
-            }
+            },
         ],
     }
 

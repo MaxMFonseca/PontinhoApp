@@ -1,0 +1,2 @@
+ml/card-recognition/config/release-gate.yaml text eol=lf
+ml/card-recognition/datasets/source-audit-receipt.json text eol=lf

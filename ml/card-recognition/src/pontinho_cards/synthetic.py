@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 from pontinho_cards.labels import parse_card_label
+from pontinho_cards.secure_io import SecureReadError, safe_relative_posix, secure_read_bytes
 
 
 class SyntheticDataError(ValueError):
@@ -69,13 +70,11 @@ def _load_document(value: Mapping[str, Any] | str | Path) -> Mapping[str, Any]:
 
 
 def _safe_image_path(root: Path, relative: Any) -> Path:
-    if not isinstance(relative, str) or not relative or "\\" in relative:
-        raise SyntheticDataError("card path must be non-empty and use forward slashes")
-    candidate = (root / relative).resolve()
-    resolved_root = root.resolve()
-    if candidate != resolved_root and resolved_root not in candidate.parents:
-        raise SyntheticDataError("card path must remain beneath image_root")
-    return candidate
+    try:
+        safe = safe_relative_posix(relative, field="card path")
+    except ValueError as error:
+        raise SyntheticDataError(str(error)) from error
+    return Path(os.path.abspath(root)).joinpath(*safe.parts)
 
 
 def _required_text(record: Mapping[str, Any], field: str) -> str:
@@ -172,10 +171,10 @@ def load_training_crops(
         source_path = _required_text(record, "path")
         image_path = _safe_image_path(root, source_path)
         try:
-            payload = image_path.read_bytes()
+            payload = secure_read_bytes(image_path, root=root)
             image = Image.open(io.BytesIO(payload)).convert("RGB")
-        except (OSError, SyntaxError) as error:
-            raise SyntheticDataError(f"cannot read training image {image_path}") from error
+        except (SecureReadError, OSError, SyntaxError) as error:
+            raise SyntheticDataError(f"cannot securely read training image {image_path}") from error
         if hashlib.sha256(payload).hexdigest() != digest:
             raise SyntheticDataError(f"training image hash mismatch: {image_path}")
         if image.size != (record.get("width"), record.get("height")):
@@ -275,9 +274,7 @@ def render_card(
     if any(abs(component) > 0.04 for offset in perspective_offsets for component in offset):
         raise SyntheticDataError("perspective offset is outside the realistic bound")
 
-    resized = image.convert("RGBA").resize(
-        (target_width, target_height), Image.Resampling.LANCZOS
-    )
+    resized = image.convert("RGBA").resize((target_width, target_height), Image.Resampling.LANCZOS)
     resized = ImageEnhance.Brightness(resized).enhance(brightness)
     resized = _adjust_white_balance(resized, white_balance_red, white_balance_blue)
 
@@ -376,8 +373,7 @@ def _transform_crop(
         "rotationDegrees": round(rotation, 6),
         "perspectiveFraction": round(perspective, 6),
         "perspectiveOffsets": [
-            [round(x_offset, 6), round(y_offset, 6)]
-            for x_offset, y_offset in perspective_offsets
+            [round(x_offset, 6), round(y_offset, 6)] for x_offset, y_offset in perspective_offsets
         ],
         "brightness": round(brightness, 6),
         "whiteBalanceRed": round(red, 6),
@@ -520,7 +516,7 @@ def compose_scene(
     background = _procedural_background(size, background_seed)
     background_provenance: dict[str, Any] = {
         "kind": "procedural",
-        "source": "procedural:tabletop-v1",
+        "source": "procedural-tabletop-v1",
         "license": "CC0-1.0",
         "generator": "pontinho_cards.synthetic.tabletop-v1",
         "seed": background_seed,
@@ -546,6 +542,7 @@ def compose_scene(
             "kind": "cardCrop",
             "instanceId": instance_id,
             "parentImageSha256": crop.parent_image_sha256,
+            "parentImageId": crop.image_id,
             "sourceId": crop.source_id,
             "sourcePath": crop.source_path,
             "cropBox": list(crop.crop_box),
@@ -672,7 +669,34 @@ def generate_dataset(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.", dir=output_path.parent))
     try:
-        crops = load_training_crops(split, image_root=image_root)
+        split_document = _load_document(split)
+        if isinstance(split, Mapping):
+            split_payload = (
+                json.dumps(split_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+        else:
+            split_path = Path(split)
+            try:
+                split_payload = secure_read_bytes(split_path, root=split_path.parent)
+            except SecureReadError as error:
+                raise SyntheticDataError(f"cannot securely read split manifest: {error}") from error
+        base_split_hash = hashlib.sha256(split_payload).hexdigest()
+        generation_config = {
+            "generator": "pontinho_cards.synthetic.tabletop-v1",
+            "seed": seed,
+            "requestedSceneCount": scene_count,
+            "sceneSize": [size[0], size[1]],
+            "baseSplitManifestSha256": base_split_hash,
+        }
+        generation_config_hash = hashlib.sha256(
+            (
+                json.dumps(
+                    generation_config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                + "\n"
+            ).encode("utf-8")
+        ).hexdigest()
+        crops = load_training_crops(split_document, image_root=image_root)
         scenes: list[Image.Image] = []
         metadata: list[dict[str, Any]] = []
         if crops:
@@ -700,6 +724,87 @@ def generate_dataset(
                 optimize=False,
                 progressive=False,
             )
+            records: list[dict[str, Any]] = []
+            for index, scene_metadata in enumerate(metadata):
+                filename = str(scene_metadata["image"])
+                image_path = staging / filename
+                payload = image_path.read_bytes()
+                cards = scene_metadata["cards"]
+                parent_ids = sorted({str(card["pixelSource"]["parentImageId"]) for card in cards})
+                parents = sorted(
+                    (
+                        {
+                            "imageId": str(card["pixelSource"]["parentImageId"]),
+                            "imageSha256": str(card["pixelSource"]["parentImageSha256"]),
+                            "sourceId": str(card["pixelSource"]["sourceId"]),
+                        }
+                        for card in cards
+                    ),
+                    key=lambda item: (item["imageId"], item["imageSha256"], item["sourceId"]),
+                )
+                unique_parents = [dict(item) for item in {tuple(item.items()) for item in parents}]
+                unique_parents.sort(
+                    key=lambda item: (item["imageId"], item["imageSha256"], item["sourceId"])
+                )
+                metadata_path = staging / f"scene-{index:05d}.json"
+                records.append(
+                    {
+                        "imageId": f"synthetic-{seed}-{index:05d}",
+                        "path": filename,
+                        "width": int(scene_metadata["width"]),
+                        "height": int(scene_metadata["height"]),
+                        "sourceId": "synthetic-tabletop-v1",
+                        "deckGroupId": "synthetic-mixed-training-decks",
+                        "splitGroupId": f"synthetic-run-{seed}",
+                        "sourceDerivativeId": hashlib.sha256(payload).hexdigest(),
+                        "imageSha256": hashlib.sha256(payload).hexdigest(),
+                        "augmentationParentId": parent_ids[0] if len(parent_ids) == 1 else None,
+                        "augmentationParentIds": parent_ids,
+                        "isRealPhoto": False,
+                        "lighting": "synthetic",
+                        "boxes": [
+                            {
+                                "label": card["label"],
+                                **card["finalBox"],
+                            }
+                            for card in cards
+                        ],
+                        "syntheticProvenance": {
+                            "generator": "pontinho_cards.synthetic.tabletop-v1",
+                            "seed": int(scene_metadata["seed"]),
+                            "metadata": f"scene-{index:05d}.json",
+                            "metadataSha256": hashlib.sha256(
+                                metadata_path.read_bytes()
+                            ).hexdigest(),
+                            "parentImageIds": parent_ids,
+                            "parents": unique_parents,
+                            "background": dict(scene_metadata["background"]),
+                        },
+                    }
+                )
+            manifest = {
+                "schemaVersion": 1,
+                "kind": "pontinho-synthetic-training",
+                "partition": "train",
+                "seed": seed,
+                "generation": {
+                    **generation_config,
+                    "configSha256": generation_config_hash,
+                },
+                "records": records,
+                "audit": {
+                    "status": report["audit"]["status"],
+                    "minimumScenes": report["audit"]["minimumScenes"],
+                    "sceneCount": report["sceneCount"],
+                    "distributionSha256": hashlib.sha256(
+                        (staging / "distribution.json").read_bytes()
+                    ).hexdigest(),
+                    "contactSheetSha256": hashlib.sha256(
+                        (staging / "contact-sheet.jpg").read_bytes()
+                    ).hexdigest(),
+                },
+            }
+            _write_json(staging / "training-manifest.json", manifest)
         os.replace(staging, output_path)
         return report
     except BaseException:

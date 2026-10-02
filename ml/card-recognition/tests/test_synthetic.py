@@ -17,6 +17,7 @@ from pontinho_cards.synthetic import (
     main,
     validate_annotations,
 )
+from pontinho_cards.train import capture_synthetic_evidence, merge_approved_synthetic_training
 
 
 def _write_card(path: Path, *, accent: str) -> str:
@@ -147,9 +148,7 @@ def test_forward_perspective_preserves_orientation_corners_edges_and_alpha_bound
         locations = np.argwhere(mask)
         assert len(locations) >= 25
         centroids.append(locations.mean(axis=0))
-    black_edge = (
-        (pixels[:, :, 0] < 45) & (pixels[:, :, 1] < 45) & (pixels[:, :, 2] < 45)
-    )
+    black_edge = (pixels[:, :, 0] < 45) & (pixels[:, :, 1] < 45) & (pixels[:, :, 2] < 45)
     edge_locations = np.argwhere(black_edge & (pixels[:, :, 3] > 8))
     assert int(edge_locations[:, 0].max() - edge_locations[:, 0].min()) > rendered.height * 0.85
     assert int(edge_locations[:, 1].max() - edge_locations[:, 1].min()) > rendered.width * 0.85
@@ -205,6 +204,22 @@ def test_missing_card_provenance_fails_closed(tmp_path: Path) -> None:
     split["partitions"]["train"][0]["sourceId"] = None  # type: ignore[index]
 
     with pytest.raises(SyntheticDataError, match="sourceId"):
+        load_training_crops(split, image_root=image_root)
+
+
+def test_training_crop_symlink_parent_cannot_read_outside_image_root(tmp_path: Path) -> None:
+    split, image_root = _split_fixture(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_card = outside / "card.png"
+    digest = _write_card(outside_card, accent="#992233")
+    linked = image_root / "linked"
+    linked.symlink_to(outside, target_is_directory=True)
+    record = split["partitions"]["train"][0]  # type: ignore[index]
+    record["path"] = "linked/card.png"
+    record["imageSha256"] = digest
+
+    with pytest.raises(SyntheticDataError, match="secure|symbolic link|safely"):
         load_training_crops(split, image_root=image_root)
 
 
@@ -313,6 +328,43 @@ def test_dataset_generation_is_atomic_and_writes_audit_artifacts(tmp_path: Path)
     assert first_report == second_report
     assert _tree_hashes(first) == _tree_hashes(second)
     assert (first / "contact-sheet.jpg").is_file()
+    manifest = json.loads((first / "training-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["kind"] == "pontinho-synthetic-training"
+    assert manifest["partition"] == "train"
+    assert manifest["generation"]["generator"] == "pontinho_cards.synthetic.tabletop-v1"
+    assert manifest["generation"]["baseSplitManifestSha256"] == hashlib.sha256(
+        (json.dumps(split, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    assert manifest["generation"]["configSha256"]
+    assert len(manifest["records"]) == 6
+    assert manifest["records"][0]["boxes"] == []
+    assert all(record["isRealPhoto"] is False for record in manifest["records"])
+    assert {record["sourceId"] for record in manifest["records"]} == {
+        "synthetic-tabletop-v1"
+    }
+    assert all(
+        record["syntheticProvenance"]["metadataSha256"]
+        == hashlib.sha256(
+            (first / record["syntheticProvenance"]["metadata"]).read_bytes()
+        ).hexdigest()
+        for record in manifest["records"]
+    )
+    assert all(
+        record["syntheticProvenance"]["background"]["kind"] == "procedural"
+        for record in manifest["records"]
+    )
+    assert all(
+        record["augmentationParentId"] is None or record["augmentationParentId"].startswith("card-")
+        for record in manifest["records"]
+    )
+    assert (
+        manifest["audit"]["distributionSha256"]
+        == hashlib.sha256((first / "distribution.json").read_bytes()).hexdigest()
+    )
+    assert (
+        manifest["audit"]["contactSheetSha256"]
+        == hashlib.sha256((first / "contact-sheet.jpg").read_bytes()).hexdigest()
+    )
     report = json.loads((first / "distribution.json").read_text(encoding="utf-8"))
     assert report["sceneCount"] == 6
     assert report["audit"]["minimumScenes"] == 100
@@ -320,7 +372,7 @@ def test_dataset_generation_is_atomic_and_writes_audit_artifacts(tmp_path: Path)
     assert report["trainingBlocked"] is True
     assert sum(report["cardCountDistribution"].values()) == 6
     assert int(report["cardCountDistribution"]["0"]) >= 1
-    assert report["backgrounds"] == {"procedural:tabletop-v1": 6}
+    assert report["backgrounds"] == {"procedural-tabletop-v1": 6}
 
     sentinel = first / "sentinel.txt"
     sentinel.write_text("unchanged", encoding="utf-8")
@@ -351,3 +403,53 @@ def test_empty_split_cli_reports_blocked_audit_without_inventing_sources(tmp_pat
     assert report["trainingBlocked"] is True
     assert report["classFrequency"] == {}
     assert not (output / "contact-sheet.jpg").exists()
+
+
+def test_generated_hundred_scene_positive_and_negative_bundle_passes_reviewed_merge(
+    tmp_path: Path,
+) -> None:
+    split, image_root = _split_fixture(tmp_path)
+    split_path = tmp_path / "splits.json"
+    split_path.write_text(json.dumps(split, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output = tmp_path / "generated-reviewed"
+
+    generate_dataset(
+        split_path,
+        output=output,
+        image_root=image_root,
+        seed=77,
+        scene_count=100,
+        size=(320, 320),
+    )
+    manifest = output / "training-manifest.json"
+    manifest_document = json.loads(manifest.read_text())
+    review = output / "human-review.json"
+    review.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "status": "HUMAN_APPROVED",
+                "syntheticManifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "generationConfigSha256": manifest_document["generation"]["configSha256"],
+                "distributionSha256": manifest_document["audit"]["distributionSha256"],
+                "contactSheetSha256": manifest_document["audit"]["contactSheetSha256"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = capture_synthetic_evidence(
+        split_payload=split_path.read_bytes(),
+        synthetic_manifest=manifest,
+        human_review=review,
+    )
+    merged = merge_approved_synthetic_training(evidence)
+
+    generated = merged["partitions"]["train"][-100:]
+    assert generated[0]["boxes"] == []
+    assert any(record["boxes"] for record in generated[1:])
+    assert merged["partitions"]["validation"] == split["partitions"]["validation"]
+    assert merged["partitions"]["test"] == split["partitions"]["test"]

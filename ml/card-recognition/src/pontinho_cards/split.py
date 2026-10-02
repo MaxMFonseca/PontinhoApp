@@ -63,8 +63,7 @@ def _validate_records(records: Iterable[Mapping[str, Any]]) -> list[dict[str, An
             raise SplitError(result.exclusion_reason or "record has no usable boxes")
         for raw_box, canonical_box in zip(record["boxes"], result.record["boxes"]):
             if any(
-                raw_box[field] != canonical_box[field]
-                for field in ("xmin", "ymin", "xmax", "ymax")
+                raw_box[field] != canonical_box[field] for field in ("xmin", "ymin", "xmax", "ymax")
             ):
                 raise SplitError("boxes must use canonical in-bounds geometry")
         normalized.append(result.record)
@@ -109,9 +108,7 @@ def _components(records: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             continue
         parent_index = image_owners.get(parent_id)
         if parent_index is None:
-            raise SplitError(
-                f"missing augmentation parent {parent_id!r} for {record['imageId']!r}"
-            )
+            raise SplitError(f"missing augmentation parent {parent_id!r} for {record['imageId']!r}")
         union_find.union(index, parent_index)
     grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for index, record in enumerate(records):
@@ -196,9 +193,9 @@ def _document(partitions: Mapping[str, list[dict[str, Any]]], seed: int) -> dict
 
 
 def _serialized(document: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    return (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
@@ -237,9 +234,7 @@ def write_split_manifests(
     }
     holdout_payload = _serialized(holdout_document)
     if holdout_path.exists() and holdout_path.read_bytes() != holdout_payload:
-        raise SplitError(
-            f"frozen final holdout differs from requested split: {holdout_path}"
-        )
+        raise SplitError(f"frozen final holdout differs from requested split: {holdout_path}")
     if not holdout_path.exists():
         _atomic_write(holdout_path, holdout_payload)
     _atomic_write(output_path, split_payload)

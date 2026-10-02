@@ -21,9 +21,7 @@ SUIT_CODES: tuple[str, ...] = ("C", "D", "H", "S")
 
 # This order mirrors Android's CLUBS, DIAMONDS, HEARTS, SPADES suit order and
 # ACE..KING rank order. Model output indices must never be inferred from a source.
-CARD_LABELS: tuple[str, ...] = tuple(
-    f"{rank}{suit}" for suit in SUIT_CODES for rank in RANK_CODES
-)
+CARD_LABELS: tuple[str, ...] = tuple(f"{rank}{suit}" for suit in SUIT_CODES for rank in RANK_CODES)
 _CARD_LABEL_SET = frozenset(CARD_LABELS)
 
 

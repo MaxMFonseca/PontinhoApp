@@ -26,7 +26,14 @@ candidate matrix and release blocker.
   different host, that exact host must be recorded as
   `license.reviewedEvidenceHost`; generic license/deed hosts remain forbidden.
 - A person must approve the evidence and record a note that points back to it.
-- The downloaded archive is hashed before extraction; a mismatch is fatal.
+- `archiveInput.localPath` names one immutable local ZIP/TAR snapshot and the
+  downloaded archive is hashed before use; a mismatch is fatal. Normalization
+  reads members directly without trusting a mutable extracted directory.
+- `adapter.kind` must be `COCO_JSON_SCENES` or
+  `ISOLATED_CARD_FOLDERS`. The manifest explicitly binds the annotation member
+  when applicable, image prefix, and complete source-label-to-`CARD_LABELS`
+  map. Unsafe members, archive links, unmapped labels, and other formats fail
+  closed.
 - Source version is typed as either a full Git commit SHA tied to the source
   repository or a numeric platform dataset-version ID tied to its exact
   canonical provider route: Kaggle `/datasets/{owner}/{slug}` or Roboflow
@@ -46,8 +53,19 @@ The Android application currently contains no card-recognition model or
 third-party card imagery. A future model may be promoted only when the strict
 manifest parser accepts every source and the release receipt cryptographically
 binds that manifest, the frozen split and holdout, the selected exported model,
-and its validation report. Empty manifests, platform license badges without
+and its validation report. Each declared source archive must also exist at its
+canonical path and match the manifest checksum, and a human-review receipt must
+match the trust-root hash configured in `config/release-gate.yaml`. Empty
+manifests, missing archives or audit receipts, platform license badges without
 source-specific evidence, and merely permissive licenses fail closed.
+
+For every real train, validation, or test image, that receipt must identify a
+safe `sourceArchiveMember` path inside the exact hashed source archive, its
+`sourceArchiveMemberSha256`,
+the canonical image checksum and dimensions, and the human real-photo
+classification. It also binds the complete normalized dataset digest and exact
+split-manifest digest. The currently pinned receipt is deliberately
+`NOT_APPROVED` and cannot authorize a model.
 
 The development toolchain uses the exact versions resolved in
 `ml/card-recognition/requirements.lock`, including TensorFlow, TensorFlow Lite

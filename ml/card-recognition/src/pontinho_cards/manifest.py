@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from pontinho_cards.labels import parse_card_label
+from pontinho_cards.labels import CARD_LABELS, parse_card_label
+from pontinho_cards.secure_io import safe_name, safe_relative_posix
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -61,6 +62,14 @@ class SourceCapabilities:
 
 
 @dataclass(frozen=True)
+class SourceAdapter:
+    kind: str
+    annotation_member: str | None
+    image_prefix: str
+    label_map: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class DatasetSource:
     source_id: str
     title: str
@@ -70,6 +79,8 @@ class DatasetSource:
     retrieved_at: str
     source_revision: SourceRevision
     archive_sha256: str
+    archive_local_path: str
+    adapter: SourceAdapter
     license: LicenseEvidence
     annotation_status: str
     attribution: str
@@ -119,6 +130,13 @@ def _text(mapping: Mapping[str, Any], key: str, path: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ManifestError(f"{path}.{key} is required and must be non-empty text")
     return value
+
+
+def _safe_manifest_name(mapping: Mapping[str, Any], key: str, path: str) -> str:
+    try:
+        return safe_name(_required(mapping, key, path), field=f"{path}.{key}")
+    except ValueError as error:
+        raise ManifestError(str(error)) from error
 
 
 def _url(mapping: Mapping[str, Any], key: str, path: str) -> str:
@@ -234,16 +252,17 @@ def _parse_revision(raw: Any, path: str, source_url: str) -> SourceRevision:
             version_id=version_id,
         )
 
-    raise ManifestError(
-        f"{path}.kind must be GIT_COMMIT or PLATFORM_DATASET_VERSION, not {kind!r}"
-    )
+    raise ManifestError(f"{path}.kind must be GIT_COMMIT or PLATFORM_DATASET_VERSION, not {kind!r}")
 
 
 def _parse_source(raw: Any, index: int) -> DatasetSource:
     path = f"sources[{index}]"
     source = _object(raw, path)
 
-    source_id = _text(source, "id", path)
+    try:
+        source_id = safe_name(_required(source, "id", path), field=f"{path}.id")
+    except ValueError as error:
+        raise ManifestError(str(error)) from error
     title = _text(source, "title", path)
     publisher = _text(source, "publisher", path)
     source_url = _url(source, "sourceUrl", path)
@@ -254,6 +273,56 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
     archive_sha256 = _required(source, "archiveSha256", path)
     if not isinstance(archive_sha256, str) or not _SHA256_RE.fullmatch(archive_sha256):
         raise ManifestError(f"{path}.archiveSha256 must be a lowercase 64-character SHA-256")
+    archive_input = _object(_required(source, "archiveInput", path), f"{path}.archiveInput")
+    try:
+        archive_local_path = safe_name(
+            _required(archive_input, "localPath", f"{path}.archiveInput"),
+            field=f"{path}.archiveInput.localPath safe filename",
+        )
+    except ValueError as error:
+        raise ManifestError(str(error)) from error
+
+    adapter_raw = _object(_required(source, "adapter", path), f"{path}.adapter")
+    adapter_kind = _text(adapter_raw, "kind", f"{path}.adapter")
+    if adapter_kind not in {"COCO_JSON_SCENES", "ISOLATED_CARD_FOLDERS"}:
+        raise ManifestError(f"{path}.adapter.kind is unsupported")
+    try:
+        image_prefix = safe_relative_posix(
+            _required(adapter_raw, "imagePrefix", f"{path}.adapter"),
+            field=f"{path}.adapter.imagePrefix",
+        ).as_posix()
+    except ValueError as error:
+        raise ManifestError(str(error)) from error
+    annotation_member_raw = adapter_raw.get("annotationMember")
+    if adapter_kind == "COCO_JSON_SCENES":
+        if not isinstance(annotation_member_raw, str) or not annotation_member_raw:
+            raise ManifestError(f"{path}.adapter.annotationMember is required")
+        try:
+            annotation_member = safe_relative_posix(
+                annotation_member_raw, field=f"{path}.adapter.annotationMember"
+            ).as_posix()
+        except ValueError as error:
+            raise ManifestError(str(error)) from error
+    else:
+        if annotation_member_raw is not None:
+            raise ManifestError(f"{path}.adapter.annotationMember is unsupported")
+        annotation_member = None
+    label_map_raw = _object(
+        _required(adapter_raw, "labelMap", f"{path}.adapter"), f"{path}.adapter.labelMap"
+    )
+    label_map: dict[str, str] = {}
+    for source_label, canonical in label_map_raw.items():
+        if (
+            not isinstance(source_label, str)
+            or not source_label.strip()
+            or not isinstance(canonical, str)
+        ):
+            raise ManifestError(f"{path}.adapter.labelMap entries must be non-empty text")
+        if canonical not in CARD_LABELS:
+            raise ManifestError(f"{path}.adapter.labelMap contains unsupported canonical label")
+        label_map[source_label] = canonical
+    if not label_map:
+        raise ManifestError(f"{path}.adapter.labelMap must not be empty")
 
     license_path = f"{path}.license"
     license_raw = _object(_required(source, "license", path), license_path)
@@ -304,9 +373,7 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
     if title.casefold() not in evidence_text.casefold() and publisher.casefold() not in (
         evidence_text.casefold()
     ):
-        raise ManifestError(
-            f"{license_path}.evidenceText must identify the source or publisher"
-        )
+        raise ManifestError(f"{license_path}.evidenceText must identify the source or publisher")
     if legal_tool_url != _LEGAL_TOOL_URLS[license_kind]:
         raise ManifestError(
             f"{license_path}.legalToolUrl must equal {_LEGAL_TOOL_URLS[license_kind]!r}"
@@ -344,13 +411,9 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
 
     provides_path = f"{path}.provides"
     provides_raw = _object(_required(source, "provides", path), provides_path)
-    deck_design_count = _nonnegative_int(
-        provides_raw, "distinctPhysicalDeckDesigns", provides_path
-    )
+    deck_design_count = _nonnegative_int(provides_raw, "distinctPhysicalDeckDesigns", provides_path)
     if deck_design_count < 1:
-        raise ManifestError(
-            f"{provides_path}.distinctPhysicalDeckDesigns must be at least one"
-        )
+        raise ManifestError(f"{provides_path}.distinctPhysicalDeckDesigns must be at least one")
     provides = SourceCapabilities(
         real_scenes=_bool(provides_raw, "realScenes", provides_path),
         isolated_cards=_bool(provides_raw, "isolatedCards", provides_path),
@@ -381,6 +444,12 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         raise ManifestError(
             f"{path}.holdoutEligiblePhotoCount requires evaluation-ready bounding boxes"
         )
+    if set(label_map.values()) != set(labels):
+        raise ManifestError(f"{path}.adapter.labelMap must map exactly the declared labels")
+    if adapter_kind == "COCO_JSON_SCENES" and annotation_status != "BOUNDING_BOXES":
+        raise ManifestError(f"{path}.adapter COCO scenes require BOUNDING_BOXES")
+    if adapter_kind == "ISOLATED_CARD_FOLDERS" and annotation_status != "CLASS_LABELS":
+        raise ManifestError(f"{path}.adapter isolated folders require CLASS_LABELS")
 
     return DatasetSource(
         source_id=source_id,
@@ -391,6 +460,8 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         retrieved_at=_text(source, "retrievedAt", path),
         source_revision=revision,
         archive_sha256=archive_sha256,
+        archive_local_path=archive_local_path,
+        adapter=SourceAdapter(adapter_kind, annotation_member, image_prefix, label_map),
         license=LicenseEvidence(
             license_kind,
             evidence_url,
@@ -400,7 +471,7 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         ),
         annotation_status=annotation_status,
         attribution=_text(source, "attribution", path),
-        deck_group_id=_text(source, "deckGroupId", path),
+        deck_group_id=_safe_manifest_name(source, "deckGroupId", path),
         labels=tuple(labels),
         provides=provides,
         usable_photo_count=usable_count,
@@ -410,14 +481,15 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
     )
 
 
-def load_source_manifest(path: str | Path) -> SourceManifest:
-    """Load a reviewed source manifest and reject incomplete evidence."""
+def parse_source_manifest_bytes(
+    payload: bytes, *, source_name: str = "source manifest"
+) -> SourceManifest:
+    """Parse one immutable manifest snapshot without reopening its source path."""
 
-    manifest_path = Path(path)
     try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ManifestError(f"Cannot load source manifest {manifest_path}: {error}") from error
+        raw = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ManifestError(f"Cannot parse {source_name}: {error}") from error
 
     root = _object(raw, "manifest")
     schema_version = _required(root, "schemaVersion", "manifest")
@@ -432,6 +504,17 @@ def load_source_manifest(path: str | Path) -> SourceManifest:
     if len(source_ids) != len(set(source_ids)):
         raise ManifestError("manifest.sources must use unique ids")
     return SourceManifest(schema_version=schema_version, sources=sources)
+
+
+def load_source_manifest(path: str | Path) -> SourceManifest:
+    """Load one reviewed source-manifest snapshot and reject incomplete evidence."""
+
+    manifest_path = Path(path)
+    try:
+        payload = manifest_path.read_bytes()
+    except OSError as error:
+        raise ManifestError(f"Cannot load source manifest {manifest_path}: {error}") from error
+    return parse_source_manifest_bytes(payload, source_name=str(manifest_path))
 
 
 def verify_archive_sha256(archive: str | Path, source: DatasetSource) -> str:

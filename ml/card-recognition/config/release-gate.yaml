@@ -2,3 +2,5 @@ schema_version: 1
 minimum_real_photo_count: 200
 minimum_unseen_deck_groups: 10
 minimum_exact_total_accuracy: 0.95
+source_audit_schema_version: 2
+source_audit_receipt_sha256: c103d17cc70173a01e5e5f01424ec6485fcb791b8e38fe3d46531be330399877

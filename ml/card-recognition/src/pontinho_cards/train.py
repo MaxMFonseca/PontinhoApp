@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -13,16 +14,25 @@ import re
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Real
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any
 
 import yaml
 from PIL import Image
 
 from pontinho_cards.labels import CARD_LABELS, parse_card_label
+from pontinho_cards.secure_io import (
+    SecureReadError,
+    safe_name,
+    safe_relative_posix,
+    secure_read_bytes,
+    secure_write_bytes,
+)
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PARTITION_TO_CSV = {"train": "TRAIN", "validation": "VAL"}
@@ -69,6 +79,18 @@ class TrainingOutcome:
     record_counts: dict[str, int]
 
 
+@dataclass(frozen=True)
+class SyntheticEvidenceSnapshot:
+    """One immutable byte snapshot of every artifact used to authorize synthesis."""
+
+    split_payload: bytes
+    manifest_payload: bytes
+    review_payload: bytes
+    distribution_payload: bytes
+    contact_sheet_payload: bytes
+    generated_payloads: Mapping[str, bytes]
+
+
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise TrainingConfigError(f"{name} must be an object")
@@ -90,14 +112,15 @@ def _unit_interval(value: Any, name: str) -> float:
     return normalized
 
 
-def load_training_config(path: str | Path) -> TrainingConfig:
-    """Load and strictly validate the complete training-selection contract."""
+def load_training_config_bytes(
+    payload: bytes, *, source_name: str = "training config"
+) -> TrainingConfig:
+    """Parse one already-snapshotted training-selection contract."""
 
-    config_path = Path(path)
     try:
-        document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError) as error:
-        raise TrainingConfigError(f"cannot read training config {config_path}: {error}") from error
+        document = yaml.safe_load(payload)
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise TrainingConfigError(f"cannot parse {source_name}: {error}") from error
     root = _mapping(document, "training config")
     if root.get("detector_family") != "efficientdet_lite0":
         raise TrainingConfigError("detector_family must be efficientdet_lite0")
@@ -113,9 +136,7 @@ def load_training_config(path: str | Path) -> TrainingConfig:
     batch_size = _positive_int(root.get("batch_size"), "batch_size")
     if batch_size > 64:
         raise TrainingConfigError("batch_size must be between 1 and 64")
-    confidence_threshold = _unit_interval(
-        root.get("confidence_threshold"), "confidence_threshold"
-    )
+    confidence_threshold = _unit_interval(root.get("confidence_threshold"), "confidence_threshold")
     iou_threshold = _unit_interval(root.get("iou_threshold"), "iou_threshold")
 
     partitions = _mapping(root.get("partitions"), "partitions")
@@ -166,13 +187,27 @@ def load_training_config(path: str | Path) -> TrainingConfig:
     )
 
 
-def _load_training_partitions(
-    path: Path, *, train_partition: str, validation_partition: str
+def load_training_config(path: str | Path) -> TrainingConfig:
+    """Securely snapshot and validate the complete training-selection contract."""
+
+    config_path = Path(path)
+    try:
+        payload = secure_read_bytes(config_path, root=config_path.parent)
+    except SecureReadError as error:
+        raise TrainingConfigError(f"cannot read training config {config_path}: {error}") from error
+    return load_training_config_bytes(payload, source_name=str(config_path))
+
+
+def _load_training_partitions_payload(
+    payload: bytes,
+    *,
+    train_partition: str,
+    validation_partition: str,
 ) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise TrainingConfigError(f"cannot read split manifest {path}: {error}") from error
+        document = json.loads(payload)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise TrainingConfigError(f"cannot parse split manifest: {error}") from error
     root = _mapping(document, "split manifest")
     partitions = _mapping(root.get("partitions"), "split manifest partitions")
     # Intentionally address only these two keys. The frozen final holdout lives in
@@ -184,6 +219,400 @@ def _load_training_partitions(
     if not all(isinstance(record, Mapping) for record in train_records + validation_records):
         raise TrainingConfigError("train and validation records must be objects")
     return train_records, validation_records
+
+
+def _load_training_partitions(
+    path: Path, *, train_partition: str, validation_partition: str
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    try:
+        payload = secure_read_bytes(path, root=path.parent)
+    except SecureReadError as error:
+        raise TrainingConfigError(f"cannot read split manifest {path}: {error}") from error
+    train, validation = _load_training_partitions_payload(
+        payload,
+        train_partition=train_partition,
+        validation_partition=validation_partition,
+    )
+
+    def resolve(records: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        resolved: list[Mapping[str, Any]] = []
+        for raw in records:
+            record = dict(raw)
+            value = record.get("path")
+            if isinstance(value, str) and not Path(value).is_absolute():
+                try:
+                    relative = safe_relative_posix(value, field="training image path")
+                except ValueError as error:
+                    raise TrainingConfigError(str(error)) from error
+                record["path"] = str(path.parent.joinpath(*relative.parts))
+            resolved.append(record)
+        return resolved
+
+    return resolve(train), resolve(validation)
+
+
+def _json_payload(payload: bytes, name: str) -> dict[str, Any]:
+    try:
+        document = json.loads(payload)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise TrainingConfigError(f"cannot parse {name}: {error}") from error
+    if not isinstance(document, dict):
+        raise TrainingConfigError(f"{name} must be an object")
+    return document
+
+
+def _canonical_json(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _synthetic_config_hash(generation: Mapping[str, Any]) -> str:
+    fields = {
+        key: generation.get(key)
+        for key in (
+            "generator",
+            "seed",
+            "requestedSceneCount",
+            "sceneSize",
+            "baseSplitManifestSha256",
+        )
+    }
+    return hashlib.sha256(
+        (json.dumps(fields, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+
+
+def _safe_training_name(value: Any, field: str) -> str:
+    try:
+        return safe_name(value, field=field)
+    except ValueError as error:
+        raise TrainingConfigError(str(error)) from error
+
+
+def capture_synthetic_evidence(
+    *,
+    split_payload: bytes,
+    synthetic_manifest: str | Path,
+    human_review: str | Path,
+) -> SyntheticEvidenceSnapshot:
+    """Securely capture each synthetic authorization artifact exactly once."""
+
+    manifest_path = Path(synthetic_manifest)
+    review_path = Path(human_review)
+
+    def snapshot(path: Path, root: Path, name: str) -> bytes:
+        try:
+            return secure_read_bytes(path, root=root)
+        except SecureReadError as error:
+            raise TrainingConfigError(f"cannot snapshot {name}: {error}") from error
+
+    manifest_payload = snapshot(
+        manifest_path, manifest_path.parent, "synthetic training manifest"
+    )
+    manifest = _json_payload(manifest_payload, "synthetic training manifest")
+    review_payload = snapshot(review_path, review_path.parent, "synthetic human review")
+    root = manifest_path.parent
+    distribution_payload = snapshot(root / "distribution.json", root, "synthetic distribution")
+    contact_sheet_payload = snapshot(root / "contact-sheet.jpg", root, "synthetic contact sheet")
+    records = manifest.get("records")
+    if not isinstance(records, list):
+        raise TrainingConfigError("synthetic training records must be a list")
+    members: set[str] = set()
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise TrainingConfigError("synthetic training records must be objects")
+        try:
+            members.add(
+                safe_relative_posix(record.get("path"), field="synthetic image path").as_posix()
+            )
+            provenance = record.get("syntheticProvenance")
+            if not isinstance(provenance, Mapping):
+                raise TrainingConfigError("synthetic provenance is missing")
+            members.add(
+                safe_relative_posix(
+                    provenance.get("metadata"), field="synthetic metadata path"
+                ).as_posix()
+            )
+        except ValueError as error:
+            raise TrainingConfigError(str(error)) from error
+    generated = {
+        member: snapshot(root.joinpath(*PurePosixPath(member).parts), root, member)
+        for member in sorted(members)
+    }
+    return SyntheticEvidenceSnapshot(
+        split_payload=bytes(split_payload),
+        manifest_payload=manifest_payload,
+        review_payload=review_payload,
+        distribution_payload=distribution_payload,
+        contact_sheet_payload=contact_sheet_payload,
+        generated_payloads=MappingProxyType(generated),
+    )
+
+
+def _validate_synthetic_record(
+    raw: Any,
+    *,
+    index: int,
+    generated_payloads: Mapping[str, bytes],
+    train_parents: Mapping[str, Mapping[str, Any]],
+    held_out_ids: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, Mapping) or raw.get("isRealPhoto") is not False:
+        raise TrainingConfigError("synthetic training records must be non-real objects")
+    record = dict(raw)
+    image_id = _safe_training_name(record.get("imageId"), "synthetic imageId")
+    if record.get("sourceId") != "synthetic-tabletop-v1":
+        raise TrainingConfigError("synthetic sourceId must use the canonical safe ID")
+    _safe_training_name(record.get("sourceId"), "synthetic sourceId")
+    _safe_training_name(record.get("deckGroupId"), "synthetic deckGroupId")
+    _safe_training_name(record.get("splitGroupId"), "synthetic splitGroupId")
+    try:
+        relative = safe_relative_posix(record.get("path"), field="synthetic image path")
+    except ValueError as error:
+        raise TrainingConfigError(f"invalid synthetic image path: {error}") from error
+    payload = generated_payloads.get(relative.as_posix())
+    if payload is None:
+        raise TrainingConfigError("synthetic image is absent from immutable evidence")
+    digest = hashlib.sha256(payload).hexdigest()
+    if record.get("imageSha256") != digest or record.get("sourceDerivativeId") != digest:
+        raise TrainingConfigError("synthetic image/derivative hash mismatch")
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            image.load()
+            dimensions = image.size
+    except (OSError, SyntaxError) as error:
+        raise TrainingConfigError("synthetic image is not decodable") from error
+    if dimensions != (record.get("width"), record.get("height")):
+        raise TrainingConfigError("synthetic image dimensions mismatch")
+    provenance = record.get("syntheticProvenance")
+    if not isinstance(provenance, Mapping):
+        raise TrainingConfigError("synthetic provenance is missing")
+    if provenance.get("generator") != "pontinho_cards.synthetic.tabletop-v1" or type(
+        provenance.get("seed")
+    ) is not int:
+        raise TrainingConfigError("synthetic generator provenance is invalid")
+    try:
+        metadata_relative = safe_relative_posix(
+            provenance.get("metadata"), field="synthetic metadata path"
+        )
+    except ValueError as error:
+        raise TrainingConfigError(f"invalid synthetic metadata path: {error}") from error
+    metadata_payload = generated_payloads.get(metadata_relative.as_posix())
+    if metadata_payload is None:
+        raise TrainingConfigError("synthetic metadata is absent from immutable evidence")
+    if provenance.get("metadataSha256") != hashlib.sha256(metadata_payload).hexdigest():
+        raise TrainingConfigError("synthetic metadata hash mismatch")
+    try:
+        metadata = json.loads(metadata_payload)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise TrainingConfigError("synthetic metadata is invalid") from error
+    if (
+        not isinstance(metadata, Mapping)
+        or metadata.get("seed") != provenance.get("seed")
+        or metadata.get("width") != record.get("width")
+        or metadata.get("height") != record.get("height")
+    ):
+        raise TrainingConfigError("synthetic metadata does not bind the record")
+    background = provenance.get("background")
+    if (
+        not isinstance(background, Mapping)
+        or dict(background) != metadata.get("background")
+        or background.get("kind") != "procedural"
+        or background.get("source") != "procedural-tabletop-v1"
+        or background.get("license") != "CC0-1.0"
+        or background.get("generator") != "pontinho_cards.synthetic.tabletop-v1"
+        or type(background.get("seed")) is not int
+    ):
+        raise TrainingConfigError("synthetic background provenance is invalid")
+    boxes = record.get("boxes")
+    cards = metadata.get("cards")
+    parents = provenance.get("parents")
+    parent_ids = provenance.get("parentImageIds")
+    if not isinstance(boxes, list) or not isinstance(cards, list) or not isinstance(parents, list):
+        raise TrainingConfigError("synthetic card provenance is invalid")
+    if len(boxes) != len(cards):
+        raise TrainingConfigError("synthetic boxes differ from metadata cards")
+    canonical_boxes = [
+        {"label": card.get("label"), **dict(card.get("finalBox", {}))}
+        for card in cards
+        if isinstance(card, Mapping) and isinstance(card.get("finalBox"), Mapping)
+    ]
+    if canonical_boxes != boxes:
+        raise TrainingConfigError("synthetic boxes differ from metadata cards")
+    normalized_parents: list[str] = []
+    for parent in parents:
+        if not isinstance(parent, Mapping):
+            raise TrainingConfigError("synthetic parent provenance is invalid")
+        parent_id = parent.get("imageId")
+        if not isinstance(parent_id, str) or parent_id in held_out_ids:
+            raise TrainingConfigError("synthetic parent crosses a held-out partition")
+        source = train_parents.get(parent_id)
+        if (
+            source is None
+            or source.get("isRealPhoto") is not True
+            or parent.get("imageSha256") != source.get("imageSha256")
+            or parent.get("sourceId") != source.get("sourceId")
+        ):
+            raise TrainingConfigError("synthetic parent is not an exact real train source")
+        normalized_parents.append(parent_id)
+    expected_parents = sorted(set(normalized_parents))
+    if len(parents) != len(expected_parents):
+        raise TrainingConfigError("synthetic parent provenance is duplicated")
+    if parent_ids != expected_parents or record.get("augmentationParentIds") != expected_parents:
+        raise TrainingConfigError("synthetic augmentation ancestry is invalid")
+    expected_single = expected_parents[0] if len(expected_parents) == 1 else None
+    if record.get("augmentationParentId") != expected_single:
+        raise TrainingConfigError("synthetic augmentation parent is invalid")
+    if boxes and not expected_parents:
+        raise TrainingConfigError("synthetic positive scene lacks real train ancestry")
+    if not boxes and (cards or expected_parents):
+        raise TrainingConfigError("synthetic empty negative has card ancestry")
+    parent_evidence = {
+        (parent["imageId"], parent["imageSha256"], parent["sourceId"])
+        for parent in parents
+    }
+    for card in cards:
+        if not isinstance(card, Mapping) or card.get("partition") != "train":
+            raise TrainingConfigError("synthetic metadata card ancestry is invalid")
+        pixel_source = card.get("pixelSource")
+        if not isinstance(pixel_source, Mapping):
+            raise TrainingConfigError("synthetic metadata card ancestry is invalid")
+        identity = (
+            pixel_source.get("parentImageId"),
+            pixel_source.get("parentImageSha256"),
+            pixel_source.get("sourceId"),
+        )
+        if identity not in parent_evidence or card.get("parentImageSha256") != identity[1]:
+            raise TrainingConfigError("synthetic metadata card ancestry is invalid")
+    record["path"] = f"synthetic-evidence/{relative.as_posix()}"
+    record["imageId"] = image_id
+    return record
+
+
+def merge_approved_synthetic_training(
+    evidence: SyntheticEvidenceSnapshot,
+) -> dict[str, Any]:
+    """Merge only already-snapshotted evidence; never reopen authorization paths."""
+
+    split_payload = evidence.split_payload
+    manifest_payload = evidence.manifest_payload
+    review_payload = evidence.review_payload
+    split = _json_payload(split_payload, "split manifest")
+    manifest = _json_payload(manifest_payload, "synthetic manifest")
+    review = _json_payload(review_payload, "synthetic human review")
+    audit = manifest.get("audit")
+    records = manifest.get("records")
+    if (
+        manifest.get("schemaVersion") != 1
+        or manifest.get("kind") != "pontinho-synthetic-training"
+        or manifest.get("partition") != "train"
+        or not isinstance(records, list)
+        or not isinstance(audit, Mapping)
+        or audit.get("status") != "PENDING_HUMAN_REVIEW"
+    ):
+        raise TrainingConfigError("synthetic training manifest schema/audit status is invalid")
+    generation = manifest.get("generation")
+    if not isinstance(generation, Mapping):
+        raise TrainingConfigError("synthetic generation evidence is missing")
+    generation_hash = _synthetic_config_hash(generation)
+    if (
+        generation.get("configSha256") != generation_hash
+        or generation.get("generator") != "pontinho_cards.synthetic.tabletop-v1"
+        or generation.get("baseSplitManifestSha256")
+        != hashlib.sha256(split_payload).hexdigest()
+        or generation.get("seed") != manifest.get("seed")
+    ):
+        raise TrainingConfigError("synthetic generation evidence is invalid")
+    expected_review = {
+        "schemaVersion": 1,
+        "status": "HUMAN_APPROVED",
+        "syntheticManifestSha256": hashlib.sha256(manifest_payload).hexdigest(),
+        "generationConfigSha256": generation_hash,
+        "distributionSha256": audit.get("distributionSha256"),
+        "contactSheetSha256": audit.get("contactSheetSha256"),
+    }
+    if review != expected_review:
+        raise TrainingConfigError("synthetic training human-review receipt is invalid")
+    for filename, field, payload in (
+        ("distribution.json", "distributionSha256", evidence.distribution_payload),
+        ("contact-sheet.jpg", "contactSheetSha256", evidence.contact_sheet_payload),
+    ):
+        if hashlib.sha256(payload).hexdigest() != audit.get(field):
+            raise TrainingConfigError(f"synthetic audit artifact hash mismatch: {filename}")
+    distribution = _json_payload(evidence.distribution_payload, "distribution")
+    if (
+        distribution.get("schemaVersion") != 1
+        or distribution.get("seed") != manifest.get("seed")
+        or distribution.get("sceneCount") != audit.get("sceneCount")
+        or distribution.get("requestedSceneCount") != generation.get("requestedSceneCount")
+        or distribution.get("audit", {}).get("minimumScenes") != audit.get("minimumScenes")
+        or distribution.get("audit", {}).get("status") != audit.get("status")
+    ):
+        raise TrainingConfigError("synthetic distribution audit is invalid")
+    partitions = _mapping(split.get("partitions"), "split manifest partitions")
+    train = partitions.get("train")
+    validation = partitions.get("validation")
+    test = partitions.get("test")
+    if not all(isinstance(value, list) for value in (train, validation, test)):
+        raise TrainingConfigError("split manifest partitions are invalid")
+    train_parents = {
+        str(record.get("imageId")): record for record in train if isinstance(record, Mapping)
+    }
+    held_out_ids = {
+        str(record.get("imageId"))
+        for partition in (validation, test)
+        for record in partition
+        if isinstance(record, Mapping)
+    }
+    merged_records = [
+        _validate_synthetic_record(
+            raw,
+            index=index,
+            generated_payloads=evidence.generated_payloads,
+            train_parents=train_parents,
+            held_out_ids=held_out_ids,
+        )
+        for index, raw in enumerate(records)
+    ]
+    if any(record["boxes"] for record in merged_records) and (
+        len(merged_records) < 100
+        or audit.get("minimumScenes") != 100
+        or audit.get("sceneCount") != len(merged_records)
+    ):
+        raise TrainingConfigError(
+            "synthetic positive training requires at least 100 audited scenes"
+        )
+    for field in ("imageId", "imageSha256", "sourceDerivativeId"):
+        existing = {
+            record.get(field)
+            for partition in (train, validation, test)
+            for record in partition
+            if isinstance(record, Mapping)
+        }
+        synthetic = [record.get(field) for record in merged_records]
+        if None in synthetic or len(synthetic) != len(set(synthetic)) or existing & set(synthetic):
+            raise TrainingConfigError(f"synthetic training {field} leaks or is duplicated")
+    for field in ("deckGroupId", "splitGroupId"):
+        forbidden = {
+            record.get(field)
+            for partition in (validation, test)
+            for record in partition
+            if isinstance(record, Mapping)
+        }
+        synthetic = {record.get(field) for record in merged_records}
+        if None in synthetic or forbidden & synthetic:
+            raise TrainingConfigError(f"synthetic training {field} crosses a held-out partition")
+    return {
+        **split,
+        "partitions": {
+            **partitions,
+            "train": [*train, *merged_records],
+            "validation": validation,
+            "test": test,
+        },
+        "syntheticManifestSha256": hashlib.sha256(manifest_payload).hexdigest(),
+        "syntheticReviewSha256": hashlib.sha256(review_payload).hexdigest(),
+        "syntheticGenerationConfigSha256": generation_hash,
+    }
 
 
 def _checked_image(record: Mapping[str, Any]) -> tuple[Path, int, int, str]:
@@ -313,9 +742,7 @@ def write_model_maker_csv(
     staging_dir = target.parent / "model-maker-images"
     train_rows: list[list[Any]] = []
     for record in train:
-        train_rows.extend(
-            _csv_rows(record, _PARTITION_TO_CSV["train"], staging_dir=staging_dir)
-        )
+        train_rows.extend(_csv_rows(record, _PARTITION_TO_CSV["train"], staging_dir=staging_dir))
     validation_rows: list[list[Any]] = []
     for record in validation:
         validation_rows.extend(
@@ -344,6 +771,92 @@ def write_model_maker_csv(
     return {"train": len(train), "validation": len(validation)}
 
 
+def _pascal_annotation(
+    record: Mapping[str, Any], *, allow_empty: bool, staging_dir: Path | None = None
+) -> ET.Element:
+    source_path, width, height, source_format = _checked_image(record)
+    image_path = _model_maker_image(
+        source_path,
+        source_format=source_format,
+        digest=str(record["imageSha256"]),
+        staging_dir=staging_dir,
+    )
+    boxes = record.get("boxes")
+    if not isinstance(boxes, list) or (not boxes and not allow_empty):
+        raise TrainingConfigError("validation boxes must be a non-empty list")
+    root = ET.Element("annotation")
+    ET.SubElement(root, "filename").text = str(image_path)
+    size = ET.SubElement(root, "size")
+    ET.SubElement(size, "width").text = str(width)
+    ET.SubElement(size, "height").text = str(height)
+    ET.SubElement(size, "depth").text = "3"
+    for box in boxes:
+        if not isinstance(box, Mapping):
+            raise TrainingConfigError("training box must be an object")
+        label = box.get("label")
+        try:
+            parse_card_label(label)  # type: ignore[arg-type]
+        except ValueError as error:
+            raise TrainingConfigError(f"invalid training label: {label!r}") from error
+        coordinates = [box.get(key) for key in ("xmin", "ymin", "xmax", "ymax")]
+        if any(
+            type(value) not in {int, float} or not math.isfinite(value) for value in coordinates
+        ):
+            raise TrainingConfigError("training box coordinates must be finite")
+        xmin, ymin, xmax, ymax = (float(value) for value in coordinates)
+        if not (0 <= xmin < xmax <= width and 0 <= ymin < ymax <= height):
+            raise TrainingConfigError("training box must have positive area inside the image")
+        item = ET.SubElement(root, "object")
+        ET.SubElement(item, "name").text = str(label)
+        ET.SubElement(item, "pose").text = "Unspecified"
+        ET.SubElement(item, "truncated").text = "0"
+        ET.SubElement(item, "difficult").text = "0"
+        bounds = ET.SubElement(item, "bndbox")
+        for key, value in zip(("xmin", "ymin", "xmax", "ymax"), (xmin, ymin, xmax, ymax)):
+            ET.SubElement(bounds, key).text = str(int(round(value)))
+    return root
+
+
+def write_model_maker_pascal(
+    splits_path: str | Path,
+    output_dir: str | Path,
+    *,
+    train_partition: str,
+    validation_partition: str,
+) -> dict[str, int]:
+    """Write supported Pascal VOC annotations, retaining empty negative train images."""
+
+    train, validation = _load_training_partitions(
+        Path(splits_path),
+        train_partition=train_partition,
+        validation_partition=validation_partition,
+    )
+    root = Path(output_dir)
+    image_staging = root / "model-maker-images"
+    counts = {"train": len(train), "validation": len(validation), "negativeTrain": 0}
+    for partition, records in (("train", train), ("validation", validation)):
+        directory = root / partition
+        directory.mkdir(parents=True, exist_ok=True)
+        for record in records:
+            image_id = record.get("imageId")
+            if not isinstance(image_id, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:-]*", image_id
+            ):
+                raise TrainingConfigError("record imageId cannot name a Pascal annotation")
+            boxes = record.get("boxes")
+            if partition == "train" and boxes == []:
+                counts["negativeTrain"] += 1
+            document = _pascal_annotation(
+                record,
+                allow_empty=partition == "train",
+                staging_dir=image_staging,
+            )
+            ET.indent(document)
+            payload = ET.tostring(document, encoding="unicode").encode("utf-8")
+            _atomic_write(directory / f"{image_id}.xml", payload)
+    return counts
+
+
 def _atomic_write(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -363,7 +876,7 @@ def _sha256(path: Path) -> str:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as error:
-        raise TrainingConfigError(f"cannot hash required input {path}: {error}") from error
+        raise TrainingConfigError(f"cannot hash required output {path}: {error}") from error
 
 
 def _git_commit(project_root: Path) -> str:
@@ -388,27 +901,61 @@ def prepare_training_run(
     checkpoint_root: str | Path,
     requirements_lock: str | Path,
     git_commit: str | None = None,
+    synthetic_manifest: str | Path | None = None,
+    synthetic_review: str | Path | None = None,
 ) -> PreparedRun:
     """Validate all inputs before atomically creating reproducibility metadata."""
 
     if not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id) or run_id in {".", ".."}:
         raise TrainingConfigError("run-id must be 1-64 safe filename characters")
-    config_file = Path(config_path).resolve()
-    splits_file = Path(splits_path).resolve()
-    lock_file = Path(requirements_lock).resolve()
-    config = load_training_config(config_file)
-    train, validation = _load_training_partitions(
-        splits_file,
-        train_partition=config.train_partition,
-        validation_partition=config.validation_partition,
+    config_file = Path(os.path.abspath(config_path))
+    splits_file = Path(os.path.abspath(splits_path))
+    lock_file = Path(os.path.abspath(requirements_lock))
+    def snapshot_input(path: Path, name: str) -> bytes:
+        try:
+            return secure_read_bytes(path, root=path.parent)
+        except SecureReadError as error:
+            raise TrainingConfigError(f"cannot read {name} {path}: {error}") from error
+
+    config_payload = snapshot_input(config_file, "training config")
+    split_payload = snapshot_input(splits_file, "split manifest")
+    lock_payload = snapshot_input(lock_file, "requirements lock")
+    config = load_training_config_bytes(config_payload, source_name=str(config_file))
+    if (synthetic_manifest is None) != (synthetic_review is None):
+        raise TrainingConfigError("synthetic manifest and human review must be provided together")
+    source_document: dict[str, Any] | None = None
+    synthetic_evidence: SyntheticEvidenceSnapshot | None = None
+    if synthetic_manifest is not None and synthetic_review is not None:
+        synthetic_evidence = capture_synthetic_evidence(
+            split_payload=split_payload,
+            synthetic_manifest=synthetic_manifest,
+            human_review=synthetic_review,
+        )
+        source_document = merge_approved_synthetic_training(synthetic_evidence)
+    train, validation = (
+        _load_training_partitions_payload(
+            split_payload,
+            train_partition=config.train_partition,
+            validation_partition=config.validation_partition,
+        )
+        if source_document is None
+        else (
+            list(source_document["partitions"][config.train_partition]),
+            list(source_document["partitions"][config.validation_partition]),
+        )
     )
     if not train:
         raise TrainingConfigError("no audited training records; refusing to create a run")
     if not validation:
         raise TrainingConfigError("no audited validation records; refusing to create a run")
+    if any(record.get("isRealPhoto") is not True for record in validation):
+        raise TrainingConfigError("validation must remain real-photo-only")
     # Validate every used byte before the first checkpoint-directory write.
-    for record in train + validation:
-        _csv_rows(record, "TRAIN")
+    for record in train:
+        if record.get("isRealPhoto") is True:
+            _pascal_annotation(record, allow_empty=True)
+    for record in validation:
+        _pascal_annotation(record, allow_empty=False)
     training_labels = {
         str(box["label"])
         for record in train
@@ -417,8 +964,12 @@ def prepare_training_run(
     }
     if training_labels != set(CARD_LABELS):
         raise TrainingConfigError("training data must contain all 52 canonical classes")
-    lock_hash = _sha256(lock_file)
-    manifest_hash = _sha256(splits_file)
+    lock_hash = hashlib.sha256(lock_payload).hexdigest()
+    split_manifest_hash = hashlib.sha256(split_payload).hexdigest()
+    training_input_hash = split_manifest_hash
+    synthetic_manifest_hash: str | None = None
+    synthetic_review_hash: str | None = None
+    synthetic_generation_hash: str | None = None
     commit = git_commit or _git_commit(config_file.parents[3])
     if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
         raise TrainingConfigError("git commit must be a hexadecimal revision")
@@ -431,14 +982,55 @@ def prepare_training_run(
         raise TrainingConfigError(f"run output already exists: {output_dir}")
     root.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{run_id}.", dir=root))
-    resolved_yaml = yaml.safe_dump(config.document, sort_keys=True).encode("utf-8")
-    metadata = {
-        "schemaVersion": 1,
-        "requirementsLockSha256": lock_hash,
-        "inputManifestSha256": manifest_hash,
-        "gitCommit": commit,
-    }
     try:
+        merged_path = staging_dir / "training-input.json"
+        if source_document is not None:
+            merged_payload = _canonical_json(source_document)
+            training_input_hash = hashlib.sha256(merged_payload).hexdigest()
+            synthetic_manifest_hash = str(source_document["syntheticManifestSha256"])
+            synthetic_review_hash = str(source_document["syntheticReviewSha256"])
+            synthetic_generation_hash = str(source_document["syntheticGenerationConfigSha256"])
+            assert synthetic_evidence is not None
+            manifest_document = _json_payload(
+                synthetic_evidence.manifest_payload, "synthetic manifest"
+            )
+            image_members = {
+                str(record.get("path"))
+                for record in manifest_document.get("records", [])
+                if isinstance(record, Mapping)
+            }
+            for member in sorted(image_members):
+                payload = synthetic_evidence.generated_payloads[member]
+                secure_write_bytes(
+                    staging_dir,
+                    PurePosixPath("synthetic-evidence") / PurePosixPath(member),
+                    payload,
+                )
+        else:
+            merged_payload = split_payload
+        _atomic_write(merged_path, merged_payload)
+        splits_file = merged_path
+        if source_document is not None:
+            snapshotted_train, snapshotted_validation = _load_training_partitions(
+                splits_file,
+                train_partition=config.train_partition,
+                validation_partition=config.validation_partition,
+            )
+            for record in snapshotted_train:
+                _pascal_annotation(record, allow_empty=True)
+            for record in snapshotted_validation:
+                _pascal_annotation(record, allow_empty=False)
+        resolved_yaml = yaml.safe_dump(config.document, sort_keys=True).encode("utf-8")
+        metadata = {
+            "schemaVersion": 2,
+            "requirementsLockSha256": lock_hash,
+            "splitManifestSha256": split_manifest_hash,
+            "trainingInputSha256": training_input_hash,
+            "syntheticManifestSha256": synthetic_manifest_hash,
+            "syntheticReviewSha256": synthetic_review_hash,
+            "syntheticGenerationConfigSha256": synthetic_generation_hash,
+            "gitCommit": commit,
+        }
         _atomic_write(staging_dir / "resolved-config.yaml", resolved_yaml)
         _atomic_write(
             staging_dir / "run-metadata.json",
@@ -470,6 +1062,37 @@ def assert_model_maker_label_maps(train_data: Any, validation_data: Any) -> None
         )
 
 
+def assert_negative_examples_loaded(train_data: Any, expected_negative_count: int) -> None:
+    """Inspect Model Maker's actual TFRecords and prove negatives survived conversion."""
+
+    if expected_negative_count <= 0:
+        return
+    import tensorflow as tf
+
+    files = sorted(tf.io.gfile.glob(str(train_data.tfrecord_file_patten)))
+    if not files:
+        raise TrainingConfigError("Model Maker training TFRecords are missing")
+    feature = {"image/object/class/label": tf.io.VarLenFeature(tf.int64)}
+
+    def label_count(serialized: Any) -> Any:
+        parsed = tf.io.parse_single_example(serialized, feature)
+        return tf.size(parsed["image/object/class/label"].values)
+
+    batches = (
+        tf.data.TFRecordDataset(files)
+        .map(label_count, num_parallel_calls=1)
+        .batch(int(train_data.size), drop_remainder=False)
+    )
+    values = list(batches.as_numpy_iterator())
+    if len(values) != 1:
+        raise TrainingConfigError("Model Maker negative verification did not form one full batch")
+    counts = [int(value) for value in values[0].tolist()]
+    if counts.count(0) != expected_negative_count or not any(count > 0 for count in counts):
+        raise TrainingConfigError(
+            "Model Maker TFRecords did not retain negatives alongside positive examples"
+        )
+
+
 def validate_validation_metrics(metrics: Mapping[str, Any]) -> None:
     """Require aggregate AP and one finite per-class AP for every canonical card."""
 
@@ -495,9 +1118,7 @@ def validate_validation_metrics(metrics: Mapping[str, Any]) -> None:
         raise TrainingConfigError("validation AP metrics must be finite")
 
 
-def _run_model_maker_training(
-    prepared: PreparedRun, one_batch_smoke: bool
-) -> TrainingOutcome:
+def _run_model_maker_training(prepared: PreparedRun, one_batch_smoke: bool) -> TrainingOutcome:
     """Execute Model Maker through fit; publishing is handled by the caller."""
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -513,20 +1134,34 @@ def _run_model_maker_training(
     random.seed(config.seed)
     np.random.seed(config.seed)
     tf.random.set_seed(config.seed)
-    csv_path = prepared.staging_dir / "annotations.csv"
-    counts = write_model_maker_csv(
+    annotations = prepared.staging_dir / "pascal"
+    counts = write_model_maker_pascal(
         prepared.splits_path,
-        csv_path,
+        annotations,
         train_partition=config.train_partition,
         validation_partition=config.validation_partition,
     )
     cache_dir = prepared.staging_dir / "model-maker-cache"
-    train_data, validation_data, test_data = object_detector.DataLoader.from_csv(
-        str(csv_path), num_shards=1, cache_dir=str(cache_dir)
+    train_names = sorted(path.stem for path in (annotations / "train").glob("*.xml"))
+    validation_names = sorted(path.stem for path in (annotations / "validation").glob("*.xml"))
+    train_data = object_detector.DataLoader.from_pascal_voc(
+        images_dir="/",
+        annotations_dir=str(annotations / "train"),
+        label_map=list(CARD_LABELS),
+        annotation_filenames=train_names,
+        num_shards=1,
+        cache_dir=str(cache_dir / "train"),
     )
-    if train_data is None or validation_data is None or test_data is not None:
-        raise TrainingConfigError("Model Maker must receive train/validation data and no test data")
+    validation_data = object_detector.DataLoader.from_pascal_voc(
+        images_dir="/",
+        annotations_dir=str(annotations / "validation"),
+        label_map=list(CARD_LABELS),
+        annotation_filenames=validation_names,
+        num_shards=1,
+        cache_dir=str(cache_dir / "validation"),
+    )
     assert_model_maker_label_maps(train_data, validation_data)
+    assert_negative_examples_loaded(train_data, counts["negativeTrain"])
     batch_size = 1 if one_batch_smoke else config.batch_size
     if len(train_data) < batch_size:
         raise TrainingConfigError("training record count is smaller than batch_size")
@@ -655,9 +1290,7 @@ def run_training(prepared: PreparedRun, *, one_batch_smoke: bool = False) -> dic
 
     try:
         outcome = _run_model_maker_training(prepared, one_batch_smoke)
-        metrics = _finalize_training_result(
-            prepared, outcome, one_batch_smoke=one_batch_smoke
-        )
+        metrics = _finalize_training_result(prepared, outcome, one_batch_smoke=one_batch_smoke)
         _publish_staged_run(prepared)
         return metrics
     except BaseException:
@@ -673,6 +1306,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--checkpoint-root", type=Path, default=Path("checkpoints"))
     parser.add_argument("--requirements-lock", type=Path, default=Path("requirements.lock"))
     parser.add_argument("--one-batch-smoke", action="store_true")
+    parser.add_argument("--synthetic-manifest", type=Path)
+    parser.add_argument("--synthetic-review", type=Path)
     args = parser.parse_args(argv)
     try:
         prepared = prepare_training_run(
@@ -681,6 +1316,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_id=args.run_id,
             checkpoint_root=args.checkpoint_root,
             requirements_lock=args.requirements_lock,
+            synthetic_manifest=args.synthetic_manifest,
+            synthetic_review=args.synthetic_review,
         )
         run_training(prepared, one_batch_smoke=args.one_batch_smoke)
     except TrainingConfigError as error:

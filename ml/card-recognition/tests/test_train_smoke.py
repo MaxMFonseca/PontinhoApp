@@ -16,7 +16,9 @@ from pontinho_cards.train import prepare_training_run, run_training
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _scene(path: Path, image_id: str) -> dict[str, object]:
+def _scene(
+    path: Path, image_id: str, *, empty: bool = False, real: bool = False
+) -> dict[str, object]:
     Image.new("RGB", (320, 320), "white").save(path)
     payload = path.read_bytes()
     boxes = []
@@ -43,8 +45,8 @@ def _scene(path: Path, image_id: str) -> dict[str, object]:
         "sourceDerivativeId": f"derivative-{image_id}",
         "augmentationParentId": None,
         "imageSha256": hashlib.sha256(payload).hexdigest(),
-        "isRealPhoto": False,
-        "boxes": boxes,
+        "isRealPhoto": real,
+        "boxes": [] if empty else boxes,
     }
 
 
@@ -64,8 +66,11 @@ def test_model_maker_completes_exactly_one_generated_cpu_batch(tmp_path: Path) -
                 "schemaVersion": 1,
                 "seed": 20261014,
                 "partitions": {
-                    "train": [_scene(train_image, "train")],
-                    "validation": [_scene(validation_image, "validation")],
+                    "train": [
+                        _scene(train_image, "train"),
+                        _scene(tmp_path / "negative.png", "negative", empty=True),
+                    ],
+                    "validation": [_scene(validation_image, "validation", real=True)],
                     "test": [],
                 },
             }
@@ -84,12 +89,11 @@ def test_model_maker_completes_exactly_one_generated_cpu_batch(tmp_path: Path) -
     metrics = run_training(prepared, one_batch_smoke=True)
 
     assert metrics["status"] == "SMOKE_ONLY"
+    assert metrics["recordCounts"]["negativeTrain"] == 1
     assert len(metrics["history"]["loss"]) == 1
     selected = prepared.output_dir / metrics["selectedCheckpoint"]
     assert selected.name == "selected.weights.h5"
-    assert hashlib.sha256(selected.read_bytes()).hexdigest() == metrics[
-        "selectedCheckpointSha256"
-    ]
+    assert hashlib.sha256(selected.read_bytes()).hexdigest() == metrics["selectedCheckpointSha256"]
     assert "AP" in metrics["validation"]
     assert {key for key in metrics["validation"] if key.startswith("AP_/")} == {
         f"AP_/{label}" for label in CARD_LABELS

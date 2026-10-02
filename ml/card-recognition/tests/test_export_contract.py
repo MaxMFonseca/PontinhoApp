@@ -59,9 +59,13 @@ def _checkpoint_run(tmp_path: Path, *, status: str = "TRAINED_NOT_RELEASE_APPROV
     (run / "run-metadata.json").write_text(
         json.dumps(
             {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "requirementsLockSha256": "1" * 64,
-                "inputManifestSha256": "2" * 64,
+                "splitManifestSha256": "2" * 64,
+                "trainingInputSha256": "5" * 64,
+                "syntheticManifestSha256": "6" * 64,
+                "syntheticReviewSha256": "7" * 64,
+                "syntheticGenerationConfigSha256": "8" * 64,
                 "gitCommit": "0f51cf2",
             }
         ),
@@ -158,6 +162,13 @@ def _comparison(candidates: Path, *, selected: str = "float16") -> Path:
                 "selectionRationale": "measured accuracy and Android latency",
                 "selectedCheckpointSha256": manifest["checkpointSha256"],
                 "runGitCommit": manifest["runGitCommit"],
+                "splitManifestSha256": manifest["splitManifestSha256"],
+                "trainingInputSha256": manifest["trainingInputSha256"],
+                "syntheticManifestSha256": manifest["syntheticManifestSha256"],
+                "syntheticReviewSha256": manifest["syntheticReviewSha256"],
+                "syntheticGenerationConfigSha256": manifest[
+                    "syntheticGenerationConfigSha256"
+                ],
                 "validationManifestSha256": "3" * 64,
                 "androidDevice": "Pixel 8 / Android 16",
                 "variants": {
@@ -235,6 +246,62 @@ def test_promotion_copies_the_exact_measured_selected_binary_without_regeneratio
     assert json.loads((output / "model-contract.json").read_text()) == contract
 
 
+def test_release_candidate_contract_binds_recomputed_threshold_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch Stage 6 emitting release provenance without the exact threshold sweep."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    comparison = _comparison(candidates, selected="int8")
+    candidate = json.loads((candidates / "candidate-contract.json").read_text())
+    threshold = tmp_path / "threshold-selection.json"
+    selected = {
+        "scoreThreshold": 0.6,
+        "iouThreshold": 0.4,
+        "exactHandTotalAccuracy": 0.97,
+        "exactCardMultisetAccuracy": 0.96,
+        "abstentionRate": 0.02,
+    }
+    threshold.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "modelSha256": candidate["variants"]["int8"]["modelSha256"],
+                "checkpointSha256": candidate["checkpointSha256"],
+                "configSha256": candidate["configSha256"],
+                "splitManifestSha256": candidate["splitManifestSha256"],
+                "validationManifestSha256": "3" * 64,
+                "rows": [selected],
+                "selected": selected,
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "artifacts" / "release-v2"
+    monkeypatch.setattr(
+        export_module,
+        "inspect_tflite",
+        lambda path, *, expected_quantization: _inspection(Path(path), expected_quantization),
+    )
+
+    contract = promote_candidate(
+        run,
+        candidates,
+        comparison,
+        output,
+        threshold_selection=threshold,
+        model_version="2026.10.15-int8",
+        exported_at="2026-10-15T12:00:00Z",
+    )
+
+    assert contract["thresholdProvenance"] == "validation-selected"
+    assert contract["scoreThreshold"] == 0.6
+    assert contract["iouThreshold"] == 0.4
+    assert contract["thresholdSelectionSha256"] == _sha256(threshold)
+    assert contract["modelVersion"] == "2026.10.15-int8"
+    assert contract["exportedAt"] == "2026-10-15T12:00:00Z"
+
+
 def test_promotion_rejects_comparison_for_any_other_candidate_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -253,7 +320,10 @@ def test_promotion_rejects_comparison_for_any_other_candidate_bytes(
     ("field", "value", "message"),
     [
         ("schemaVersion", 2, "schemaVersion"),
-        ("inputManifestSha256", "9" * 64, "input manifest"),
+        ("splitManifestSha256", "9" * 64, "split manifest"),
+        ("trainingInputSha256", "9" * 64, "training input"),
+        ("syntheticManifestSha256", "9" * 64, "synthetic manifest"),
+        ("syntheticReviewSha256", "9" * 64, "synthetic review"),
         ("requirementsLockSha256", "8" * 64, "requirements lock"),
         ("scoreThreshold", 0.75, "score threshold"),
         ("iouThreshold", 0.75, "IoU threshold"),

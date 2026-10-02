@@ -16,6 +16,7 @@ import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,11 @@ class RunSnapshot:
     checkpoint_sha256: str
     config_sha256: str
     run_git_commit: str
-    input_manifest_sha256: str
+    split_manifest_sha256: str
+    training_input_sha256: str
+    synthetic_manifest_sha256: str | None
+    synthetic_review_sha256: str | None
+    synthetic_generation_config_sha256: str | None
     requirements_lock_sha256: str
     confidence_threshold: float
     iou_threshold: float
@@ -99,6 +104,12 @@ def _digest(value: Any, name: str) -> str:
     if not isinstance(value, str) or not _SHA256.fullmatch(value):
         raise ExportContractError(f"{name} must be a lowercase SHA-256")
     return value
+
+
+def _nullable_digest(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    return _digest(value, name)
 
 
 def _finite_unit(value: Any, name: str) -> float:
@@ -271,6 +282,8 @@ def _snapshot_run(run_path: str | Path, staging: Path, *, include_calibration: b
     if not isinstance(config.get("labels"), list) or tuple(config["labels"]) != CARD_LABELS:
         raise ExportContractError("resolved labels must exactly match CARD_LABELS order")
     metadata = _read_json_bytes((root / "run-metadata.json").read_bytes(), "run metadata")
+    if metadata.get("schemaVersion") != 2:
+        raise ExportContractError("run metadata schemaVersion must be 2")
     commit = metadata.get("gitCommit")
     if not isinstance(commit, str) or not _GIT_REVISION.fullmatch(commit):
         raise ExportContractError("run metadata gitCommit is invalid")
@@ -281,7 +294,22 @@ def _snapshot_run(run_path: str | Path, staging: Path, *, include_calibration: b
         checkpoint_sha256=checkpoint_hash,
         config_sha256=source_hashes[source / "resolved-config.yaml"],
         run_git_commit=commit,
-        input_manifest_sha256=_digest(metadata.get("inputManifestSha256"), "input manifest hash"),
+        split_manifest_sha256=_digest(
+            metadata.get("splitManifestSha256"), "split manifest hash"
+        ),
+        training_input_sha256=_digest(
+            metadata.get("trainingInputSha256"), "training input hash"
+        ),
+        synthetic_manifest_sha256=_nullable_digest(
+            metadata.get("syntheticManifestSha256"), "synthetic manifest hash"
+        ),
+        synthetic_review_sha256=_nullable_digest(
+            metadata.get("syntheticReviewSha256"), "synthetic review hash"
+        ),
+        synthetic_generation_config_sha256=_nullable_digest(
+            metadata.get("syntheticGenerationConfigSha256"),
+            "synthetic generation config hash",
+        ),
         requirements_lock_sha256=_digest(
             metadata.get("requirementsLockSha256"), "requirements lock hash"
         ),
@@ -392,7 +420,11 @@ def generate_candidates(checkpoint: str | Path, output: str | Path) -> dict[str,
             "checkpointSha256": snapshot.checkpoint_sha256,
             "configSha256": snapshot.config_sha256,
             "runGitCommit": snapshot.run_git_commit,
-            "inputManifestSha256": snapshot.input_manifest_sha256,
+            "splitManifestSha256": snapshot.split_manifest_sha256,
+            "trainingInputSha256": snapshot.training_input_sha256,
+            "syntheticManifestSha256": snapshot.synthetic_manifest_sha256,
+            "syntheticReviewSha256": snapshot.synthetic_review_sha256,
+            "syntheticGenerationConfigSha256": snapshot.synthetic_generation_config_sha256,
             "requirementsLockSha256": snapshot.requirements_lock_sha256,
             "scoreThreshold": snapshot.confidence_threshold,
             "iouThreshold": snapshot.iou_threshold,
@@ -436,6 +468,15 @@ def _validate_comparison(
         raise ExportContractError("comparison checkpoint hash does not match candidates")
     if document.get("runGitCommit") != candidate.get("runGitCommit"):
         raise ExportContractError("comparison Git revision does not match candidates")
+    for field, name in (
+        ("splitManifestSha256", "split manifest"),
+        ("trainingInputSha256", "training input"),
+        ("syntheticManifestSha256", "synthetic manifest"),
+        ("syntheticReviewSha256", "synthetic review"),
+        ("syntheticGenerationConfigSha256", "synthetic generation config"),
+    ):
+        if document.get(field) != candidate.get(field):
+            raise ExportContractError(f"comparison {name} hash does not match candidates")
     rationale = document.get("selectionRationale")
     device = document.get("androidDevice")
     if not isinstance(rationale, str) or not rationale.strip():
@@ -631,7 +672,11 @@ def _validate_candidate_contract(
         "checkpointSha256",
         "configSha256",
         "runGitCommit",
-        "inputManifestSha256",
+        "splitManifestSha256",
+        "trainingInputSha256",
+        "syntheticManifestSha256",
+        "syntheticReviewSha256",
+        "syntheticGenerationConfigSha256",
         "requirementsLockSha256",
         "scoreThreshold",
         "iouThreshold",
@@ -646,7 +691,23 @@ def _validate_candidate_contract(
         ("checkpointSha256", snapshot.checkpoint_sha256, "checkpoint hash"),
         ("configSha256", snapshot.config_sha256, "config hash"),
         ("runGitCommit", snapshot.run_git_commit, "Git revision"),
-        ("inputManifestSha256", snapshot.input_manifest_sha256, "input manifest hash"),
+        ("splitManifestSha256", snapshot.split_manifest_sha256, "split manifest hash"),
+        ("trainingInputSha256", snapshot.training_input_sha256, "training input hash"),
+        (
+            "syntheticManifestSha256",
+            snapshot.synthetic_manifest_sha256,
+            "synthetic manifest hash",
+        ),
+        (
+            "syntheticReviewSha256",
+            snapshot.synthetic_review_sha256,
+            "synthetic review hash",
+        ),
+        (
+            "syntheticGenerationConfigSha256",
+            snapshot.synthetic_generation_config_sha256,
+            "synthetic generation config hash",
+        ),
         ("requirementsLockSha256", snapshot.requirements_lock_sha256, "requirements lock hash"),
         ("scoreThreshold", snapshot.confidence_threshold, "score threshold"),
         ("iouThreshold", snapshot.iou_threshold, "IoU threshold"),
@@ -676,6 +737,10 @@ def promote_candidate(
     candidates: str | Path,
     comparison: str | Path,
     output: str | Path,
+    *,
+    threshold_selection: str | Path | None = None,
+    model_version: str | None = None,
+    exported_at: str | None = None,
 ) -> dict[str, Any]:
     """Reinspect and promote the exact measured selected candidate without conversion."""
 
@@ -702,6 +767,34 @@ def promote_candidate(
         comparison_hash = _snapshot_external(
             comparison_path, comparison_snapshot, "comparison", external_hashes
         )
+        strong_release = (
+            threshold_selection is not None or model_version is not None or exported_at is not None
+        )
+        if strong_release and (
+            threshold_selection is None or model_version is None or exported_at is None
+        ):
+            raise ExportContractError(
+                "threshold selection, model version, and export timestamp are required together"
+            )
+        if strong_release:
+            if not isinstance(model_version, str) or not _SAFE_NAME.fullmatch(model_version):
+                raise ExportContractError("model version is invalid")
+            if not isinstance(exported_at, str) or not exported_at.endswith("Z"):
+                raise ExportContractError("export timestamp must be UTC RFC 3339")
+            try:
+                datetime.fromisoformat(exported_at[:-1] + "+00:00")
+            except ValueError as error:
+                raise ExportContractError("export timestamp must be UTC RFC 3339") from error
+        threshold_snapshot: Path | None = None
+        threshold_hash: str | None = None
+        if threshold_selection is not None:
+            threshold_snapshot = staging / "candidate-inputs" / "threshold-selection.json"
+            threshold_hash = _snapshot_external(
+                Path(threshold_selection),
+                threshold_snapshot,
+                "threshold selection",
+                external_hashes,
+            )
         model_snapshots: dict[str, Path] = {}
         for variant, filename in _VARIANT_FILES.items():
             target = staging / "candidate-inputs" / filename
@@ -721,6 +814,38 @@ def promote_candidate(
             raise ExportContractError("selected inspection differs from generation-time contract")
         if inspection.get("modelSha256") != evidence["variants"][selected]["modelSha256"]:
             raise ExportContractError("selected candidate hash changed after inspection")
+        selected_score = snapshot.confidence_threshold
+        selected_iou = snapshot.iou_threshold
+        threshold_provenance = "configured-not-validation-selected"
+        if threshold_snapshot is not None:
+            from pontinho_cards.release import ReleaseGateError, _validate_threshold_selection
+
+            threshold_document = _read_json_bytes(
+                threshold_snapshot.read_bytes(), "threshold selection"
+            )
+            declared_selected = threshold_document.get("selected")
+            if not isinstance(declared_selected, Mapping):
+                raise ExportContractError("threshold selection is missing selected row")
+            selected_score = _finite_unit(
+                declared_selected.get("scoreThreshold"), "selected score threshold"
+            )
+            selected_iou = _finite_unit(
+                declared_selected.get("iouThreshold"), "selected IoU threshold"
+            )
+            try:
+                _validate_threshold_selection(
+                    threshold_document,
+                    model_hash=str(inspection["modelSha256"]),
+                    checkpoint_hash=snapshot.checkpoint_sha256,
+                    config_hash=snapshot.config_sha256,
+                    split_hash=snapshot.split_manifest_sha256,
+                    validation_hash=validation_hash,
+                    score_threshold=selected_score,
+                    iou_threshold=selected_iou,
+                )
+            except ReleaseGateError as error:
+                raise ExportContractError(str(error)) from error
+            threshold_provenance = "validation-selected"
         (staging / "card_detector.tflite").write_bytes(selected_snapshot.read_bytes())
         _reverify_sources({**snapshot.source_hashes, **external_hashes})
         contract = {
@@ -731,14 +856,26 @@ def promote_candidate(
             "candidateContractSha256": candidate_contract_hash,
             "comparisonSha256": comparison_hash,
             "runGitCommit": snapshot.run_git_commit,
-            "inputManifestSha256": snapshot.input_manifest_sha256,
+            "splitManifestSha256": snapshot.split_manifest_sha256,
+            "trainingInputSha256": snapshot.training_input_sha256,
+            "syntheticManifestSha256": snapshot.synthetic_manifest_sha256,
+            "syntheticReviewSha256": snapshot.synthetic_review_sha256,
+            "syntheticGenerationConfigSha256": snapshot.synthetic_generation_config_sha256,
             "requirementsLockSha256": snapshot.requirements_lock_sha256,
             "validationManifestSha256": validation_hash,
-            "scoreThreshold": snapshot.confidence_threshold,
-            "iouThreshold": snapshot.iou_threshold,
-            "thresholdProvenance": "configured-not-validation-selected",
+            "scoreThreshold": selected_score,
+            "iouThreshold": selected_iou,
+            "thresholdProvenance": threshold_provenance,
             "selectionEvidence": evidence,
         }
+        if threshold_hash is not None:
+            contract.update(
+                {
+                    "thresholdSelectionSha256": threshold_hash,
+                    "modelVersion": model_version,
+                    "exportedAt": exported_at,
+                }
+            )
         _atomic_write(
             staging / "model-contract.json",
             (json.dumps(contract, indent=2, sort_keys=True) + "\n").encode(),
@@ -809,10 +946,7 @@ def _flatbuffer_graph(model_path: Path) -> GraphContract:
                     else []
                 ),
                 "zeroPoints": (
-                    [
-                        int(quantization.ZeroPoint(i))
-                        for i in range(quantization.ZeroPointLength())
-                    ]
+                    [int(quantization.ZeroPoint(i)) for i in range(quantization.ZeroPointLength())]
                     if quantization
                     else []
                 ),
@@ -913,9 +1047,7 @@ def _validate_quantization_parameters(
         raise ExportContractError(f"{name} has unsupported quantized type {tensor_type}")
     lower, upper = ranges[tensor_type]
     if any(
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not lower <= value <= upper
+        isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper
         for value in zero_points
     ):
         raise ExportContractError(f"{name} zero points are outside the {tensor_type} range")
@@ -1002,11 +1134,9 @@ def _classify_int8_constants(graph: Any) -> None:
             _validate_int32_constant_role(graph, index)
         elif tensor_type == "FLOAT32":
             consumers = graph.constant_consumers.get(index)
-            if (
-                index not in graph.postprocess_input_indices
-                or consumers
-                != [{"op": "TFLite_Detection_PostProcess", "inputPosition": 2}]
-            ):
+            if index not in graph.postprocess_input_indices or consumers != [
+                {"op": "TFLite_Detection_PostProcess", "inputPosition": 2}
+            ]:
                 raise ExportContractError(
                     f"FLOAT32 DetectionPostProcess constant tensor {index} is not exclusive"
                 )
@@ -1316,13 +1446,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     promote.add_argument("--checkpoint", required=True, type=Path)
     promote.add_argument("--candidates", required=True, type=Path)
     promote.add_argument("--comparison", required=True, type=Path)
+    promote.add_argument("--threshold-selection", type=Path)
+    promote.add_argument("--model-version")
+    promote.add_argument("--exported-at")
     promote.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(arguments)
     try:
         if args.command == "generate":
             generate_candidates(args.checkpoint, args.output)
         else:
-            promote_candidate(args.checkpoint, args.candidates, args.comparison, args.output)
+            promote_candidate(
+                args.checkpoint,
+                args.candidates,
+                args.comparison,
+                args.output,
+                threshold_selection=args.threshold_selection,
+                model_version=args.model_version,
+                exported_at=args.exported_at,
+            )
     except ExportContractError as error:
         parser.error(str(error))
     return 0

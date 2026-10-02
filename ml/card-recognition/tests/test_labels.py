@@ -13,9 +13,7 @@ from pontinho_cards.labels import (
 
 def test_card_labels_have_stable_suit_then_rank_order() -> None:
     expected_ranks = ("A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K")
-    expected = tuple(
-        f"{rank}{suit}" for suit in ("C", "D", "H", "S") for rank in expected_ranks
-    )
+    expected = tuple(f"{rank}{suit}" for suit in ("C", "D", "H", "S") for rank in expected_ranks)
 
     assert RANK_CODES == expected_ranks
     assert SUIT_CODES == ("C", "D", "H", "S")

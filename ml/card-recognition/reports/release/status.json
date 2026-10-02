@@ -2,7 +2,8 @@
   "blockers": [
     "The strict public-domain source manifest contains no approved sources.",
     "No frozen holdout provides 200 unique real photos from 10 unseen deck designs with 52-class coverage.",
-    "No candidate model, qualifying Task 6 contract/comparison, or Task 7 validation report/receipt exists.",
+    "No candidate model, qualifying Task 6 contract/comparison/threshold sweep, or Task 7 validation report/receipt exists.",
+    "No verified source archives exist; the configuration-pinned human source-audit receipt is NOT_APPROVED.",
     "Exact hand-total accuracy has not been measured against the qualifying frozen holdout."
   ],
   "minimumExactHandTotalAccuracy": 0.95,

@@ -5,7 +5,24 @@ from typing import Any
 
 import pytest
 
-from pontinho_cards.manifest import ManifestError, load_source_manifest, verify_archive_sha256
+from pontinho_cards.manifest import (
+    ManifestError,
+    load_source_manifest,
+    parse_source_manifest_bytes,
+    verify_archive_sha256,
+)
+
+
+def test_manifest_bytes_parser_uses_the_single_snapshotted_payload(tmp_path: Path) -> None:
+    """Catch release hashing one manifest payload and parsing swapped path bytes."""
+
+    path = _write_manifest(tmp_path, _valid_source())
+    snapshot = path.read_bytes()
+    path.write_text('{"schemaVersion": 1, "sources": []}', encoding="utf-8")
+
+    parsed = parse_source_manifest_bytes(snapshot, source_name="snapshotted sources")
+
+    assert len(parsed.sources) == 1
 
 
 def _valid_source() -> dict[str, Any]:
@@ -16,6 +33,13 @@ def _valid_source() -> dict[str, Any]:
         "publisher": "Fixture publisher",
         "sourceUrl": "https://example.test/cards",
         "archiveUrl": "https://example.test/cards-v1.zip",
+        "archiveInput": {"localPath": "fixture-cards-v1.archive"},
+        "adapter": {
+            "kind": "COCO_JSON_SCENES",
+            "annotationMember": "annotations/instances.json",
+            "imagePrefix": "images",
+            "labelMap": {label: label for label in ("AC", "10D", "QH", "KS")},
+        },
         "retrievedAt": "2026-10-15",
         "sourceRevision": {
             "kind": "GIT_COMMIT",
@@ -57,6 +81,10 @@ def _write_manifest(tmp_path: Path, source: dict[str, Any]) -> Path:
     [
         ("sourceRevision",),
         ("archiveSha256",),
+        ("archiveInput",),
+        ("adapter",),
+        ("adapter", "imagePrefix"),
+        ("adapter", "labelMap"),
         ("annotationStatus",),
         ("attribution",),
         ("deckGroupId",),
@@ -168,8 +196,7 @@ def test_idna_equivalent_source_and_evidence_hosts_are_accepted(tmp_path: Path) 
     source["sourceRevision"]["repositoryUrl"] = "https://bücher.example/cards"
     source["license"]["evidenceUrl"] = "https://xn--bcher-kva.example/cards/license"
     source["approvalNote"] = (
-        "Human-reviewed license statement: "
-        "https://xn--bcher-kva.example/cards/license"
+        "Human-reviewed license statement: " "https://xn--bcher-kva.example/cards/license"
     )
 
     assert load_source_manifest(_write_manifest(tmp_path, source)).sources
@@ -347,6 +374,84 @@ def test_archive_checksum_must_be_lowercase_sha256(tmp_path: Path, checksum: str
     source["archiveSha256"] = checksum
 
     with pytest.raises(ManifestError, match="SHA-256"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "",
+        ".",
+        "..",
+        "../outside",
+        "a/b",
+        "a\\b",
+        "C:cards",
+        "C:/cards",
+        "//server/share",
+        "bad:name",
+        "trail.",
+        " space",
+        "a" * 65,
+    ],
+)
+@pytest.mark.parametrize("field", ["id", "deckGroupId"])
+def test_source_and_deck_ids_are_bounded_ascii_safe_names(
+    tmp_path: Path, field: str, unsafe: str
+) -> None:
+    source = _valid_source()
+    source[field] = unsafe
+
+    with pytest.raises(ManifestError, match="safe name"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "",
+        ".",
+        "..",
+        "../outside.zip",
+        "a/b.zip",
+        "a\\b.zip",
+        "C:cards.zip",
+        "C:/cards.zip",
+        "//server/share.zip",
+        "trail.",
+        "a" * 65,
+    ],
+)
+def test_archive_local_path_is_one_bounded_ascii_safe_filename(
+    tmp_path: Path, unsafe: str
+) -> None:
+    source = _valid_source()
+    source["archiveInput"]["localPath"] = unsafe
+
+    with pytest.raises(ManifestError, match="safe filename"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe"),
+    [
+        ("imagePrefix", "../images"),
+        ("imagePrefix", "C:/images"),
+        ("imagePrefix", "//server/images"),
+        ("imagePrefix", "images\\nested"),
+        ("annotationMember", "../instances.json"),
+        ("annotationMember", "C:/instances.json"),
+        ("annotationMember", "//server/instances.json"),
+        ("annotationMember", "annotations\\instances.json"),
+    ],
+)
+def test_adapter_paths_are_safe_relative_posix_paths(
+    tmp_path: Path, field: str, unsafe: str
+) -> None:
+    source = _valid_source()
+    source["adapter"][field] = unsafe
+
+    with pytest.raises(ManifestError, match="safe"):
         load_source_manifest(_write_manifest(tmp_path, source))
 
 

@@ -24,12 +24,8 @@ def test_environment_supports_offline_efficientdet_lite0_smoke_dataset(
     from tflite_model_maker import object_detector
     from tflite_support import metadata
 
-    model_config = yaml.safe_load(
-        (PROJECT_ROOT / "config" / "model.yaml").read_text()
-    )
-    release_gate = yaml.safe_load(
-        (PROJECT_ROOT / "config" / "release-gate.yaml").read_text()
-    )
+    model_config = yaml.safe_load((PROJECT_ROOT / "config" / "model.yaml").read_text())
+    release_gate = yaml.safe_load((PROJECT_ROOT / "config" / "release-gate.yaml").read_text())
     assert model_config["detector_family"] == "efficientdet_lite0"
     assert release_gate["minimum_real_photo_count"] == 200
     assert release_gate["minimum_unseen_deck_groups"] == 10
@@ -49,9 +45,7 @@ def test_environment_supports_offline_efficientdet_lite0_smoke_dataset(
     Image.new("RGB", (16, 16), "white").save(image_path)
     assert cv2.imread(str(image_path)) is not None
     annotation_path.write_text(
-        "TRAIN,"
-        f"{image_path},"
-        "ace_clubs,0.0625,0.0625,,,0.5625,0.5625,,\n"
+        "TRAIN," f"{image_path}," "ace_clubs,0.0625,0.0625,,,0.5625,0.5625,,\n"
     )
 
     train_data, validation_data, test_data = object_detector.DataLoader.from_csv(
