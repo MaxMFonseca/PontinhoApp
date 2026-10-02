@@ -39,3 +39,22 @@ candidate matrix and release blocker.
 
 When a source is eventually admitted, its required courtesy or legal
 attribution will be added here verbatim before any model can be promoted.
+
+## Model release and dependency notice
+
+The Android application currently contains no card-recognition model or
+third-party card imagery. A future model may be promoted only when the strict
+manifest parser accepts every source and the release receipt cryptographically
+binds that manifest, the frozen split and holdout, the selected exported model,
+and its validation report. Empty manifests, platform license badges without
+source-specific evidence, and merely permissive licenses fail closed.
+
+The development toolchain uses the exact versions resolved in
+`ml/card-recognition/requirements.lock`, including TensorFlow, TensorFlow Lite
+Model Maker, TensorFlow Lite Support, NumPy, OpenCV, Pillow, PyYAML, and
+pycocotools. Those packages are development dependencies, not evidence that a
+dataset or trained model may be redistributed. Their upstream license notices
+must be reviewed and included as applicable before an approved binary is
+shipped. The Android runtime is expected to use MediaPipe Tasks; its upstream
+notice must likewise be included when that dependency and an approved model are
+present in a release.

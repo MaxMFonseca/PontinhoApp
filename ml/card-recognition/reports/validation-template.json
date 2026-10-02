@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_EVALUATED",
+  "reason": "No production model and no qualifying frozen real-photo holdout exist.",
+  "requiredHoldout": {
+    "minimumRealPhotos": 200,
+    "minimumDistinctImageSha256": 200,
+    "nonemptyGroundTruthBoxesPerScene": true,
+    "minimumUnseenDeckGroups": 10,
+    "realPhotosOnly": true,
+    "freezeEvidence": "holdout and training/export contract bind the same immutable split-manifest SHA-256",
+    "singleUsePerCandidate": true
+  },
+  "primaryMetric": "exactHandTotalAccuracy",
+  "minimumExactHandTotalAccuracy": 0.95,
+  "scoringInput": "all 26 directly selectable wildcard rank/color contexts per photo",
+  "thresholdProvenance": "configured-not-validation-selected",
+  "metrics": null
+}

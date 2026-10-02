@@ -21,6 +21,7 @@ ml/card-recognition/**/*.egg-info/
 ml/card-recognition/datasets/raw/
 ml/card-recognition/datasets/normalized/
 ml/card-recognition/datasets/generated/*
+ml/card-recognition/datasets/.evaluation-receipts/
 !ml/card-recognition/datasets/generated/test-fixtures/
 !ml/card-recognition/datasets/generated/test-fixtures/**
 !ml/card-recognition/datasets/sources.json
@@ -28,5 +29,6 @@ ml/card-recognition/artifacts/
 ml/card-recognition/checkpoints/
 ml/card-recognition/reports/*
 !ml/card-recognition/reports/dataset-audit.md
+!ml/card-recognition/reports/validation-template.json
 !ml/card-recognition/reports/release/
 !ml/card-recognition/reports/release/**

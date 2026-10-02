@@ -1,4 +1,4 @@
-"""Fail-closed export and Android TFLite contract tests."""
+"""Two-phase, fail-closed Android detector export tests."""
 
 from __future__ import annotations
 
@@ -6,23 +6,33 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+import pontinho_cards.export as export_module
 from pontinho_cards.export import (
     ExportContractError,
+    _metadata_contract_from_document,
+    _validate_graph_contract,
+    generate_candidates,
     inspect_tflite,
-    prepare_export,
-    publish_export,
+    main,
+    promote_candidate,
 )
 from pontinho_cards.labels import CARD_LABELS
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FLOAT16_BYTES = b"measured float16 candidate"
+INT8_BYTES = b"measured int8 candidate"
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return _sha256_bytes(path.read_bytes())
 
 
 def _checkpoint_run(tmp_path: Path, *, status: str = "TRAINED_NOT_RELEASE_APPROVED") -> Path:
@@ -30,6 +40,9 @@ def _checkpoint_run(tmp_path: Path, *, status: str = "TRAINED_NOT_RELEASE_APPROV
     run.mkdir(parents=True)
     checkpoint = run / "selected.weights.h5"
     checkpoint.write_bytes(b"selected checkpoint fixture")
+    representative = run / "representative.jpg"
+    representative.write_bytes(b"representative image fixture")
+    (run / "annotations.csv").write_text(f"TRAIN,{representative},AC,0,0,,,1,1,,\n")
     (run / "resolved-config.yaml").write_text(
         yaml.safe_dump(
             {
@@ -68,18 +81,92 @@ def _checkpoint_run(tmp_path: Path, *, status: str = "TRAINED_NOT_RELEASE_APPROV
     return run
 
 
-def _comparison(run: Path, *, selected: str = "float16") -> Path:
-    path = run / "export-comparison.json"
+def _inspection(path: Path, variant: str) -> dict[str, object]:
+    return {
+        "modelSha256": _sha256(path),
+        "input": {
+            "name": "serving_default_images:0",
+            "shape": [1, 320, 320, 3],
+            "shapeSignature": [1, 320, 320, 3],
+            "dtype": "float32" if variant == "float16" else "uint8",
+        },
+        "outputs": [
+            {
+                "semantic": "boxes",
+                "tensorName": "StatefulPartitionedCall:1",
+                "metadataName": "location",
+                "shape": [1, 25, 4],
+                "shapeSignature": [1, 25, 4],
+                "dtype": "float32",
+            },
+            {
+                "semantic": "classes",
+                "tensorName": "StatefulPartitionedCall:3",
+                "metadataName": "category",
+                "shape": [1, 25],
+                "shapeSignature": [1, 25],
+                "dtype": "float32",
+            },
+            {
+                "semantic": "scores",
+                "tensorName": "StatefulPartitionedCall:0",
+                "metadataName": "score",
+                "shape": [1, 25],
+                "shapeSignature": [1, 25],
+                "dtype": "float32",
+            },
+            {
+                "semantic": "count",
+                "tensorName": "StatefulPartitionedCall:2",
+                "metadataName": "number of detections",
+                "shape": [1],
+                "shapeSignature": [1],
+                "dtype": "float32",
+            },
+        ],
+        "customOps": ["TFLite_Detection_PostProcess"],
+        "labels": list(CARD_LABELS),
+        "normalization": {"mean": [127.0] * 3, "std": [128.0] * 3},
+        "quantization": {
+            "variant": variant,
+            "input": (
+                None
+                if variant == "float16"
+                else {"scales": [0.5], "zeroPoints": [128], "quantizedDimension": 0}
+            ),
+            "nonemptyConstantTensorTypes": ["FLOAT16" if variant == "float16" else "INT8"],
+            "quantizedConstantCount": 0 if variant == "float16" else 1,
+        },
+        "interpreterInvocation": "passed",
+    }
+
+
+def _fake_generate(_snapshot: object, variant: str, target: Path) -> dict[str, object]:
+    target.write_bytes(FLOAT16_BYTES if variant == "float16" else INT8_BYTES)
+    return _inspection(target, variant)
+
+
+def _comparison(candidates: Path, *, selected: str = "float16") -> Path:
+    manifest = json.loads((candidates / "candidate-contract.json").read_text())
+    path = candidates.parent / "export-comparison.json"
     path.write_text(
         json.dumps(
             {
                 "schemaVersion": 1,
+                "candidateContractSha256": _sha256(candidates / "candidate-contract.json"),
                 "selected": selected,
-                "selectionRationale": "float16 retained accuracy and was faster on Android",
+                "selectionRationale": "measured accuracy and Android latency",
+                "selectedCheckpointSha256": manifest["checkpointSha256"],
+                "runGitCommit": manifest["runGitCommit"],
                 "validationManifestSha256": "3" * 64,
+                "androidDevice": "Pixel 8 / Android 16",
                 "variants": {
-                    "float16": {"exactTotalAccuracy": 0.96, "androidLatencyMs": 48.2},
-                    "int8": {"exactTotalAccuracy": 0.94, "androidLatencyMs": 31.7},
+                    variant: {
+                        "modelSha256": manifest["variants"][variant]["modelSha256"],
+                        "exactTotalAccuracy": 0.96 if variant == "float16" else 0.95,
+                        "androidLatencyMs": 48.2 if variant == "float16" else 31.7,
+                    }
+                    for variant in ("float16", "int8")
                 },
             }
         ),
@@ -88,169 +175,560 @@ def _comparison(run: Path, *, selected: str = "float16") -> Path:
     return path
 
 
-def test_prepare_export_reuses_the_single_selected_checkpoint_and_comparison(
-    tmp_path: Path,
+def _candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    run = _checkpoint_run(tmp_path)
+    output = tmp_path / "artifacts" / "candidate-v1"
+    monkeypatch.setattr(export_module, "_generate_and_inspect_variant", _fake_generate)
+    generate_candidates(run, output)
+    return run, output
+
+
+def test_candidate_generation_atomically_emits_both_exact_measurable_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Catch exporting arbitrary weights or choosing quantization without Android evidence."""
+    """Catch a workflow that selects or regenerates a model before measurement."""
 
     run = _checkpoint_run(tmp_path)
-    comparison = _comparison(run)
+    output = tmp_path / "artifacts" / "candidate-v1"
+    monkeypatch.setattr(export_module, "_generate_and_inspect_variant", _fake_generate)
 
-    request = prepare_export(run, tmp_path / "artifacts" / "v1", comparison)
+    contract = generate_candidates(run, output)
 
-    assert request.checkpoint_path == run / "selected.weights.h5"
-    assert request.checkpoint_sha256 == _sha256(request.checkpoint_path)
-    assert request.run_git_commit == "0f51cf2"
-    assert request.input_manifest_sha256 == "2" * 64
-    assert request.quantization == "float16"
-    assert request.labels == CARD_LABELS
-    assert request.input_size == 320
-    assert request.confidence_threshold == 0.5
-    assert request.iou_threshold == 0.5
+    assert (output / "card_detector.float16.tflite").read_bytes() == FLOAT16_BYTES
+    assert (output / "card_detector.int8.tflite").read_bytes() == INT8_BYTES
+    assert json.loads((output / "candidate-contract.json").read_text()) == contract
+    assert contract["checkpointSha256"] == _sha256(run / "selected.weights.h5")
+    assert contract["thresholdProvenance"] == "configured-not-validation-selected"
+    assert contract["variants"]["float16"]["modelSha256"] == _sha256_bytes(FLOAT16_BYTES)
+    assert contract["variants"]["int8"]["modelSha256"] == _sha256_bytes(INT8_BYTES)
+    assert not list(output.parent.glob(".candidate-v1.*"))
+
+
+def test_promotion_copies_the_exact_measured_selected_binary_without_regeneration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch regenerating a supposedly measured variant during promotion."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    comparison = _comparison(candidates, selected="int8")
+    output = tmp_path / "artifacts" / "release-v1"
+    monkeypatch.setattr(
+        export_module,
+        "inspect_tflite",
+        lambda path, *, expected_quantization: _inspection(Path(path), expected_quantization),
+    )
+    monkeypatch.setattr(
+        export_module,
+        "_generate_and_inspect_variant",
+        lambda *_args, **_kwargs: pytest.fail("promotion must never regenerate"),
+    )
+    (run / "annotations.csv").unlink()
+    (run / "representative.jpg").unlink()
+
+    contract = promote_candidate(run, candidates, comparison, output)
+
+    assert (output / "card_detector.tflite").read_bytes() == INT8_BYTES
+    assert contract["modelSha256"] == _sha256_bytes(INT8_BYTES)
+    assert contract["quantization"]["variant"] == "int8"
+    assert contract["comparisonSha256"] == _sha256(comparison)
+    assert contract["thresholdProvenance"] == "configured-not-validation-selected"
+    assert json.loads((output / "model-contract.json").read_text()) == contract
+
+
+def test_promotion_rejects_comparison_for_any_other_candidate_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch stale evidence authorizing a changed candidate binary."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    comparison = _comparison(candidates)
+    (candidates / "card_detector.float16.tflite").write_bytes(b"mutated after benchmark")
+
+    with pytest.raises(ExportContractError, match="candidate hash"):
+        promote_candidate(run, candidates, comparison, tmp_path / "artifacts" / "release-v1")
+    assert not (tmp_path / "artifacts" / "release-v1").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("schemaVersion", 2, "schemaVersion"),
+        ("inputManifestSha256", "9" * 64, "input manifest"),
+        ("requirementsLockSha256", "8" * 64, "requirements lock"),
+        ("scoreThreshold", 0.75, "score threshold"),
+        ("iouThreshold", 0.75, "IoU threshold"),
+        ("labels", list(reversed(CARD_LABELS)), "labels"),
+    ],
+)
+def test_promotion_rejects_candidate_contract_not_bound_to_fresh_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    """Catch benchmark evidence authorizing a contract from another training run."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    contract_path = candidates / "candidate-contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract[field] = value
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    comparison = _comparison(candidates)
+
+    with pytest.raises(ExportContractError, match=message):
+        promote_candidate(run, candidates, comparison, tmp_path / "artifacts" / "release-v1")
+
+
+def test_promotion_rejects_mutated_candidate_inspection_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch a valid binary paired with altered generated contract declarations."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    contract_path = candidates / "candidate-contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["variants"]["float16"]["normalization"]["std"] = [0.0, 0.0, 0.0]
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    comparison = _comparison(candidates)
+
+    with pytest.raises(ExportContractError, match="normalization std"):
+        promote_candidate(run, candidates, comparison, tmp_path / "artifacts" / "release-v1")
+
+
+def test_promotion_rejects_fresh_inspection_that_differs_from_generated_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch promotion silently replacing generation-time inspection facts."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    comparison = _comparison(candidates)
+
+    def changed_inspection(path: Path, *, expected_quantization: str) -> dict[str, object]:
+        result = _inspection(Path(path), expected_quantization)
+        result["input"]["name"] = "changed:0"  # type: ignore[index]
+        return result
+
+    monkeypatch.setattr(export_module, "inspect_tflite", changed_inspection)
+    with pytest.raises(ExportContractError, match="generation-time contract"):
+        promote_candidate(run, candidates, comparison, tmp_path / "artifacts" / "release-v1")
+
+
+def test_original_generate_cli_remains_a_backward_compatible_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        export_module,
+        "generate_candidates",
+        lambda checkpoint, output: calls.append((checkpoint, output)),
+    )
+
+    assert main(["--checkpoint", str(tmp_path / "run"), "--output", str(tmp_path / "out")]) == 0
+    assert calls == [(tmp_path / "run", tmp_path / "out")]
+
+
+@pytest.mark.parametrize("target", ["run", "weights", "comparison"])
+def test_symlinked_security_inputs_are_rejected_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """Catch resolve-before-lstat accepting attacker-controlled links."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    comparison = _comparison(candidates)
+    if target == "run":
+        link = tmp_path / "run-link"
+        link.symlink_to(run, target_is_directory=True)
+        with pytest.raises(ExportContractError, match="symbolic link"):
+            generate_candidates(link, tmp_path / "artifacts" / "other")
+    elif target == "weights":
+        weights = run / "selected.weights.h5"
+        real = run / "real.weights.h5"
+        weights.replace(real)
+        weights.symlink_to(real)
+        with pytest.raises(ExportContractError, match="symbolic link"):
+            generate_candidates(run, tmp_path / "artifacts" / "other")
+    else:
+        real = comparison.with_name("real-comparison.json")
+        comparison.replace(real)
+        comparison.symlink_to(real)
+        with pytest.raises(ExportContractError, match="symbolic link"):
+            promote_candidate(run, candidates, comparison, tmp_path / "artifacts" / "release-v1")
+
+
+def test_source_mutation_after_snapshot_aborts_without_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch TOCTOU changes between validation, conversion, and publication."""
+
+    run = _checkpoint_run(tmp_path)
+    output = tmp_path / "artifacts" / "candidate-v1"
+
+    def mutate_source(snapshot: object, variant: str, target: Path) -> dict[str, object]:
+        if variant == "float16":
+            (run / "selected.weights.h5").write_bytes(b"changed during conversion")
+        return _fake_generate(snapshot, variant, target)
+
+    monkeypatch.setattr(export_module, "_generate_and_inspect_variant", mutate_source)
+    with pytest.raises(ExportContractError, match="changed during export"):
+        generate_candidates(run, output)
+    assert not output.exists()
+    assert not list(output.parent.glob(".candidate-v1.*"))
+
+
+def test_comparison_mutation_after_snapshot_aborts_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch comparison evidence changing while the selected model is reinspected."""
+
+    run, candidates = _candidates(tmp_path, monkeypatch)
+    comparison = _comparison(candidates)
+
+    def mutate_comparison(path: Path, *, expected_quantization: str) -> dict[str, object]:
+        comparison.write_text("{}", encoding="utf-8")
+        return _inspection(Path(path), expected_quantization)
+
+    monkeypatch.setattr(export_module, "inspect_tflite", mutate_comparison)
+
+    with pytest.raises(ExportContractError, match="changed during export"):
+        promote_candidate(
+            run,
+            candidates,
+            comparison,
+            tmp_path / "artifacts" / "release-v1",
+        )
+
+    assert not (tmp_path / "artifacts" / "release-v1").exists()
+
+
+def test_concurrent_target_reservation_never_replaces_the_other_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch check-then-rename clobbering a concurrently created target."""
+
+    run = _checkpoint_run(tmp_path)
+    output = tmp_path / "artifacts" / "candidate-v1"
+
+    def concurrent_writer(snapshot: object, variant: str, target: Path) -> dict[str, object]:
+        if variant == "int8":
+            output.mkdir(parents=True)
+            (output / "owner.txt").write_text("other writer", encoding="utf-8")
+        return _fake_generate(snapshot, variant, target)
+
+    monkeypatch.setattr(export_module, "_generate_and_inspect_variant", concurrent_writer)
+    with pytest.raises(ExportContractError, match="reserve output"):
+        generate_candidates(run, output)
+    assert (output / "owner.txt").read_text(encoding="utf-8") == "other writer"
+
+
+def _metadata(mean: list[float], std: list[float], label_file: str) -> dict[str, object]:
+    return {
+        "subgraph_metadata": [
+            {
+                "input_tensor_metadata": [
+                    {"process_units": [{"options": {"mean": mean, "std": std}}]}
+                ],
+                "output_tensor_metadata": [
+                    {"name": "score"},
+                    {"name": "location"},
+                    {"name": "number of detections"},
+                    {"name": "category", "associated_files": [{"name": label_file}]},
+                ],
+            }
+        ]
+    }
+
+
+def test_class_labels_follow_the_class_tensor_associated_file_not_a_decoy() -> None:
+    """Catch canonical decoy labels hiding a reversed true class map."""
+
+    files = {
+        "actual-labels.txt": "\n".join(reversed(CARD_LABELS)).encode(),
+        "canonical-decoy.txt": "\n".join(CARD_LABELS).encode(),
+    }
+    with pytest.raises(ExportContractError, match="class-output metadata labels"):
+        _metadata_contract_from_document(
+            _metadata([127.0], [128.0], "actual-labels.txt"),
+            files,
+            graph_output_indices=[10, 11, 12, 13],
+            postprocess_output_indices=[11, 13, 10, 12],
+        )
+
+
+@pytest.mark.parametrize(
+    ("mean", "std"), [([127.0, 127.0], [128.0, 128.0]), ([127.0] * 3, [128.0, 0.0, 128.0])]
+)
+def test_normalization_must_expand_to_three_channels_with_positive_std(
+    mean: list[float], std: list[float]
+) -> None:
+    """Catch malformed metadata that cannot define RGB preprocessing exactly."""
+
+    with pytest.raises(ExportContractError, match="three RGB channels|positive"):
+        _metadata_contract_from_document(
+            _metadata(mean, std, "labels.txt"),
+            {"labels.txt": "\n".join(CARD_LABELS).encode()},
+            graph_output_indices=[10, 11, 12, 13],
+            postprocess_output_indices=[11, 13, 10, 12],
+        )
+
+
+def _graph(**changes: object) -> SimpleNamespace:
+    base = {
+        "input_index": 1,
+        "graph_output_indices": [10, 11, 12, 13],
+        "postprocess_output_indices": [11, 13, 10, 12],
+        "tensor_names": {
+            1: "serving_default_images:0",
+            10: "StatefulPartitionedCall:0",
+            11: "StatefulPartitionedCall:1",
+            12: "StatefulPartitionedCall:2",
+            13: "StatefulPartitionedCall:3",
+        },
+        "shapes": {1: [1, 320, 320, 3], 10: [1, 25], 11: [1, 25, 4], 12: [1], 13: [1, 25]},
+        "shape_signatures": {
+            1: [1, 320, 320, 3],
+            10: [1, 25],
+            11: [1, 25, 4],
+            12: [1],
+            13: [1, 25],
+        },
+        "tensor_types": {
+            1: "FLOAT32",
+            10: "FLOAT32",
+            11: "FLOAT32",
+            12: "FLOAT32",
+            13: "FLOAT32",
+            20: "FLOAT16",
+        },
+        "constant_tensor_types": {20: "FLOAT16"},
+        "constant_consumers": {20: [{"op": "CONV_2D", "inputPosition": 1}]},
+        "postprocess_input_indices": [30, 31, 20],
+        "nonempty_constant_indices": [20],
+        "nonempty_constant_tensor_types": ["FLOAT16", "FLOAT16"],
+        "quantized_constant_count": 0,
+        "constant_quantization": {20: {"scales": [], "zeroPoints": [], "quantizedDimension": 0}},
+        "input_quantization": {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+        "custom_ops": ["TFLite_Detection_PostProcess"],
+    }
+    base.update(changes)
+    return SimpleNamespace(**base)
 
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        ("missing-comparison", "comparison"),
-        ("smoke-run", "full trained run"),
-        ("checkpoint-hash", "checkpoint hash"),
-        ("checkpoint-name", "selected checkpoint"),
-        ("labels", "CARD_LABELS"),
-        ("missing-int8-latency", "Android latency"),
-        ("bad-selection", "float16 or int8"),
+        ({"shape_signatures": {1: [-1, 320, 320, 3]}}, "shape_signature"),
+        ({"tensor_names": {1: "", 10: "a", 11: "b", 12: "c", 13: "d"}}, "tensor names"),
+        ({"nonempty_constant_tensor_types": ["FLOAT32"]}, "float16 constant"),
+        (
+            {
+                "constant_tensor_types": {20: "FLOAT16", 21: "FLOAT32"},
+                "nonempty_constant_tensor_types": ["FLOAT16", "FLOAT32"],
+            },
+            "non-postprocess floating constant",
+        ),
+        ({"custom_ops": ["TFLite_Detection_PostProcess", "Mystery"]}, "custom ops"),
     ],
 )
-def test_prepare_export_rejects_unproven_or_mismatched_inputs(
-    tmp_path: Path, mutation: str, message: str
+def test_graph_contract_rejects_dynamic_shapes_names_and_partial_quantization(
+    mutation: dict[str, object], message: str
 ) -> None:
-    """Catch an export that is not tied to an exact trained run and measured variant."""
-
-    run = _checkpoint_run(
-        tmp_path,
-        status="SMOKE_ONLY" if mutation == "smoke-run" else "TRAINED_NOT_RELEASE_APPROVED",
-    )
-    comparison = _comparison(run, selected="dynamic" if mutation == "bad-selection" else "float16")
-    if mutation == "missing-comparison":
-        comparison.unlink()
-    elif mutation == "checkpoint-hash":
-        metrics = json.loads((run / "metrics.json").read_text())
-        metrics["selectedCheckpointSha256"] = "f" * 64
-        (run / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
-    elif mutation == "checkpoint-name":
-        metrics = json.loads((run / "metrics.json").read_text())
-        metrics["selectedCheckpoint"] = "other.weights.h5"
-        (run / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
-    elif mutation == "labels":
-        config = yaml.safe_load((run / "resolved-config.yaml").read_text())
-        config["labels"] = list(reversed(CARD_LABELS))
-        (run / "resolved-config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-    elif mutation == "missing-int8-latency":
-        document = json.loads(comparison.read_text())
-        del document["variants"]["int8"]["androidLatencyMs"]
-        comparison.write_text(json.dumps(document), encoding="utf-8")
+    """Catch superficially compatible tensors hiding an incompatible graph."""
 
     with pytest.raises(ExportContractError, match=message):
-        prepare_export(run, tmp_path / "artifacts" / "v1", comparison)
+        _validate_graph_contract(_graph(**mutation), expected_quantization="float16")
 
-    assert not (tmp_path / "artifacts").exists()
+
+def test_int8_graph_requires_model_wide_quantized_constants() -> None:
+    """Catch an integer-looking input on a model whose weights stayed float."""
+
+    graph = _graph(
+        tensor_types={1: "UINT8", 10: "FLOAT32", 11: "FLOAT32", 12: "FLOAT32", 13: "FLOAT32"},
+        constant_tensor_types={20: "FLOAT32"},
+        nonempty_constant_tensor_types=["FLOAT32"],
+        quantized_constant_count=0,
+        constant_quantization={20: {"scales": [], "zeroPoints": [], "quantizedDimension": 0}},
+        input_quantization={"scales": [0.5], "zeroPoints": [128], "quantizedDimension": 0},
+    )
+    with pytest.raises(ExportContractError, match="quantized constant"):
+        _validate_graph_contract(graph, expected_quantization="int8")
+
+
+def _int8_graph(**changes: object) -> SimpleNamespace:
+    base = {
+        "tensor_types": {
+            1: "UINT8",
+            10: "FLOAT32",
+            11: "FLOAT32",
+            12: "FLOAT32",
+            13: "FLOAT32",
+            20: "INT8",
+            21: "UINT8",
+            22: "INT32",
+        },
+        "shapes": {
+            1: [1, 320, 320, 3],
+            10: [1, 25],
+            11: [1, 25, 4],
+            12: [1],
+            13: [1, 25],
+            20: [2, 2],
+            21: [2],
+            22: [1],
+        },
+        "constant_tensor_types": {20: "INT8", 21: "UINT8", 22: "INT32"},
+        "nonempty_constant_indices": [20, 21, 22],
+        "constant_consumers": {
+            20: [{"op": "CONV_2D", "inputPosition": 1}],
+            21: [{"op": "CONV_2D", "inputPosition": 1}],
+            22: [{"op": "RESIZE_NEAREST_NEIGHBOR", "inputPosition": 1}],
+        },
+        "nonempty_constant_tensor_types": ["INT8", "UINT8", "INT32"],
+        "quantized_constant_count": 2,
+        "constant_quantization": {
+            20: {"scales": [0.1, 0.2], "zeroPoints": [0, 0], "quantizedDimension": 0},
+            21: {"scales": [0.3], "zeroPoints": [128], "quantizedDimension": 0},
+            22: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+        },
+        "input_quantization": {
+            "scales": [0.5],
+            "zeroPoints": [128],
+            "quantizedDimension": 0,
+        },
+    }
+    base.update(changes)
+    return _graph(**base)
+
+
+def test_int8_graph_accepts_every_quantized_byte_constant_and_explicit_int32_exception() -> None:
+    _validate_graph_contract(_int8_graph(), expected_quantization="int8")
+
+
+@pytest.mark.parametrize("tensor_type", ["INT64", "BOOL", "UINT16", "UNKNOWN_255"])
+def test_int8_graph_rejects_every_unclassified_nonempty_constant(tensor_type: str) -> None:
+    graph = _int8_graph(
+        tensor_types={**_int8_graph().tensor_types, 23: tensor_type},
+        shapes={**_int8_graph().shapes, 23: [1]},
+        constant_tensor_types={**_int8_graph().constant_tensor_types, 23: tensor_type},
+        nonempty_constant_indices=[*_int8_graph().nonempty_constant_indices, 23],
+        constant_consumers={
+            **_int8_graph().constant_consumers,
+            23: [{"op": "RESHAPE", "inputPosition": 1}],
+        },
+        nonempty_constant_tensor_types=[
+            *_int8_graph().nonempty_constant_tensor_types,
+            tensor_type,
+        ],
+        constant_quantization={
+            **_int8_graph().constant_quantization,
+            23: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+        },
+    )
+    with pytest.raises(ExportContractError, match="unsupported nonempty constant"):
+        _validate_graph_contract(graph, expected_quantization="int8")
+
+
+def test_int8_graph_rejects_nonempty_constant_index_that_escaped_inventory() -> None:
+    graph = _int8_graph(nonempty_constant_indices=[20, 21, 22, 23])
+    with pytest.raises(ExportContractError, match="index accounting"):
+        _validate_graph_contract(graph, expected_quantization="int8")
 
 
 @pytest.mark.parametrize(
-    "output",
-    [Path("."), Path(".."), Path("artifacts") / "..", Path("artifacts") / "two words"],
+    ("consumers", "shape"),
+    [
+        ([{"op": "CONV_2D", "inputPosition": 1}], [1]),
+        ([{"op": "RESHAPE", "inputPosition": 1}], [9]),
+        ([], [1]),
+    ],
 )
-def test_prepare_export_rejects_unsafe_output_paths(tmp_path: Path, output: Path) -> None:
-    """Catch traversal, roots, and ambiguous candidate directory names before writes."""
-
-    run = _checkpoint_run(tmp_path)
-    comparison = _comparison(run)
-
-    with pytest.raises(ExportContractError, match="output"):
-        prepare_export(run, tmp_path / output, comparison)
-
-
-def test_publish_export_is_atomic_and_writes_complete_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_int8_graph_rejects_int32_constant_outside_narrow_shape_role(
+    consumers: list[dict[str, object]], shape: list[int]
 ) -> None:
-    """Catch partial candidate publication or a contract detached from run hashes."""
+    graph = _int8_graph(
+        shapes={**_int8_graph().shapes, 22: shape},
+        constant_consumers={**_int8_graph().constant_consumers, 22: consumers},
+    )
+    with pytest.raises(ExportContractError, match="INT32 constant tensor 22"):
+        _validate_graph_contract(graph, expected_quantization="int8")
 
-    run = _checkpoint_run(tmp_path)
-    request = prepare_export(run, tmp_path / "artifacts" / "v1", _comparison(run))
 
-    def genuine_export(_request: object, target: Path) -> dict[str, object]:
-        model = target / "card_detector.tflite"
-        model.write_bytes(b"genuine converter output fixture")
-        return {
-            "modelSha256": _sha256(model),
-            "input": {"shape": [1, 320, 320, 3], "dtype": "float32"},
-            "outputs": [
-                {"semantic": "boxes", "shape": [1, 25, 4], "dtype": "float32"},
-                {"semantic": "classes", "shape": [1, 25], "dtype": "float32"},
-                {"semantic": "scores", "shape": [1, 25], "dtype": "float32"},
-                {"semantic": "count", "shape": [1], "dtype": "float32"},
+def test_int8_graph_rejects_float32_constant_not_exclusive_to_detection_postprocess() -> None:
+    graph = _int8_graph(
+        tensor_types={**_int8_graph().tensor_types, 23: "FLOAT32"},
+        shapes={**_int8_graph().shapes, 23: [4]},
+        constant_tensor_types={**_int8_graph().constant_tensor_types, 23: "FLOAT32"},
+        constant_consumers={
+            **_int8_graph().constant_consumers,
+            23: [
+                {"op": "TFLite_Detection_PostProcess", "inputPosition": 2},
+                {"op": "ADD", "inputPosition": 1},
             ],
-            "customOps": ["TFLite_Detection_PostProcess"],
-            "labels": list(CARD_LABELS),
-            "normalization": {"mean": [127.0], "std": [128.0]},
-            "quantization": {"variant": "float16", "input": None},
-            "interpreterInvocation": "passed",
+        },
+        postprocess_input_indices=[30, 31, 23],
+        nonempty_constant_indices=[*_int8_graph().nonempty_constant_indices, 23],
+        nonempty_constant_tensor_types=[
+            *_int8_graph().nonempty_constant_tensor_types,
+            "FLOAT32",
+        ],
+        constant_quantization={
+            **_int8_graph().constant_quantization,
+            23: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+        },
+    )
+    with pytest.raises(ExportContractError, match="DetectionPostProcess constant"):
+        _validate_graph_contract(graph, expected_quantization="int8")
+
+
+def test_int8_graph_rejects_mixed_quantized_and_unquantized_byte_constants() -> None:
+    graph = _int8_graph(
+        constant_quantization={
+            20: {"scales": [0.1, 0.2], "zeroPoints": [0, 0], "quantizedDimension": 0},
+            21: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+            22: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
         }
-
-    monkeypatch.setattr("pontinho_cards.export._export_and_inspect", genuine_export)
-    contract = publish_export(request)
-
-    assert request.output_dir.exists()
-    assert not list(request.output_dir.parent.glob(".v1.*"))
-    assert json.loads((request.output_dir / "model-contract.json").read_text()) == contract
-    assert contract["checkpointSha256"] == request.checkpoint_sha256
-    assert contract["inputManifestSha256"] == "2" * 64
-    assert contract["runGitCommit"] == "0f51cf2"
-    assert contract["scoreThreshold"] == 0.5
-    assert contract["iouThreshold"] == 0.5
-    assert contract["labels"] == list(CARD_LABELS)
+    )
+    with pytest.raises(ExportContractError, match="constant tensor 21.*scale"):
+        _validate_graph_contract(graph, expected_quantization="int8")
 
 
-def test_publish_failure_never_leaks_or_replaces_a_candidate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"scales": [0.0], "zeroPoints": [0], "quantizedDimension": 0}, "positive finite"),
+        ({"scales": [float("nan")], "zeroPoints": [0], "quantizedDimension": 0}, "positive finite"),
+        ({"scales": [0.1, 0.2], "zeroPoints": [0], "quantizedDimension": 0}, "cardinality"),
+        ({"scales": [0.1], "zeroPoints": [200], "quantizedDimension": 0}, "range"),
+        ({"scales": [0.1, 0.2], "zeroPoints": [0, 0], "quantizedDimension": 2}, "dimension"),
+    ],
+)
+def test_int8_graph_rejects_invalid_constant_quantization(
+    metadata: dict[str, object], message: str
 ) -> None:
-    """Catch a conversion/inspection failure leaving reusable-looking output."""
-
-    run = _checkpoint_run(tmp_path)
-    request = prepare_export(run, tmp_path / "artifacts" / "v1", _comparison(run))
-
-    def fail_after_model(_request: object, target: Path) -> dict[str, object]:
-        (target / "card_detector.tflite").write_bytes(b"partial")
-        raise ExportContractError("missing TFLite_Detection_PostProcess")
-
-    monkeypatch.setattr("pontinho_cards.export._export_and_inspect", fail_after_model)
-
-    with pytest.raises(ExportContractError, match="Detection_PostProcess"):
-        publish_export(request)
-
-    assert not request.output_dir.exists()
-    assert not list(request.output_dir.parent.glob(".v1.*"))
+    constants = dict(_int8_graph().constant_quantization)
+    constants[20] = metadata
+    with pytest.raises(ExportContractError, match=message):
+        _validate_graph_contract(
+            _int8_graph(constant_quantization=constants), expected_quantization="int8"
+        )
 
 
-def test_publish_rechecks_the_inspected_model_hash_before_atomic_rename(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"scales": [0.0], "zeroPoints": [128], "quantizedDimension": 0}, "positive finite"),
+        ({"scales": [0.5], "zeroPoints": [], "quantizedDimension": 0}, "cardinality"),
+        ({"scales": [0.5], "zeroPoints": [256], "quantizedDimension": 0}, "range"),
+        ({"scales": [0.5], "zeroPoints": [128], "quantizedDimension": 4}, "dimension"),
+    ],
+)
+def test_int8_graph_rejects_invalid_input_quantization(
+    metadata: dict[str, object], message: str
 ) -> None:
-    """Catch a changed model byte stream between inspection and publication."""
-
-    run = _checkpoint_run(tmp_path)
-    request = prepare_export(run, tmp_path / "artifacts" / "v1", _comparison(run))
-
-    def stale_inspection(_request: object, target: Path) -> dict[str, object]:
-        (target / "card_detector.tflite").write_bytes(b"changed after inspection")
-        return {"modelSha256": "0" * 64, "labels": list(CARD_LABELS)}
-
-    monkeypatch.setattr("pontinho_cards.export._export_and_inspect", stale_inspection)
-
-    with pytest.raises(ExportContractError, match="model hash"):
-        publish_export(request)
-
-    assert not request.output_dir.exists()
-    assert not list(request.output_dir.parent.glob(".v1.*"))
+    with pytest.raises(ExportContractError, match=message):
+        _validate_graph_contract(
+            _int8_graph(input_quantization=metadata), expected_quantization="int8"
+        )
 
 
 @pytest.mark.skipif(
@@ -261,13 +739,18 @@ def test_publish_rechecks_the_inspected_model_hash_before_atomic_rename(
     "ignore:^numElems is deprecated\\.$:DeprecationWarning:"
     "tensorflow\\.lite\\.python\\.schema_py_generated$"
 )
-def test_genuine_model_maker_fixture_has_the_android_detection_contract(
-    tmp_path: Path,
-) -> None:
-    """Catch a model that looks documented but cannot execute its real custom-op graph."""
+def test_genuine_model_maker_fixture_has_the_android_detection_contract(tmp_path: Path) -> None:
+    """Catch a documented contract the genuine converter cannot satisfy."""
 
+    import tensorflow as tf
     from tensorflow_examples.lite.model_maker.core.task import configs
     from tflite_model_maker import object_detector
+
+    class RepresentativeData:
+        def gen_dataset(self, model_spec: object, batch_size: int, is_training: bool) -> object:
+            del model_spec, batch_size, is_training
+            image = tf.zeros([1, 320, 320, 3], dtype=tf.float32)
+            return tf.data.Dataset.from_tensors((image, tf.constant(0)))
 
     label_map = {index: label for index, label in enumerate(CARD_LABELS, start=1)}
     spec = object_detector.EfficientDetLite0Spec(
@@ -276,28 +759,43 @@ def test_genuine_model_maker_fixture_has_the_android_detection_contract(
         batch_size=1,
         hparams={"image_size": "320x320"},
     )
-    detector = object_detector.ObjectDetector(spec, label_map)
+    representative_data = RepresentativeData()
+    detector = object_detector.ObjectDetector(spec, label_map, representative_data)
     detector.create_model()
     detector.export(
         str(tmp_path),
-        tflite_filename="card_detector.tflite",
+        tflite_filename="card_detector.float16.tflite",
         quantization_config=configs.QuantizationConfig.for_float16(),
         with_metadata=True,
     )
-    model = tmp_path / "card_detector.tflite"
-    inspection = inspect_tflite(model, expected_quantization="float16")
+    inspection = inspect_tflite(
+        tmp_path / "card_detector.float16.tflite", expected_quantization="float16"
+    )
 
     assert inspection["customOps"] == ["TFLite_Detection_PostProcess"]
     assert inspection["labels"] == list(CARD_LABELS)
-    assert inspection["input"] == {
-        "shape": [1, 320, 320, 3],
-        "dtype": "float32",
-    }
-    assert [item["semantic"] for item in inspection["outputs"]] == [
-        "boxes",
-        "classes",
-        "scores",
-        "count",
+    assert inspection["input"]["shapeSignature"] == [1, 320, 320, 3]
+    assert [item["metadataName"] for item in inspection["outputs"]] == [
+        "location",
+        "category",
+        "score",
+        "number of detections",
     ]
-    assert inspection["normalization"] == {"mean": [127.0], "std": [128.0]}
+    assert inspection["normalization"] == {
+        "mean": [127.0, 127.0, 127.0],
+        "std": [128.0, 128.0, 128.0],
+    }
     assert inspection["interpreterInvocation"] == "passed"
+
+    detector.export(
+        str(tmp_path),
+        tflite_filename="card_detector.int8.tflite",
+        quantization_config=spec.get_default_quantization_config(representative_data),
+        with_metadata=True,
+    )
+    int8_inspection = inspect_tflite(
+        tmp_path / "card_detector.int8.tflite", expected_quantization="int8"
+    )
+    assert int8_inspection["quantization"]["variant"] == "int8"
+    assert int8_inspection["quantization"]["quantizedConstantCount"] > 0
+    assert int8_inspection["interpreterInvocation"] == "passed"

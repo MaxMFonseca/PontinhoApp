@@ -224,9 +224,15 @@ def write_split_manifests(
     partitions = create_splits(records, seed=seed)
     output_path = Path(out)
     holdout_path = output_path.with_name("final-holdout.json")
+    split_payload = _serialized(_document(partitions, seed))
+    test_payload = (json.dumps(partitions["test"], indent=2, sort_keys=True) + "\n").encode()
     holdout_document = {
         "schemaVersion": 1,
+        "kind": "pontinho-frozen-holdout",
         "seed": seed,
+        "splitManifest": output_path.name,
+        "splitManifestSha256": hashlib.sha256(split_payload).hexdigest(),
+        "testPartitionSha256": hashlib.sha256(test_payload).hexdigest(),
         "test": partitions["test"],
     }
     holdout_payload = _serialized(holdout_document)
@@ -236,7 +242,7 @@ def write_split_manifests(
         )
     if not holdout_path.exists():
         _atomic_write(holdout_path, holdout_payload)
-    _atomic_write(output_path, _serialized(_document(partitions, seed)))
+    _atomic_write(output_path, split_payload)
     return partitions
 
 

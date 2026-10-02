@@ -47,9 +47,7 @@ def _fixture_records() -> list[dict[str, object]]:
         _record(9, deck="deck-h", label="5C"),
     ]
     # These three records are transitively related and therefore must stay together.
-    records.append(
-        _record(10, deck="deck-i", label="6D", derivative="shared-derivative")
-    )
+    records.append(_record(10, deck="deck-i", label="6D", derivative="shared-derivative"))
     records.append(
         _record(
             11,
@@ -157,9 +155,7 @@ def test_split_rejects_a_duplicate_image_id_with_different_content() -> None:
         ),
     ],
 )
-def test_split_rejects_noncanonical_normalized_records(
-    mutation: object, message: str
-) -> None:
+def test_split_rejects_noncanonical_normalized_records(mutation: object, message: str) -> None:
     record = _record(1, deck="deck-a", label="AC")
     mutation(record)  # type: ignore[operator]
 
@@ -183,13 +179,21 @@ def test_final_holdout_is_frozen_and_empty_audit_stays_truthfully_empty(tmp_path
         "partitions": {"test": [], "train": [], "validation": []},
     }
     holdout = tmp_path / "final-holdout.json"
+    holdout_document = json.loads(holdout.read_text(encoding="utf-8"))
+    assert holdout_document == {
+        "schemaVersion": 1,
+        "kind": "pontinho-frozen-holdout",
+        "seed": 20261014,
+        "splitManifest": "splits.json",
+        "splitManifestSha256": __import__("hashlib").sha256(split_path.read_bytes()).hexdigest(),
+        "testPartitionSha256": __import__("hashlib").sha256(b"[]\n").hexdigest(),
+        "test": [],
+    }
     original = holdout.read_bytes()
     write_split_manifests([], out=split_path, seed=20261014)
     assert holdout.read_bytes() == original
 
-    changed_records = [
-        _record(index, deck=f"deck-{index}", label="AC") for index in range(1, 9)
-    ]
+    changed_records = [_record(index, deck=f"deck-{index}", label="AC") for index in range(1, 9)]
     assert create_splits(changed_records, seed=20261014)["test"]
     with pytest.raises(SplitError, match="frozen final holdout"):
         write_split_manifests(changed_records, out=split_path, seed=20261014)

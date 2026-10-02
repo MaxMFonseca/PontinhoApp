@@ -127,6 +127,10 @@ def normalize_record(
     if type(real) is not bool:
         raise NormalizationError("isRealPhoto must be a boolean")
     normalized["isRealPhoto"] = real
+    lighting = record.get("lighting", "unspecified")
+    if not isinstance(lighting, str) or not lighting.strip():
+        raise NormalizationError("lighting must be non-empty text when provided")
+    normalized["lighting"] = lighting.strip()
 
     raw_boxes = record.get("boxes")
     if not isinstance(raw_boxes, list):
