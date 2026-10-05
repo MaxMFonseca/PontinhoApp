@@ -11,3 +11,7 @@ interface CardRecognitionEngine : AutoCloseable {
 interface CardRecognitionEngineProvider : AutoCloseable {
     fun get(): CardRecognitionEngine
 }
+
+fun interface CardRecognitionEngineFactory {
+    fun create(model: ByteArray, metadata: RecognitionModelMetadata): CardRecognitionEngine
+}

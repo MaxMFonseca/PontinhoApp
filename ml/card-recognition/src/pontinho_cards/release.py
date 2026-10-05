@@ -17,7 +17,6 @@ import zipfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -30,6 +29,7 @@ from pontinho_cards.manifest import (
     SourceManifest,
     parse_source_manifest_bytes,
 )
+from pontinho_cards.release_identity import validate_release_identity
 from pontinho_cards.secure_io import SecureReadError, secure_read_bytes
 
 _SHA256 = "0123456789abcdef"
@@ -42,6 +42,13 @@ _PINNED_GATE_PATH = Path(__file__).resolve().parents[2] / "config" / "release-ga
 
 class ReleaseGateError(ValueError):
     """Raised before evidence can authorize an unsafe release."""
+
+
+def _validate_release_identity(model_version: object, exported_at: object) -> tuple[str, str]:
+    try:
+        return validate_release_identity(model_version, exported_at)
+    except ValueError as error:
+        raise ReleaseGateError(str(error)) from error
 
 
 @dataclass(frozen=True)
@@ -467,14 +474,7 @@ def _validate_contract(
     iou = _unit(contract.get("iouThreshold"), "contract IoU threshold")
     model_version = contract.get("modelVersion")
     exported_at = contract.get("exportedAt")
-    if not isinstance(model_version, str) or not model_version.strip():
-        raise ReleaseGateError("model contract metadata modelVersion is missing")
-    if not isinstance(exported_at, str) or not exported_at.endswith("Z"):
-        raise ReleaseGateError("model contract metadata exportedAt is missing")
-    try:
-        datetime.fromisoformat(exported_at[:-1] + "+00:00")
-    except ValueError as error:
-        raise ReleaseGateError("model contract metadata exportedAt is invalid") from error
+    model_version, exported_at = _validate_release_identity(model_version, exported_at)
     return model_version, exported_at, score, iou
 
 

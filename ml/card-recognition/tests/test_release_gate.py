@@ -22,6 +22,7 @@ from pontinho_cards.release import (
     _load_gate,
     _publish,
     _recompute_threshold_sweep,
+    _validate_release_identity,
     promote_release,
 )
 from pontinho_cards.release import (
@@ -42,6 +43,62 @@ def _write_json(path: Path, value: Any) -> str:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("model_version", "exported_at"),
+    [
+        ("cards.release_candidate-1", "2026-10-15T12:00:00Z"),
+        ("2026.10.15-int8", "2026-10-15T12:00:00.123456789Z"),
+    ],
+)
+def test_release_identity_accepts_exact_android_contract_language(
+    model_version: str, exported_at: str
+) -> None:
+    assert _validate_release_identity(model_version, exported_at) == (
+        model_version,
+        exported_at,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_version", "exported_at"),
+    [
+        ("unsafe/version", "2026-10-15T12:00:00Z"),
+        ("safe", "2026-10-15T12:00:00+00:00"),
+        ("safe", "20261015T120000Z"),
+        ("safe", "2026-10-15T12:00:00.1234567890Z"),
+    ],
+)
+def test_release_identity_rejects_values_android_cannot_consume(
+    model_version: str, exported_at: str
+) -> None:
+    with pytest.raises(ReleaseGateError):
+        _validate_release_identity(model_version, exported_at)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["card_detector.float16.release.json", "card_detector.int8.release.json"],
+)
+def test_android_release_fixtures_use_producer_identity_and_quantization_language(
+    fixture_name: str,
+) -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "android-release" / fixture_name
+    document = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    _validate_release_identity(document["modelVersion"], document["exportedAt"])
+    quantization = document["quantization"]
+    assert quantization["nonemptyConstantTensorTypes"] == sorted(
+        set(quantization["nonemptyConstantTensorTypes"])
+    )
+    assert set(quantization["nonemptyConstantTensorTypes"]) <= {
+        "FLOAT16",
+        "FLOAT32",
+        "INT8",
+        "UINT8",
+        "INT32",
+    }
 
 
 def _source(index: int) -> dict[str, Any]:

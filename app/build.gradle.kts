@@ -44,6 +44,10 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 
+    sourceSets.named("test") {
+        resources.directories.add("../ml/card-recognition/tests/fixtures/android-release")
+    }
+
     lint {
         // The task deliberately pins AGP 9.4.0 and Gradle 9.6.0 as one tested baseline.
         disable += "AndroidGradlePluginVersion"
@@ -51,6 +55,30 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+}
+
+tasks.register("verifyOfflineScannerDependencies") {
+    inputs.files(configurations.named("releaseRuntimeClasspath"))
+    doLast {
+        val forbiddenArtifactPrefixes = setOf(
+            "transport-api-",
+            "transport-runtime-",
+            "transport-backend-cct-",
+            "firebase-encoders-json-",
+            "firebase-encoders-proto-",
+            "okhttp-",
+            "retrofit-",
+            "volley-",
+            "httpclient-",
+        )
+        val offenders = inputs.files
+            .map { it.name }
+            .filter { name -> forbiddenArtifactPrefixes.any(name::startsWith) }
+            .sorted()
+        check(offenders.isEmpty()) {
+            "Offline scanner contains networking/telemetry artifacts: ${offenders.joinToString()}"
+        }
     }
 }
 

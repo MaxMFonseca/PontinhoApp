@@ -16,7 +16,6 @@ import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,7 @@ import numpy as np
 import yaml
 
 from pontinho_cards.labels import CARD_LABELS
+from pontinho_cards.release_identity import validate_release_identity
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -777,14 +777,10 @@ def promote_candidate(
                 "threshold selection, model version, and export timestamp are required together"
             )
         if strong_release:
-            if not isinstance(model_version, str) or not _SAFE_NAME.fullmatch(model_version):
-                raise ExportContractError("model version is invalid")
-            if not isinstance(exported_at, str) or not exported_at.endswith("Z"):
-                raise ExportContractError("export timestamp must be UTC RFC 3339")
             try:
-                datetime.fromisoformat(exported_at[:-1] + "+00:00")
+                validate_release_identity(model_version, exported_at)
             except ValueError as error:
-                raise ExportContractError("export timestamp must be UTC RFC 3339") from error
+                raise ExportContractError(str(error)) from error
         threshold_snapshot: Path | None = None
         threshold_hash: str | None = None
         if threshold_selection is not None:
@@ -1216,6 +1212,21 @@ def _validate_graph_contract(graph: Any, *, expected_quantization: str) -> None:
         ):
             raise ExportContractError(
                 "float16 model has a non-postprocess floating constant that is not float16"
+            )
+        for index, tensor_type in graph.constant_tensor_types.items():
+            if tensor_type == "FLOAT16":
+                continue
+            if tensor_type == "INT32":
+                _validate_int32_constant_role(graph, index)
+                continue
+            if tensor_type == "FLOAT32":
+                consumers = graph.constant_consumers.get(index)
+                if index in graph.postprocess_input_indices and consumers == [
+                    {"op": "TFLite_Detection_PostProcess", "inputPosition": 2}
+                ]:
+                    continue
+            raise ExportContractError(
+                f"unsupported nonempty constant tensor {index} type {tensor_type}"
             )
     else:
         input_type = graph.tensor_types.get(graph.input_index)

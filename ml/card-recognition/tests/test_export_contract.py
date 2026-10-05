@@ -609,6 +609,54 @@ def test_graph_contract_rejects_dynamic_shapes_names_and_partial_quantization(
         _validate_graph_contract(_graph(**mutation), expected_quantization="float16")
 
 
+def test_float16_graph_accepts_release_summary_with_dpp_and_shape_constants() -> None:
+    graph = _graph(
+        tensor_types={
+            **_graph().tensor_types,
+            21: "FLOAT32",
+            22: "INT32",
+        },
+        shapes={**_graph().shapes, 21: [4], 22: [1]},
+        constant_tensor_types={20: "FLOAT16", 21: "FLOAT32", 22: "INT32"},
+        constant_consumers={
+            20: [{"op": "CONV_2D", "inputPosition": 1}],
+            21: [{"op": "TFLite_Detection_PostProcess", "inputPosition": 2}],
+            22: [{"op": "RESHAPE", "inputPosition": 1}],
+        },
+        postprocess_input_indices=[30, 31, 21],
+        nonempty_constant_indices=[20, 21, 22],
+        nonempty_constant_tensor_types=["FLOAT16", "FLOAT32", "INT32"],
+        constant_quantization={
+            20: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+            21: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+            22: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+        },
+    )
+
+    _validate_graph_contract(graph, expected_quantization="float16")
+
+
+def test_float16_graph_rejects_constant_type_outside_release_language() -> None:
+    graph = _graph(
+        tensor_types={**_graph().tensor_types, 21: "BOOL"},
+        shapes={**_graph().shapes, 21: [1]},
+        constant_tensor_types={20: "FLOAT16", 21: "BOOL"},
+        constant_consumers={
+            20: [{"op": "CONV_2D", "inputPosition": 1}],
+            21: [{"op": "RESHAPE", "inputPosition": 1}],
+        },
+        nonempty_constant_indices=[20, 21],
+        nonempty_constant_tensor_types=["FLOAT16", "BOOL"],
+        constant_quantization={
+            20: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+            21: {"scales": [], "zeroPoints": [], "quantizedDimension": 0},
+        },
+    )
+
+    with pytest.raises(ExportContractError, match="unsupported nonempty constant"):
+        _validate_graph_contract(graph, expected_quantization="float16")
+
+
 def test_int8_graph_requires_model_wide_quantized_constants() -> None:
     """Catch an integer-looking input on a model whose weights stayed float."""
 

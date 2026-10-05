@@ -1,54 +1,59 @@
 package com.maxmfonseca.pontinho.recognition
 
+import android.graphics.Bitmap
 import android.util.JsonReader
 import android.util.JsonToken
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngine
+import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineProvider
+import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionResult
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason
 import java.io.ByteArrayInputStream
 import java.io.InputStreamReader
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.time.Instant
 
 class RecognitionAssetVerifier {
     fun verify(model: ByteArray?, releaseJson: ByteArray?): RecognitionAvailability {
         if (model == null || releaseJson == null || model.isEmpty() || releaseJson.isEmpty()) {
-            return RecognitionAvailability.Unavailable
+            return RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS)
         }
-        if (releaseJson.size > MAX_RELEASE_JSON_BYTES) return RecognitionAvailability.Unavailable
+        if (releaseJson.size > MAX_RELEASE_JSON_BYTES) return invalid()
 
         return try {
             val root = parseStrictJson(releaseJson).objectValue()
-            if (root.keys != RELEASE_FIELDS) return RecognitionAvailability.Unavailable
-            if (root.int("schemaVersion") != RELEASE_SCHEMA_VERSION) return RecognitionAvailability.Unavailable
-            if (root.string("status") != APPROVED_STATUS) return RecognitionAvailability.Unavailable
+            if (root.keys != RELEASE_FIELDS) return invalid()
+            if (root.int("schemaVersion") != RELEASE_SCHEMA_VERSION) return invalid()
+            if (root.string("status") != APPROVED_STATUS) return invalid()
 
             val modelVersion = root.string("modelVersion")
-            if (!MODEL_VERSION.matches(modelVersion)) return RecognitionAvailability.Unavailable
+            if (!MODEL_VERSION.matches(modelVersion)) return invalid()
             val modelHash = root.string("modelSha256")
             if (!SHA256.matches(modelHash) || sha256(model) != modelHash) {
-                return RecognitionAvailability.Unavailable
+                return invalid()
             }
             if (root.long("modelSizeBytes") != model.size.toLong()) {
-                return RecognitionAvailability.Unavailable
+                return invalid()
             }
 
             val labels = root.array("labels").map { it.stringValue() }
-            if (labels != CANONICAL_LABELS) return RecognitionAvailability.Unavailable
+            if (labels != CardClassIndex.labels) return invalid()
             val width = root.int("inputWidth")
             val height = root.int("inputHeight")
             if (width != INPUT_WIDTH || height != INPUT_HEIGHT) {
-                return RecognitionAvailability.Unavailable
+                return invalid()
             }
             if (!validQuantization(root.objectField("quantization"))) {
-                return RecognitionAvailability.Unavailable
+                return invalid()
             }
 
             val confidence = root.unitFloat("confidenceThreshold")
             val iou = root.unitFloat("iouThreshold")
-            if (!validReleaseEvidence(root)) return RecognitionAvailability.Unavailable
+            if (!validReleaseEvidence(root)) return invalid()
 
             RecognitionAvailability.Available(
                 RecognitionModelMetadata(
@@ -62,12 +67,31 @@ class RecognitionAssetVerifier {
                 ),
             )
         } catch (_: Exception) {
-            RecognitionAvailability.Unavailable
+            invalid()
         }
     }
 
+    private fun invalid() = RecognitionAvailability.Unavailable(RecognitionUnavailableReason.INVALID_ASSETS)
+
     private fun validQuantization(value: Map<String, JsonValue>): Boolean {
-        if (value.keys != QUANTIZATION_FIELDS || value.string("variant") != "int8") return false
+        if (value.keys != QUANTIZATION_FIELDS) return false
+        return when (value.string("variant")) {
+            "float16" -> validFloat16Quantization(value)
+            "int8" -> validInt8Quantization(value)
+            else -> false
+        }
+    }
+
+    private fun validFloat16Quantization(value: Map<String, JsonValue>): Boolean {
+        val tensorTypes = value.array("nonemptyConstantTensorTypes").map { it.stringValue() }
+        return value.getValue("input") is JsonNull &&
+            tensorTypes == tensorTypes.distinct().sorted() &&
+            "FLOAT16" in tensorTypes &&
+            tensorTypes.all { it in ALLOWED_FLOAT16_TENSOR_TYPES } &&
+            value.int("quantizedConstantCount") == 0
+    }
+
+    private fun validInt8Quantization(value: Map<String, JsonValue>): Boolean {
         val input = value.getValue("input")
         if (input !is JsonObject || input.fields.keys != INPUT_QUANTIZATION_FIELDS) return false
         val scales = input.fields.array("scales").map { it.numberValue() }
@@ -80,7 +104,13 @@ class RecognitionAssetVerifier {
         if (zeroPoint !in MIN_INPUT_ZERO_POINT..MAX_INPUT_ZERO_POINT) return false
         if (input.fields.int("quantizedDimension") != 0) return false
         val tensorTypes = value.array("nonemptyConstantTensorTypes").map { it.stringValue() }
-        if (tensorTypes.isEmpty() || tensorTypes.any { it !in ALLOWED_INT8_TENSOR_TYPES }) return false
+        if (
+            tensorTypes != tensorTypes.distinct().sorted() ||
+            tensorTypes.none { it in QUANTIZED_BYTE_TENSOR_TYPES } ||
+            tensorTypes.any { it !in ALLOWED_INT8_TENSOR_TYPES }
+        ) {
+            return false
+        }
         return value.int("quantizedConstantCount") > 0
     }
 
@@ -98,7 +128,9 @@ class RecognitionAssetVerifier {
         root.unitFloat("abstentionRate")
         if (root.int("heldOutPhotoCount") < MIN_HELD_OUT_PHOTOS) return false
         if (root.int("heldOutDeckCount") < MIN_HELD_OUT_DECKS) return false
-        return EXPORTED_AT.matches(root.string("exportedAt"))
+        val exportedAt = root.string("exportedAt")
+        if (!RFC3339_UTC.matches(exportedAt)) return false
+        return runCatching { Instant.parse(exportedAt) }.isSuccess
     }
 
     private fun parseStrictJson(bytes: ByteArray): JsonValue {
@@ -199,13 +231,11 @@ class RecognitionAssetVerifier {
         const val MIN_INPUT_ZERO_POINT = -128
         const val MAX_INPUT_ZERO_POINT = 255
 
-        val MODEL_VERSION = Regex("\\d{4}\\.\\d{2}\\.\\d{2}-int8")
+        val MODEL_VERSION = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+        val RFC3339_UTC = Regex(
+            "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z",
+        )
         val SHA256 = Regex("[0-9a-f]{64}")
-        val EXPORTED_AT = Regex("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z")
-        val CANONICAL_LABELS = listOf("C", "D", "H", "S").flatMap { suit ->
-            listOf("A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K")
-                .map { rank -> "$rank$suit" }
-        }
         val RELEASE_FIELDS = setOf(
             "schemaVersion", "status", "modelVersion", "modelSha256", "modelSizeBytes",
             "labels", "inputWidth", "inputHeight", "quantization", "confidenceThreshold",
@@ -232,7 +262,9 @@ class RecognitionAssetVerifier {
             "variant", "input", "nonemptyConstantTensorTypes", "quantizedConstantCount",
         )
         val INPUT_QUANTIZATION_FIELDS = setOf("scales", "zeroPoints", "quantizedDimension")
-        val ALLOWED_INT8_TENSOR_TYPES = setOf("INT8", "UINT8", "INT32")
+        val ALLOWED_FLOAT16_TENSOR_TYPES = setOf("FLOAT16", "FLOAT32", "INT32")
+        val QUANTIZED_BYTE_TENSOR_TYPES = setOf("INT8", "UINT8")
+        val ALLOWED_INT8_TENSOR_TYPES = setOf("FLOAT32", "INT8", "UINT8", "INT32")
     }
 }
 
@@ -245,7 +277,7 @@ class ProcessLifetimeCardRecognitionEngineProvider internal constructor(
     private var instance: CardRecognitionEngine? = null
     private var closed = false
 
-    override fun get(): CardRecognitionEngine = instance ?: synchronized(lock) {
+    override fun get(): CardRecognitionEngine = synchronized(lock) {
         check(!closed) { "Recognition engine provider is closed" }
         instance ?: factory().also { instance = it }
     }
@@ -257,4 +289,39 @@ class ProcessLifetimeCardRecognitionEngineProvider internal constructor(
             instance?.close()
         }
     }
+}
+
+class AssetGatedCardRecognitionEngineFactory internal constructor(
+    private val verifier: RecognitionAssetVerifier,
+    private val delegate: CardRecognitionEngineFactory?,
+) {
+    fun create(model: ByteArray?, releaseJson: ByteArray?): CardRecognitionEngine {
+        val availability = verifier.verify(model, releaseJson)
+        if (availability !is RecognitionAvailability.Available || model == null) {
+            return UnavailableCardRecognitionEngine(availability)
+        }
+        val factory = delegate ?: return UnavailableCardRecognitionEngine(
+            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
+        )
+        return factory.create(model, availability.metadata)
+    }
+}
+
+class UnavailableCardRecognitionEngine internal constructor(
+    override val availability: RecognitionAvailability,
+) : CardRecognitionEngine {
+    override suspend fun recognize(bitmap: Bitmap): CardRecognitionResult =
+        error("Card recognition is unavailable")
+
+    override fun close() = Unit
+}
+
+object UnavailableCardRecognitionEngineProvider : CardRecognitionEngineProvider {
+    private val engine = UnavailableCardRecognitionEngine(
+        RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
+    )
+
+    override fun get(): CardRecognitionEngine = engine
+
+    override fun close() = Unit
 }
