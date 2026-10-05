@@ -124,7 +124,9 @@
     <string name="learn_match_end">The match ends after a completed round takes at least one total above 100. Exactly 100 does not end the match.</string>
     <string name="learn_hand_rotation">When creating a match, choose the opening hand with the icon on a player card. After every completed round, the hand advances to the next eligible player in order and wraps after the last.</string>
     <string name="learn_wildcards">Before each round, choose the wildcard rank and color directly. Both cards of that rank and color are wild and worth 20 points each.</string>
-    <string name="learn_card_values">Values: Ace 15; cards 2–10 at face value; Jack, Queen, and King 10; wildcards and printed jokers 20.</string>
+    <string name="learn_card_values">Values: Ace 15; cards 2–10 at face value; Jack, Queen, and King 10; cards selected as wildcards 20.</string>
+    <string name="learn_scanner_title">Photographing cards</string>
+    <string name="learn_scanner_cards">Photograph only cards from a standard 52-card deck, fully visible and without overlap. The round wildcard is determined by the chosen rank and color.</string>
     <string name="learn_late_players">Added players start at zero points and join the open round, if there is one. Between rounds, they join the next round. Earlier rounds show gray minus indicators because they did not participate and still contribute zero points. Prior history stays unchanged.</string>
     <string name="learn_objective_title">Objective</string>
     <string name="learn_order_title">Order and opening hand</string>
@@ -136,5 +138,5 @@
     <string name="learn_example_ace_hearts_description">Ace of hearts, red card, worth 15 points</string>
     <string name="learn_example_two_diamonds_description">Two of diamonds, red card, worth 2 points</string>
     <string name="learn_example_king_spades_description">King of spades, black card, worth 10 points</string>
-    <string name="learn_example_printed_joker_description">Printed joker, worth 20 points</string>
+    <string name="learn_example_chosen_wildcard_description">Queen of clubs, a standard black card, worth 20 points when black Queen is the chosen wildcard</string>
 </resources>

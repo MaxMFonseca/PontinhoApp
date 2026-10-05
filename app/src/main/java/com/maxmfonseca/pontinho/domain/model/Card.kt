@@ -34,8 +34,6 @@ enum class Rank(val canonicalValue: Int) {
 
 sealed interface Card {
     data class Suited(val rank: Rank, val suit: Suit) : Card
-
-    data object PrintedJoker : Card
 }
 
 data class Indicator(

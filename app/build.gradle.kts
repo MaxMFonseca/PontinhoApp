@@ -74,6 +74,15 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view) {
+        exclude(group = "androidx.camera", module = "camera-video")
+    }
+    implementation(libs.mediapipe.tasks.vision) {
+        exclude(group = "com.google.android.datatransport")
+    }
 
     ksp(libs.androidx.room.compiler)
 

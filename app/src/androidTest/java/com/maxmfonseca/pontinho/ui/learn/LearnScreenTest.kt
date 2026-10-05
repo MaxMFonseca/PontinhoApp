@@ -58,6 +58,7 @@ class LearnScreenTest {
             R.string.learn_hand_rotation,
             R.string.learn_wildcards,
             R.string.learn_card_values,
+            R.string.learn_scanner_cards,
             R.string.learn_late_players,
             R.string.score_correction_help,
         ).forEach { composeRule.onNodeWithText(context.getString(it)).performScrollTo().assertIsDisplayed() }
@@ -65,6 +66,7 @@ class LearnScreenTest {
             R.string.learn_objective_title,
             R.string.learn_order_title,
             R.string.learn_wildcard_title,
+            R.string.learn_scanner_title,
             R.string.learn_values_title,
             R.string.learn_round_title,
             R.string.learn_finish_title,
@@ -138,7 +140,7 @@ class LearnScreenTest {
             R.string.learn_example_ace_hearts_description,
             R.string.learn_example_two_diamonds_description,
             R.string.learn_example_king_spades_description,
-            R.string.learn_example_printed_joker_description,
+            R.string.learn_example_chosen_wildcard_description,
         ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).performScrollTo().assertIsDisplayed() }
         composeRule.onNodeWithText("A♥", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
@@ -150,9 +152,22 @@ class LearnScreenTest {
             R.string.learn_example_ace_hearts_description,
             R.string.learn_example_two_diamonds_description,
             R.string.learn_example_king_spades_description,
-            R.string.learn_example_printed_joker_description,
+            R.string.learn_example_chosen_wildcard_description,
         ).forEach { composeRule.onNodeWithContentDescription(context.getString(it)).performScrollTo().assertIsDisplayed() }
         composeRule.onNodeWithText("A♥", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun scannerGuidanceUsesOnlyStandardCardsAndTheChosenWildcardInBothLocales() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val portuguese = localizedContext(context, "pt-BR").getString(R.string.learn_scanner_cards)
+        val english = localizedContext(context, "en-US").getString(R.string.learn_scanner_cards)
+
+        assertTrue(portuguese.contains("apenas cartas de um baralho padrão de 52 cartas"))
+        assertTrue(portuguese.contains("figura e pela cor escolhidas"))
+        assertTrue(!portuguese.contains("impresso", ignoreCase = true))
+        assertTrue(english.contains("only cards from a standard 52-card deck"))
+        assertTrue(english.contains("chosen rank and color"))
+        assertTrue(!english.contains("printed", ignoreCase = true))
     }
 
     private fun showLearnInLocale(tag: String) {

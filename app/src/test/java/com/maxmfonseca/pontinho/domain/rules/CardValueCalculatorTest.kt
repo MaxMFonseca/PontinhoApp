@@ -10,82 +10,50 @@ import org.junit.Test
 
 class CardValueCalculatorTest {
     @Test
-    fun `ace is worth fifteen when it is not wild`() {
-        val value = CardValueCalculator.value(
-            card = Card.Suited(Rank.ACE, Suit.HEARTS),
-            indicator = Indicator(Rank.FIVE, CardColor.RED),
-        )
+    fun `all fifty two standard cards keep their ordinary rank value when not wild`() {
+        Rank.entries.forEach { rank ->
+            Suit.entries.forEach { suit ->
+                val card = Card.Suited(rank, suit).requireSuited()
 
-        assertEquals(15, value)
-    }
-
-    @Test
-    fun `numeric ranks two through ten have their face values`() {
-        val expectedValues = listOf(
-            Rank.TWO to 2,
-            Rank.THREE to 3,
-            Rank.FOUR to 4,
-            Rank.FIVE to 5,
-            Rank.SIX to 6,
-            Rank.SEVEN to 7,
-            Rank.EIGHT to 8,
-            Rank.NINE to 9,
-            Rank.TEN to 10,
-        )
-
-        expectedValues.forEach { (rank, expected) ->
-            assertEquals(
-                expected,
-                CardValueCalculator.value(
-                    card = Card.Suited(rank, Suit.CLUBS),
-                    indicator = Indicator(Rank.KING, CardColor.RED),
-                ),
-            )
+                assertEquals(
+                    "${rank.name} of ${suit.name}",
+                    ordinaryValue(rank),
+                    CardValueCalculator.value(
+                        card = card,
+                        indicator = Indicator(rank, CardColor.RED),
+                    ),
+                )
+            }
         }
     }
 
     @Test
-    fun `face cards are worth ten`() {
-        assertEquals(10, ordinaryValue(Rank.JACK))
-        assertEquals(10, ordinaryValue(Rank.QUEEN))
-        assertEquals(10, ordinaryValue(Rank.KING))
+    fun `both suits matching each indicator color are wild for every derived rank`() {
+        Rank.entries.forEach { indicatorRank ->
+            CardColor.entries.forEach { indicatorColor ->
+                Suit.entries.filter { it.color == indicatorColor }.forEach { suit ->
+                    assertEquals(
+                        "${indicatorRank.next().name} of ${suit.name}",
+                        20,
+                        CardValueCalculator.value(
+                            card = Card.Suited(indicatorRank.next(), suit),
+                            indicator = Indicator(indicatorRank, indicatorColor),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     @Test
-    fun `printed joker is worth twenty`() {
+    fun `king indicators wrap the derived wild rank to ace for both colors`() {
         assertEquals(
             20,
             CardValueCalculator.value(
-                Card.PrintedJoker,
-                Indicator(Rank.SEVEN, CardColor.BLACK),
+                Card.Suited(Rank.ACE, Suit.HEARTS),
+                Indicator(Rank.KING, CardColor.RED),
             ),
         )
-    }
-
-    @Test
-    fun `same-color card one rank above indicator is worth twenty`() {
-        assertEquals(
-            20,
-            CardValueCalculator.value(
-                Card.Suited(Rank.TWO, Suit.DIAMONDS),
-                Indicator(Rank.ACE, CardColor.RED),
-            ),
-        )
-    }
-
-    @Test
-    fun `opposite-color card one rank above indicator keeps ordinary value`() {
-        assertEquals(
-            2,
-            CardValueCalculator.value(
-                Card.Suited(Rank.TWO, Suit.CLUBS),
-                Indicator(Rank.ACE, CardColor.RED),
-            ),
-        )
-    }
-
-    @Test
-    fun `king indicator wraps the wild rank to ace`() {
         assertEquals(
             20,
             CardValueCalculator.value(
@@ -93,17 +61,41 @@ class CardValueCalculatorTest {
                 Indicator(Rank.KING, CardColor.BLACK),
             ),
         )
-        assertEquals(
-            15,
-            CardValueCalculator.value(
-                Card.Suited(Rank.ACE, Suit.HEARTS),
-                Indicator(Rank.KING, CardColor.BLACK),
-            ),
-        )
     }
 
-    private fun ordinaryValue(rank: Rank): Int = CardValueCalculator.value(
-        Card.Suited(rank, Suit.CLUBS),
-        Indicator(Rank.ACE, CardColor.RED),
-    )
+    @Test
+    fun `derived rank in the opposite color keeps its ordinary value`() {
+        Rank.entries.forEach { indicatorRank ->
+            CardColor.entries.forEach { indicatorColor ->
+                val derivedRank = indicatorRank.next()
+                Suit.entries.filter { it.color != indicatorColor }.forEach { oppositeSuit ->
+                    assertEquals(
+                        "${derivedRank.name} of ${oppositeSuit.name}",
+                        ordinaryValue(derivedRank),
+                        CardValueCalculator.value(
+                            card = Card.Suited(derivedRank, oppositeSuit),
+                            indicator = Indicator(indicatorRank, indicatorColor),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun ordinaryValue(rank: Rank): Int = when (rank) {
+        Rank.ACE -> 15
+        Rank.TWO -> 2
+        Rank.THREE -> 3
+        Rank.FOUR -> 4
+        Rank.FIVE -> 5
+        Rank.SIX -> 6
+        Rank.SEVEN -> 7
+        Rank.EIGHT -> 8
+        Rank.NINE -> 9
+        Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING -> 10
+    }
+
+    private fun Card.requireSuited(): Card.Suited = when (this) {
+        is Card.Suited -> this
+    }
 }

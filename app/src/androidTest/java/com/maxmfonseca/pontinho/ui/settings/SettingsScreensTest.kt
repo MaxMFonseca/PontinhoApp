@@ -111,7 +111,7 @@ class SettingsScreensTest {
                             composeRule.onNodeWithText(localized.getString(text)).performScrollTo().assertIsDisplayed()
                         }
                         for (description in listOf(R.string.learn_example_ace_hearts_description, R.string.learn_example_two_diamonds_description,
-                            R.string.learn_example_king_spades_description, R.string.learn_example_printed_joker_description)) {
+                            R.string.learn_example_king_spades_description, R.string.learn_example_chosen_wildcard_description)) {
                             composeRule.onNodeWithContentDescription(localized.getString(description)).performScrollTo().assertIsDisplayed()
                         }
                     }

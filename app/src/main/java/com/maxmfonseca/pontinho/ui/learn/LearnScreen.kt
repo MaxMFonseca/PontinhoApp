@@ -39,6 +39,7 @@ fun LearnScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Rule(R.string.learn_order_title, R.string.learn_hand_rotation)
             Rule(R.string.learn_wildcard_title, R.string.learn_wildcards)
             CardExamples()
+            Rule(R.string.learn_scanner_title, R.string.learn_scanner_cards)
             Rule(R.string.learn_values_title, R.string.learn_card_values)
             Rule(R.string.learn_round_title, R.string.learn_round_completion)
             Rule(R.string.learn_finish_title, R.string.learn_match_end)
@@ -84,8 +85,8 @@ fun LearnScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             "learn_example_king",
         )
         CardExample(
-            "★ 20",
-            R.string.learn_example_printed_joker_description,
+            "Q♣\uFE0E 20",
+            R.string.learn_example_chosen_wildcard_description,
             MaterialTheme.colorScheme.onSurface,
             "learn_example_joker",
         )

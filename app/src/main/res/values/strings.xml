@@ -124,7 +124,9 @@
     <string name="learn_match_end">A partida termina após uma rodada completa levar pelo menos um total acima de 100. Exatamente 100 não encerra a partida.</string>
     <string name="learn_hand_rotation">Na nova partida, escolha a mão inicial pelo ícone no card do jogador. Depois de cada rodada completa, a mão avança ao próximo jogador elegível na ordem e volta ao início após o último.</string>
     <string name="learn_wildcards">Antes de cada rodada, escolha diretamente a figura e a cor do coringa. As duas cartas dessa figura e cor são coringas e valem 20 pontos cada.</string>
-    <string name="learn_card_values">Valores: ás 15; cartas de 2 a 10 valem o número; valete, dama e rei valem 10; coringas e curingas impressos valem 20.</string>
+    <string name="learn_card_values">Valores: ás 15; cartas de 2 a 10 valem o número; valete, dama e rei valem 10; as cartas definidas como coringa valem 20.</string>
+    <string name="learn_scanner_title">Fotos das cartas</string>
+    <string name="learn_scanner_cards">Fotografe apenas cartas de um baralho padrão de 52 cartas, totalmente visíveis e sem sobreposição. O coringa da rodada é determinado pela figura e pela cor escolhidas.</string>
     <string name="learn_late_players">Jogadores adicionados começam com zero pontos e participam da rodada em andamento, se houver. Entre rodadas, entram na próxima rodada. As rodadas anteriores mostram indicadores com sinal de menos cinza, pois eles não participaram, e continuam contribuindo zero pontos. O histórico anterior não muda.</string>
     <string name="learn_objective_title">Objetivo</string>
     <string name="learn_order_title">Ordem e mão</string>
@@ -136,5 +138,5 @@
     <string name="learn_example_ace_hearts_description">Ás de copas, carta vermelha, vale 15 pontos</string>
     <string name="learn_example_two_diamonds_description">Dois de ouros, carta vermelha, vale 2 pontos</string>
     <string name="learn_example_king_spades_description">Rei de espadas, carta preta, vale 10 pontos</string>
-    <string name="learn_example_printed_joker_description">Curinga impresso, vale 20 pontos</string>
+    <string name="learn_example_chosen_wildcard_description">Dama de paus, carta padrão preta, vale 20 pontos quando dama preta é o coringa escolhido</string>
 </resources>

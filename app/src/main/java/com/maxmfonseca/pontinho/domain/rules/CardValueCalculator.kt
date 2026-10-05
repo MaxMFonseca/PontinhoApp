@@ -6,7 +6,6 @@ import com.maxmfonseca.pontinho.domain.model.Rank
 
 object CardValueCalculator {
     fun value(card: Card, indicator: Indicator): Int = when (card) {
-        Card.PrintedJoker -> 20
         is Card.Suited -> when {
             card.rank == indicator.rank.next() && card.suit.color == indicator.color -> 20
             card.rank == Rank.ACE -> 15
