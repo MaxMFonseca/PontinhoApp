@@ -303,7 +303,15 @@ class AssetGatedCardRecognitionEngineFactory internal constructor(
         val factory = delegate ?: return UnavailableCardRecognitionEngine(
             RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
         )
-        return factory.create(model, availability.metadata)
+        return try {
+            factory.create(model, availability.metadata)
+        } catch (cancelled: java.util.concurrent.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            UnavailableCardRecognitionEngine(
+                RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
+            )
+        }
     }
 }
 

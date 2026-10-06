@@ -74,7 +74,7 @@ class CardDetectionPostProcessorTest {
     }
 
     @Test
-    fun `NMS suppresses a duplicate exactly at the configured IoU threshold`() {
+    fun `NMS retains a detection exactly at the configured IoU threshold`() {
         val result = processor.process(
             listOf(
                 raw(0, 0.9f, 0f, 0f, 1f, 1f),
@@ -82,8 +82,8 @@ class CardDetectionPostProcessorTest {
             ),
         )
 
-        assertEquals(1, result.cards.size)
-        assertEquals(0, CardClassIndex.indexOf(result.cards.single().card))
+        assertEquals(2, result.cards.size)
+        assertEquals(setOf(0, 1), result.cards.map { CardClassIndex.indexOf(it.card) }.toSet())
     }
 
     @Test
@@ -124,11 +124,10 @@ class CardDetectionPostProcessorTest {
         assertThrows(IllegalArgumentException::class.java) {
             DetectionPostProcessingConfig(0.7f, 0.6f, 0.5f, 0.05f, 1..15)
         }
+        DetectionPostProcessingConfig(0.5f, 0.6f, 0f, 0.05f, 1..15)
+        DetectionPostProcessingConfig(0.5f, 0.6f, 1f, 0.05f, 1..15)
         assertThrows(IllegalArgumentException::class.java) {
-            DetectionPostProcessingConfig(0.5f, 0.6f, 0f, 0.05f, 1..15)
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            DetectionPostProcessingConfig(0.5f, 0.6f, 1f, 0.05f, 1..15)
+            DetectionPostProcessingConfig(0.5f, 0.6f, -0.01f, 0.05f, 1..15)
         }
         assertThrows(IllegalArgumentException::class.java) {
             DetectionPostProcessingConfig(0.5f, 0.6f, 0.5f, -0.01f, 1..15)
@@ -139,6 +138,23 @@ class CardDetectionPostProcessorTest {
         assertThrows(IllegalArgumentException::class.java) {
             DetectionPostProcessingConfig(0.5f, 0.6f, 0.5f, 0.05f, 1..53)
         }
+    }
+
+    @Test
+    fun `NMS endpoint thresholds have deterministic frozen evaluator behavior`() {
+        val overlapping = listOf(
+            raw(0, 0.9f, 0f, 0f, 1f, 1f),
+            raw(1, 0.8f, 0f, 0f, 1f, 0.9f),
+        )
+        val zeroThreshold = CardDetectionPostProcessor(
+            DetectionPostProcessingConfig(0.5f, 0.6f, 0f, 0.05f, 1..15),
+        )
+        val oneThreshold = CardDetectionPostProcessor(
+            DetectionPostProcessingConfig(0.5f, 0.6f, 1f, 0.05f, 1..15),
+        )
+
+        assertEquals(1, zeroThreshold.process(overlapping).cards.size)
+        assertEquals(2, oneThreshold.process(overlapping).cards.size)
     }
 
     @Test

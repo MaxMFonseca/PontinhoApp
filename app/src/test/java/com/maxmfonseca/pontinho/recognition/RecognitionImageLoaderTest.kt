@@ -1,9 +1,11 @@
 package com.maxmfonseca.pontinho.recognition
 
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.util.Base64
 import java.util.concurrent.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -153,6 +155,183 @@ class RecognitionImageLoaderTest {
         assertTrue(opener.streams.all { it.closed })
     }
 
+    @Test
+    fun `security failures during reads and closes are typed without identifiers`() {
+        val readFailure = RecognitionImageLoader(
+            opener = ImageStreamOpener { SecurityStream(failOnRead = true) },
+            decoder = object : ImageDecoder {
+                override fun readBounds(stream: InputStream): ImageBounds {
+                    stream.read()
+                    return ImageBounds(1, 1)
+                }
+
+                override fun decode(stream: InputStream, sampleSize: Int) = coloredBitmap(1, 1)
+            },
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(),
+        )
+        val readError = assertThrows(RecognitionImageException.AccessDenied::class.java) {
+            readFailure.load(uri)
+        }
+        assertEquals(null, readError.cause)
+
+        val closeFailure = RecognitionImageLoader(
+            opener = ImageStreamOpener { SecurityStream(failOnClose = true) },
+            decoder = FakeDecoder(ImageBounds(1, 1), coloredBitmap(1, 1), mutableListOf()),
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(),
+        )
+        val closeError = assertThrows(RecognitionImageException.AccessDenied::class.java) {
+            closeFailure.load(uri)
+        }
+        assertEquals(null, closeError.cause)
+    }
+
+    @Test
+    fun `security failures from EXIF and pixel decode are typed and close their streams`() {
+        val exifOpener = TrackingOpener(mutableListOf())
+        val exifFailure = RecognitionImageLoader(
+            opener = exifOpener,
+            decoder = FakeDecoder(ImageBounds(1, 1), coloredBitmap(1, 1), mutableListOf()),
+            orientationReader = { _, _ -> throw SecurityException("sensitive-exif-id") },
+            limits = ImageDecodeLimits(),
+        )
+        assertThrows(RecognitionImageException.AccessDenied::class.java) { exifFailure.load(uri) }
+        assertTrue(exifOpener.streams.all { it.closed })
+
+        val decodeOpener = TrackingOpener(mutableListOf())
+        val decodeFailure = RecognitionImageLoader(
+            opener = decodeOpener,
+            decoder = object : ImageDecoder {
+                override fun readBounds(stream: InputStream) = ImageBounds(1, 1)
+                override fun decode(stream: InputStream, sampleSize: Int): Bitmap =
+                    throw SecurityException("sensitive-decode-id")
+            },
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(),
+        )
+        assertThrows(RecognitionImageException.AccessDenied::class.java) { decodeFailure.load(uri) }
+        assertTrue(decodeOpener.streams.all { it.closed })
+    }
+
+    @Test
+    fun `cancellation remains primary when closing the stream also loses access`() {
+        var opens = 0
+        val loader = RecognitionImageLoader(
+            opener = ImageStreamOpener {
+                opens++
+                SecurityStream(failOnClose = opens == 3)
+            },
+            decoder = object : ImageDecoder {
+                override fun readBounds(stream: InputStream) = ImageBounds(1, 1)
+                override fun decode(stream: InputStream, sampleSize: Int): Bitmap =
+                    throw CancellationException("stop")
+            },
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(),
+        )
+
+        val cancellation = assertThrows(CancellationException::class.java) { loader.load(uri) }
+
+        assertEquals("stop", cancellation.message)
+        assertEquals(0, cancellation.suppressed.size)
+    }
+
+    @Test
+    fun `pixel bitmap is discarded exactly once when stream close loses access`() {
+        val bitmap = coloredBitmap(2, 2)
+        var opens = 0
+        var recycleCalls = 0
+        val loader = RecognitionImageLoader(
+            opener = ImageStreamOpener {
+                opens++
+                SecurityStream(failOnClose = opens == 3)
+            },
+            decoder = FakeDecoder(ImageBounds(2, 2), bitmap, mutableListOf()),
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(),
+            bitmapRecycler = {
+                recycleCalls++
+                it.recycle()
+            },
+        )
+
+        assertThrows(RecognitionImageException.AccessDenied::class.java) { loader.load(uri) }
+        assertTrue(bitmap.isRecycled)
+        assertEquals(1, recycleCalls)
+    }
+
+    @Test
+    fun `decoded bitmap exceeding post decode limits is typed and recycled exactly once`() {
+        val oversized = coloredBitmap(8, 8)
+        var recycleCalls = 0
+        val loader = RecognitionImageLoader(
+            opener = TrackingOpener(mutableListOf()),
+            decoder = FakeDecoder(ImageBounds(16, 16), oversized, mutableListOf()),
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(maxWidth = 4, maxHeight = 4, maxPixels = 16),
+            bitmapRecycler = {
+                recycleCalls++
+                it.recycle()
+            },
+        )
+
+        assertThrows(RecognitionImageException.SizeLimitExceeded::class.java) { loader.load(uri) }
+
+        assertTrue(oversized.isRecycled)
+        assertEquals(1, recycleCalls)
+    }
+
+    @Test
+    fun `allocation failure while reading bounds maps to typed size error`() {
+        val loader = RecognitionImageLoader(
+            opener = TrackingOpener(mutableListOf()),
+            decoder = object : ImageDecoder {
+                override fun readBounds(stream: InputStream): ImageBounds =
+                    throw OutOfMemoryError("allocation")
+
+                override fun decode(stream: InputStream, sampleSize: Int): Bitmap? = null
+            },
+            orientationReader = { _, _ -> ExifTransform.NORMAL },
+            limits = ImageDecodeLimits(),
+        )
+
+        val error = assertThrows(RecognitionImageException.SizeLimitExceeded::class.java) { loader.load(uri) }
+
+        assertTrue(error.cause is OutOfMemoryError)
+    }
+
+    @Test
+    fun `real generated fixtures exercise BitmapFactory sampling and EXIF rotate and mirror`() {
+        val png = fixtureBytes("recognition/generated-128x64.png.b64")
+        val sampled = realLoader(png, ImageDecodeLimits(maxWidth = 16, maxHeight = 16, maxPixels = 128)).load(uri)
+        assertEquals(16, sampled.width)
+        assertEquals(8, sampled.height)
+        assertEquals(Bitmap.Config.ARGB_8888, sampled.config)
+        sampled.recycle()
+
+        val rotated = realLoader(fixtureBytes("recognition/generated-64x32-rotate90.jpg.b64")).load(uri)
+        assertEquals(32, rotated.width)
+        assertEquals(64, rotated.height)
+        rotated.recycle()
+
+        val mirrored = realLoader(fixtureBytes("recognition/generated-64x32-mirror.jpg.b64")).load(uri)
+        val left = mirrored.getPixel(8, mirrored.height / 2)
+        val right = mirrored.getPixel(mirrored.width - 9, mirrored.height / 2)
+        assertTrue(Color.blue(left) > Color.red(left))
+        assertTrue(Color.red(right) > Color.blue(right))
+        mirrored.recycle()
+    }
+
+    @Test
+    fun `real malformed fixture fails with typed decode error`() {
+        val loader = realLoader(fixtureBytes("recognition/malformed.bin.b64"))
+
+        val error = assertThrows(RecognitionImageException.DecodeFailed::class.java) { loader.load(uri) }
+
+        assertFalse(error.message.orEmpty().contains(uri.toString()))
+    }
+
     private class TrackingOpener(private val events: MutableList<String>) : ImageStreamOpener {
         val streams = mutableListOf<TrackingStream>()
 
@@ -169,6 +348,21 @@ class RecognitionImageLoaderTest {
         override fun close() {
             if (!closed) events += "close"
             closed = true
+            super.close()
+        }
+    }
+
+    private class SecurityStream(
+        private val failOnRead: Boolean = false,
+        private val failOnClose: Boolean = false,
+    ) : ByteArrayInputStream(byteArrayOf(1, 2, 3)) {
+        override fun read(): Int {
+            if (failOnRead) throw SecurityException("sensitive-provider-id")
+            return super.read()
+        }
+
+        override fun close() {
+            if (failOnClose) throw SecurityException("sensitive-provider-id")
             super.close()
         }
     }
@@ -205,4 +399,21 @@ class RecognitionImageLoaderTest {
     private fun Bitmap.pixelMarkers(): List<Int> = buildList {
         for (y in 0 until height) for (x in 0 until width) add(getPixel(x, y) and 0xff)
     }
+
+    private fun fixtureBytes(path: String): ByteArray {
+        val encoded = requireNotNull(javaClass.classLoader?.getResourceAsStream(path))
+            .bufferedReader()
+            .use { it.readText() }
+        return Base64.getMimeDecoder().decode(encoded)
+    }
+
+    private fun realLoader(
+        bytes: ByteArray,
+        limits: ImageDecodeLimits = ImageDecodeLimits(),
+    ) = RecognitionImageLoader(
+        opener = ImageStreamOpener { ByteArrayInputStream(bytes) },
+        decoder = BitmapFactoryImageDecoder,
+        orientationReader = PlatformExifOrientationReader,
+        limits = limits,
+    )
 }

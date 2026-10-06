@@ -12,6 +12,7 @@ import com.maxmfonseca.pontinho.domain.repository.PlayerRepository
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineProvider
 import com.maxmfonseca.pontinho.recognition.AssetGatedCardRecognitionEngineFactory
+import com.maxmfonseca.pontinho.recognition.MediaPipeCardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.recognition.ProcessLifetimeCardRecognitionEngineProvider
 import com.maxmfonseca.pontinho.recognition.RecognitionAssetVerifier
 import com.maxmfonseca.pontinho.recognition.UnavailableCardRecognitionEngineProvider
@@ -29,7 +30,7 @@ interface AppContainer {
 
 class DefaultAppContainer internal constructor(
     applicationContext: Context,
-    recognitionEngineFactory: CardRecognitionEngineFactory? = null,
+    recognitionEngineFactory: CardRecognitionEngineFactory? = MediaPipeCardRecognitionEngineFactory(applicationContext),
 ) : AppContainer {
     private val database = Room.databaseBuilder(
         applicationContext,

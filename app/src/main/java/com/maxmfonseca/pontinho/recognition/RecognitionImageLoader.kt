@@ -7,6 +7,7 @@ import android.media.ExifInterface
 import android.net.Uri
 import java.io.IOException
 import java.io.InputStream
+import java.util.concurrent.CancellationException
 
 data class ImageDecodeLimits(
     val maxWidth: Int = 1_920,
@@ -59,11 +60,19 @@ internal enum class ExifTransform(val swapsDimensions: Boolean) {
     ROTATE_270(true),
 }
 
+/**
+ * Decodes image content selected through stable Photo Picker grants or files in app-owned cache.
+ *
+ * Each phase deliberately reopens the URI because provider streams need not support mark/reset. Callers that
+ * accept a mutable provider should first snapshot it into app-owned cache; this loader never snapshots into an
+ * unbounded byte array. Photo Picker grants and scanner cache files are stable for the duration of one load.
+ */
 class RecognitionImageLoader internal constructor(
     private val opener: ImageStreamOpener,
     private val decoder: ImageDecoder,
     private val orientationReader: ImageOrientationReader,
     private val limits: ImageDecodeLimits,
+    private val bitmapRecycler: (Bitmap) -> Unit = Bitmap::recycle,
 ) {
     constructor(
         contentResolver: ContentResolver,
@@ -86,7 +95,10 @@ class RecognitionImageLoader internal constructor(
         val transform = withStream(uri) { orientationReader.read(uri, it) }
         val sampleSize = calculateSampleSize(bounds, transform, limits)
         val decoded = try {
-            withStream(uri) { decoder.decode(it, sampleSize) }
+            withStream(
+                uri = uri,
+                discard = { bitmap -> bitmap?.let(::recycleOwned) },
+            ) { decoder.decode(it, sampleSize) }
                 ?: throw RecognitionImageException.DecodeFailed()
         } catch (error: OutOfMemoryError) {
             throw RecognitionImageException.SizeLimitExceeded(error)
@@ -96,27 +108,57 @@ class RecognitionImageLoader internal constructor(
             ensureWithinLimits(decoded, transform)
             return applyTransformAndConfig(decoded, transform)
         } catch (error: OutOfMemoryError) {
-            if (!decoded.isRecycled) decoded.recycle()
+            recycleOwned(decoded)
             throw RecognitionImageException.SizeLimitExceeded(error)
         } catch (error: Throwable) {
-            if (!decoded.isRecycled) decoded.recycle()
+            recycleOwned(decoded)
             throw error
         }
     }
 
-    private inline fun <T> withStream(uri: Uri, block: (InputStream) -> T): T {
+    private inline fun <T> withStream(
+        uri: Uri,
+        discard: (T) -> Unit = {},
+        block: (InputStream) -> T,
+    ): T {
         val stream = try {
             opener.open(uri)
-        } catch (error: SecurityException) {
-            throw RecognitionImageException.AccessDenied()
-        } catch (error: IOException) {
-            throw RecognitionImageException.AccessDenied()
+        } catch (error: Throwable) {
+            throwOpenError(error)
         }
-        return try {
-            stream.use(block)
-        } catch (error: IOException) {
-            throw RecognitionImageException.DecodeFailed()
+        val outcome = runCatching { block(stream) }
+        val closeFailure = runCatching { stream.close() }.exceptionOrNull()
+        val operationFailure = outcome.exceptionOrNull()
+        if (operationFailure != null) {
+            throwStreamError(operationFailure)
         }
+        val value = outcome.getOrThrow()
+        if (closeFailure != null) {
+            discard(value)
+            throwStreamError(closeFailure)
+        }
+        return value
+    }
+
+    private fun throwOpenError(error: Throwable): Nothing = when (error) {
+        is CancellationException -> throw error
+        is OutOfMemoryError -> throw RecognitionImageException.SizeLimitExceeded(error)
+        is SecurityException, is IOException -> throw RecognitionImageException.AccessDenied()
+        else -> throw error
+    }
+
+    private fun throwStreamError(error: Throwable): Nothing = when (error) {
+        is CancellationException -> throw error
+        is RecognitionImageException -> throw error
+        is OutOfMemoryError -> throw RecognitionImageException.SizeLimitExceeded(error)
+        is SecurityException -> throw RecognitionImageException.AccessDenied()
+        is IOException -> throw RecognitionImageException.DecodeFailed()
+        is RuntimeException -> throw RecognitionImageException.DecodeFailed()
+        else -> throw error
+    }
+
+    private fun recycleOwned(bitmap: Bitmap) {
+        if (!bitmap.isRecycled) bitmapRecycler(bitmap)
     }
 
     private fun ensureWithinLimits(bitmap: Bitmap, transform: ExifTransform) {
@@ -135,14 +177,14 @@ class RecognitionImageLoader internal constructor(
         val transformed = if (transform == ExifTransform.NORMAL) {
             source
         } else {
-            transformPixels(source, transform).also { source.recycle() }
+            transformPixels(source, transform).also { recycleOwned(source) }
         }
         if (transformed.config == Bitmap.Config.ARGB_8888) return transformed
 
         return transformed.copy(Bitmap.Config.ARGB_8888, false)
-            ?.also { if (it !== transformed) transformed.recycle() }
+            ?.also { if (it !== transformed) recycleOwned(transformed) }
             ?: run {
-                if (!transformed.isRecycled) transformed.recycle()
+                recycleOwned(transformed)
                 throw RecognitionImageException.DecodeFailed()
             }
     }
@@ -151,41 +193,46 @@ class RecognitionImageLoader internal constructor(
         val targetWidth = if (transform.swapsDimensions) source.height else source.width
         val targetHeight = if (transform.swapsDimensions) source.width else source.height
         val output = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-        val line = IntArray(maxOf(source.width, source.height))
-        for (targetY in 0 until targetHeight) {
-            when (transform) {
-                ExifTransform.FLIP_HORIZONTAL,
-                ExifTransform.ROTATE_180,
-                ExifTransform.FLIP_VERTICAL,
-                -> {
-                    val sourceY = when (transform) {
-                        ExifTransform.FLIP_HORIZONTAL -> targetY
-                        else -> source.height - 1 - targetY
+        try {
+            val line = IntArray(maxOf(source.width, source.height))
+            for (targetY in 0 until targetHeight) {
+                when (transform) {
+                    ExifTransform.FLIP_HORIZONTAL,
+                    ExifTransform.ROTATE_180,
+                    ExifTransform.FLIP_VERTICAL,
+                    -> {
+                        val sourceY = when (transform) {
+                            ExifTransform.FLIP_HORIZONTAL -> targetY
+                            else -> source.height - 1 - targetY
+                        }
+                        source.getPixels(line, 0, source.width, 0, sourceY, source.width, 1)
+                        if (transform != ExifTransform.FLIP_VERTICAL) line.reversePrefix(source.width)
                     }
-                    source.getPixels(line, 0, source.width, 0, sourceY, source.width, 1)
-                    if (transform != ExifTransform.FLIP_VERTICAL) line.reversePrefix(source.width)
+                    ExifTransform.TRANSPOSE,
+                    ExifTransform.ROTATE_90,
+                    ExifTransform.TRANSVERSE,
+                    ExifTransform.ROTATE_270,
+                    -> {
+                        val sourceX = when (transform) {
+                            ExifTransform.TRANSPOSE,
+                            ExifTransform.ROTATE_90,
+                            -> targetY
+                            else -> source.width - 1 - targetY
+                        }
+                        source.getPixels(line, 0, 1, sourceX, 0, 1, source.height)
+                        if (transform == ExifTransform.ROTATE_90 || transform == ExifTransform.TRANSVERSE) {
+                            line.reversePrefix(source.height)
+                        }
+                    }
+                    ExifTransform.NORMAL -> error("Normal orientation does not require transformation")
                 }
-                ExifTransform.TRANSPOSE,
-                ExifTransform.ROTATE_90,
-                ExifTransform.TRANSVERSE,
-                ExifTransform.ROTATE_270,
-                -> {
-                    val sourceX = when (transform) {
-                        ExifTransform.TRANSPOSE,
-                        ExifTransform.ROTATE_90,
-                        -> targetY
-                        else -> source.width - 1 - targetY
-                    }
-                    source.getPixels(line, 0, 1, sourceX, 0, 1, source.height)
-                    if (transform == ExifTransform.ROTATE_90 || transform == ExifTransform.TRANSVERSE) {
-                        line.reversePrefix(source.height)
-                    }
-                }
-                ExifTransform.NORMAL -> error("Normal orientation does not require transformation")
+                output.setPixels(line, 0, targetWidth, 0, targetY, targetWidth, 1)
             }
-            output.setPixels(line, 0, targetWidth, 0, targetY, targetWidth, 1)
+            return output
+        } catch (error: Throwable) {
+            recycleOwned(output)
+            throw error
         }
-        return output
     }
 
     private fun IntArray.reversePrefix(size: Int) {
@@ -226,7 +273,7 @@ class RecognitionImageLoader internal constructor(
     }
 }
 
-private object BitmapFactoryImageDecoder : ImageDecoder {
+internal object BitmapFactoryImageDecoder : ImageDecoder {
     override fun readBounds(stream: InputStream): ImageBounds {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeStream(stream, null, options)
@@ -243,7 +290,7 @@ private object BitmapFactoryImageDecoder : ImageDecoder {
     )
 }
 
-private object PlatformExifOrientationReader : ImageOrientationReader {
+internal object PlatformExifOrientationReader : ImageOrientationReader {
     override fun read(uri: Uri, stream: InputStream): ExifTransform = when (
         ExifInterface(stream).getAttributeInt(
             ExifInterface.TAG_ORIENTATION,

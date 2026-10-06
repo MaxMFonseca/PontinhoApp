@@ -28,7 +28,7 @@ data class DetectionPostProcessingConfig(
     init {
         require(confidenceThreshold.isFinite() && confidenceThreshold in 0f..1f)
         require(lowConfidenceThreshold.isFinite() && lowConfidenceThreshold in confidenceThreshold..1f)
-        require(iouThreshold.isFinite() && iouThreshold > 0f && iouThreshold < 1f)
+        require(iouThreshold.isFinite() && iouThreshold in 0f..1f)
         require(edgeThreshold.isFinite() && edgeThreshold in 0f..<0.5f)
         require(
             !expectedCardCount.isEmpty() &&
@@ -88,7 +88,7 @@ class CardDetectionPostProcessor(
             .sortedWith(suppressionOrder)
         val retained = mutableListOf<Candidate>()
         candidates.forEach { candidate ->
-            if (retained.none { intersectionOverUnion(it.bounds, candidate.bounds) >= config.iouThreshold }) {
+            if (retained.none { intersectionOverUnion(it.bounds, candidate.bounds) > config.iouThreshold }) {
                 retained += candidate
             }
         }
