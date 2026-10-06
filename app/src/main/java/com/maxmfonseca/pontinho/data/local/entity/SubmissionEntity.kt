@@ -11,4 +11,5 @@ data class SubmissionEntity(
     val roundId: String,
     val participantId: String,
     val points: Int,
+    val payloadFingerprint: String? = null,
 )

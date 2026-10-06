@@ -307,6 +307,10 @@ class AssetGatedCardRecognitionEngineFactory internal constructor(
             factory.create(model, availability.metadata)
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
+        } catch (_: LinkageError) {
+            UnavailableCardRecognitionEngine(
+                RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
+            )
         } catch (_: Exception) {
             UnavailableCardRecognitionEngine(
                 RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),

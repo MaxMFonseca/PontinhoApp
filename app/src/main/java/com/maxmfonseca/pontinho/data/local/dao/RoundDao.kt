@@ -9,9 +9,15 @@ interface RoundDao {
     @Insert suspend fun insertScore(score: RoundScoreEntity)
     @Update suspend fun updateScore(score: RoundScoreEntity)
     @Insert suspend fun insertSubmission(submission: SubmissionEntity)
+    @Insert suspend fun insertCardObservations(observations: List<CardObservationEntity>)
     @Query("SELECT * FROM submissions WHERE token = :token") suspend fun submission(token: String): SubmissionEntity?
     @Query("SELECT * FROM rounds WHERE matchId = :matchId ORDER BY ordinal") suspend fun rounds(matchId: String): List<RoundEntity>
     @Query("SELECT * FROM rounds WHERE id = :id") suspend fun get(id: String): RoundEntity?
     @Query("SELECT * FROM scores WHERE roundId = :roundId ORDER BY participantId") suspend fun scores(roundId: String): List<RoundScoreEntity>
     @Query("DELETE FROM scores WHERE id = :id") suspend fun deleteScore(id: String)
+    @Query("DELETE FROM card_observations WHERE scoreId = :scoreId") suspend fun deleteCardObservations(scoreId: String)
+    @Query("SELECT * FROM card_observations WHERE scoreId = :scoreId ORDER BY ordinal")
+    suspend fun cardObservations(scoreId: String): List<CardObservationEntity>
+    @Query("SELECT * FROM card_observations ORDER BY scoreId, ordinal")
+    suspend fun allCardObservations(): List<CardObservationEntity>
 }

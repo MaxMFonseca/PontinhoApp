@@ -9,6 +9,8 @@ import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.local.entity.*
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard
+import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.After
@@ -56,6 +58,171 @@ class RoomMatchRepositoryTest {
     }
     private suspend fun rejected(block: suspend () -> Unit) {
         try { block(); fail("Expected rejection") } catch (_: IllegalArgumentException) { }
+    }
+
+    private fun card(
+        rank: Rank,
+        suit: Suit,
+        confidence: Float? = .75f,
+        corrected: Boolean = false,
+        bounds: NormalizedRect? = NormalizedRect(.1f, .2f, .3f, .4f),
+    ) = ConfirmedCard(Card.Suited(rank, suit), confidence, corrected, bounds)
+
+    private suspend fun scan(
+        matchId: MatchId,
+        roundId: RoundId,
+        participantIndex: Int,
+        cards: List<ConfirmedCard>,
+        token: String,
+        modelVersion: String = "cards-v1",
+    ) = repo.submitScannedScore(
+        SubmitScannedScore(
+            matchId,
+            roundId,
+            snapshot(matchId).participants[participantIndex].id,
+            cards,
+            token,
+            modelVersion,
+            preparations[roundId],
+        ),
+    )
+
+    @Test fun scannedScoreIsRecomputedWithJokerAndDuplicateCardsAndPersistsPreparedRoundInOrder() = runBlocking {
+        val id = create(3)
+        val round = start(id, Indicator(Rank.KING, CardColor.RED))
+        scan(id, round, 0, listOf(
+            card(Rank.ACE, Suit.SPADES),
+            card(Rank.ACE, Suit.SPADES, confidence = null, corrected = true, bounds = null),
+            card(Rank.ACE, Suit.HEARTS),
+        ), "scan-first")
+
+        val score = db.roundDao().scores(round.value).single()
+        assertEquals(50, score.points)
+        assertEquals("SCAN", score.origin)
+        assertEquals("cards-v1", score.recognitionModelVersion)
+        assertEquals(listOf(0, 1, 2), db.roundDao().cardObservations(score.id).map { it.ordinal })
+        assertEquals(listOf("SPADES", "SPADES", "HEARTS"), db.roundDao().cardObservations(score.id).map { it.suit })
+        assertEquals(1, snapshot(id).rounds.size)
+        assertEquals(50, snapshot(id).openRound!!.draft.entries.getValue(snapshot(id).participants[0].id).points)
+        assertEquals(listOf("SUBMIT_SCANNED_SCORE"), db.matchDao().corrections(id.value).map { it.operation })
+    }
+
+    @Test fun scannedScoreCompletesExistingRoundAndReplayRequiresExactOrderedPayloadAndModel() = runBlocking {
+        val id = create(3)
+        val round = start(id, Indicator(Rank.FIVE, CardColor.BLACK))
+        submit(id, round, 0, 8)
+        val cards = listOf(card(Rank.SIX, Suit.CLUBS), card(Rank.TWO, Suit.HEARTS))
+        scan(id, round, 1, cards, "scan-replay")
+        val complete = snapshot(id)
+        assertTrue(complete.rounds.single().draft.isComplete)
+        assertEquals(22, complete.totals[complete.participants[1].id])
+
+        repo = RoomMatchRepository(db, clock)
+        scan(id, round, 1, cards, "scan-replay")
+        assertEquals(3, db.roundDao().scores(round.value).size)
+        rejected { scan(id, round, 1, cards.reversed(), "scan-replay") }
+        rejected { scan(id, round, 1, cards, "scan-replay", modelVersion = "cards-v2") }
+        val participant = complete.participants[1].id
+        val original = SubmitScannedScore(id, round, participant, cards, "scan-replay", "cards-v1", preparations[round])
+        rejected { repo.submitScannedScore(original.copy(cards = listOf(cards[0].copy(recognitionConfidence = null), cards[1]))) }
+        rejected { repo.submitScannedScore(original.copy(cards = listOf(cards[0].copy(correctedByUser = true), cards[1]))) }
+        rejected { repo.submitScannedScore(original.copy(cards = listOf(cards[0].copy(sourceBounds = null), cards[1]))) }
+        rejected { repo.submitScannedScore(original.copy(preparedRound = null)) }
+        assertEquals(3, db.roundDao().scores(round.value).size)
+    }
+
+    @Test fun deletingScannedEntryKeepsReceiptAndManualReplacementClearsScanMetadata() = runBlocking {
+        val id = create(3)
+        val round = start(id)
+        scan(id, round, 0, listOf(card(Rank.TEN, Suit.CLUBS)), "durable-scan")
+        submit(id, round, 1, 4)
+        val participant = snapshot(id).participants[0].id
+        val scoreId = db.roundDao().scores(round.value).single { it.participantId == participant.value }.id
+
+        repo.updateExplicitScore(UpdateExplicitScore(id, round, participant, 7))
+
+        val manual = db.roundDao().scores(round.value).single { it.id == scoreId }
+        assertEquals("MANUAL", manual.origin)
+        assertNull(manual.recognitionModelVersion)
+        assertTrue(db.roundDao().cardObservations(scoreId).isEmpty())
+        repo.removeRoundEntry(RemoveRoundEntry(id, round, participant))
+        assertNotNull(db.roundDao().submission("durable-scan"))
+        rejected { scan(id, round, 0, listOf(card(Rank.NINE, Suit.CLUBS)), "durable-scan") }
+    }
+
+    @Test fun scannedCorrectionReplacesObservationsRecomputesAndAuditsAtomically() = runBlocking {
+        val id = create(3)
+        val round = start(id)
+        scan(id, round, 0, listOf(card(Rank.TEN, Suit.CLUBS), card(Rank.FIVE, Suit.HEARTS)), "to-correct")
+        submit(id, round, 1, 3)
+        val participant = snapshot(id).participants[0].id
+
+        repo.updateScannedScore(UpdateScannedScore(
+            id, round, participant,
+            listOf(card(Rank.QUEEN, Suit.DIAMONDS, corrected = true)),
+            "cards-v2",
+        ))
+
+        val score = db.roundDao().scores(round.value).single { it.participantId == participant.value }
+        assertEquals(10, score.points)
+        assertEquals("SCAN", score.origin)
+        assertEquals("cards-v2", score.recognitionModelVersion)
+        assertEquals(listOf("QUEEN"), db.roundDao().cardObservations(score.id).map { it.rank })
+        assertEquals(
+            setOf("SUBMIT_SCANNED_SCORE", "UPDATE_SCANNED_SCORE"),
+            db.matchDao().corrections(id.value).map { it.operation }.toSet(),
+        )
+    }
+
+    @Test fun scanFailureRollsBackPreparedRoundScoreObservationsTotalsDealerAndReceipt() = runBlocking {
+        val id = create(3)
+        val round = start(id)
+        val before = snapshot(id)
+        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_scan_receipt BEFORE INSERT ON submissions BEGIN SELECT RAISE(ABORT, 'injected scan interruption'); END")
+        try {
+            scan(id, round, 0, listOf(card(Rank.ACE, Suit.CLUBS)), "scan-rollback")
+            fail("Expected SQLite failure")
+        } catch (_: android.database.sqlite.SQLiteException) { }
+        assertEquals(before, snapshot(id))
+        assertNull(db.roundDao().get(round.value))
+        assertNull(db.roundDao().submission("scan-rollback"))
+        assertTrue(db.roundDao().allCardObservations().isEmpty())
+    }
+
+    @Test fun scanCancellationDuringObservationWriteRollsBackEveryTransactionalWrite() = runBlocking {
+        val inFlight = java.util.concurrent.atomic.AtomicReference<Job?>()
+        val intercepted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val cancellableDb = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java)
+            .setQueryCallback(RoomDatabase.QueryCallback { sql, _ ->
+                if (sql.startsWith("INSERT", ignoreCase = true) && sql.contains("`card_observations`")) {
+                    inFlight.get()?.let { job ->
+                        intercepted.set(true)
+                        job.cancel(CancellationException("Cancel while persisting scan observations"))
+                    }
+                }
+            }, java.util.concurrent.Executor { it.run() }).build()
+        try {
+            val cancellableRepo = RoomMatchRepository(cancellableDb, clock)
+            val matchId = cancellableRepo.createMatch(CreateMatch("scan-cancel-match", listOf(
+                CreateMatchPlayer("a", displayName = "Ana"), CreateMatchPlayer("b", displayName = "Bruno"),
+            )))
+            val prepared = cancellableRepo.chooseIndicator(ChooseIndicator(matchId, indicator))
+            val before = cancellableRepo.observeMatch(matchId).first()!!
+            val command = SubmitScannedScore(
+                matchId, prepared.id, before.participants[0].id,
+                listOf(card(Rank.THREE, Suit.CLUBS)), "scan-cancel", "cards-v1", prepared,
+            )
+            val operation = async(start = CoroutineStart.LAZY) { cancellableRepo.submitScannedScore(command) }
+            inFlight.set(operation)
+            operation.start()
+            try { operation.await(); fail("Expected cancellation") } catch (_: CancellationException) { }
+            inFlight.set(null)
+            assertTrue("Cancellation must intercept the observation INSERT", intercepted.get())
+            assertEquals(before, cancellableRepo.observeMatch(matchId).first())
+            assertNull(cancellableDb.roundDao().get(prepared.id.value))
+            assertNull(cancellableDb.roundDao().submission("scan-cancel"))
+            assertTrue(cancellableDb.roundDao().allCardObservations().isEmpty())
+        } finally { cancellableDb.close() }
     }
 
     @Test fun historicalNamesSplitSharedIdsAndMergeDifferentIdsWithoutChangingSnapshots() = runBlocking {
@@ -159,9 +326,9 @@ class RoomMatchRepositoryTest {
             db.playerDao().upsert(PlayerEntity("same-b", "Same", "same", 1, 1))
             seedFinished("legacy", 1, listOf(Triple("same-a", "Same", 0), Triple("same-b", "Same", 101)))
             val row = db.matchDao().get("legacy")!!
-            // SHA-256 of the v1 length-prefixed payload [a, empty, Same, b, empty, Same].
+            // SHA-256 of opening dealer "a" plus the length-prefixed v1 player payload.
             db.matchDao().updateMatch(row.copy(creationToken = "legacy-retry",
-                creationFingerprint = "01f8114512895fc58ac5950230abe016220eba7650b4ede5c5e99640574b3297"))
+                creationFingerprint = "f8280b30a1bcf54e3f8bfac5127da22d5cb8f7b18f8d821267fe93c0a829d5af"))
         }
         val before = snapshot(MatchId("legacy"))
         val command = CreateMatch("legacy-retry", listOf(CreateMatchPlayer("a", displayName = "Same"), CreateMatchPlayer("b", displayName = "Same")))

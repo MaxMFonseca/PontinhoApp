@@ -17,6 +17,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.nio.charset.StandardCharsets
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -195,8 +197,57 @@ class RoomMatchRepository(
         val match = activeMatch(command.matchId)
         val round = writableRound(match, command.roundId, command.preparedRound)
         val after = applied(RoundEngine.submitScore(draft(round), command.participantId, command.points))
-        persistTransition(match, round, after, command.submissionToken)
+        persistTransition(
+            match,
+            round,
+            after,
+            scoreWrite = ScoreWrite(command.participantId, "MANUAL", command.submissionToken),
+        )
         rounds.insertSubmission(receipt)
+    }
+
+    override suspend fun submitScannedScore(command: SubmitScannedScore) = db.withTransaction {
+        require(command.submissionToken.isNotBlank()) { "Submission token must not be blank" }
+        require(command.modelVersion.isNotBlank()) { "Model version must not be blank" }
+        require(command.cards.isNotEmpty()) { "At least one confirmed card is required" }
+        val fingerprint = scannedFingerprint(command)
+        rounds.submission(command.submissionToken)?.let { existing ->
+            require(
+                existing.matchId == command.matchId.value &&
+                    existing.roundId == command.roundId.value &&
+                    existing.participantId == command.participantId.value &&
+                    existing.payloadFingerprint == fingerprint,
+            ) { "Submission token was already used for a different command" }
+            return@withTransaction
+        }
+        val match = activeMatch(command.matchId)
+        val round = writableRound(match, command.roundId, command.preparedRound)
+        val points = scannedPoints(command.cards, round)
+        val before = draft(round)
+        val after = applied(RoundEngine.submitScore(before, command.participantId, points))
+        persistTransition(
+            match,
+            round,
+            after,
+            scoreWrite = ScoreWrite(
+                command.participantId,
+                "SCAN",
+                command.submissionToken,
+                command.modelVersion,
+                command.cards,
+            ),
+        )
+        audit(match.id, "SUBMIT_SCANNED_SCORE", round, before, after)
+        rounds.insertSubmission(
+            SubmissionEntity(
+                command.submissionToken,
+                command.matchId.value,
+                command.roundId.value,
+                command.participantId.value,
+                points,
+                fingerprint,
+            ),
+        )
     }
 
     override suspend fun removeRoundEntry(command: RemoveRoundEntry) = db.withTransaction {
@@ -226,8 +277,44 @@ class RoomMatchRepository(
             val withoutOldScore = applied(RoundEngine.removeEntry(before, command.participantId))
             applied(RoundEngine.submitScore(withoutOldScore, command.participantId, command.points))
         }
-        persistTransition(match, round, after, correction = true)
+        persistTransition(
+            match,
+            round,
+            after,
+            correction = true,
+            scoreWrite = ScoreWrite(command.participantId, "MANUAL"),
+        )
         audit(match.id, "UPDATE_EXPLICIT_SCORE", round, before, after)
+    }
+
+    override suspend fun updateScannedScore(command: UpdateScannedScore) = db.withTransaction {
+        require(command.modelVersion.isNotBlank()) { "Model version must not be blank" }
+        require(command.cards.isNotEmpty()) { "At least one confirmed card is required" }
+        val match = requireMatch(command.matchId)
+        val round = ownedRound(match, command.roundId)
+        val before = draft(round)
+        val entry = before.entries[command.participantId]
+        require(entry?.origin == RoundEntryOrigin.EXPLICIT) { "Only explicit scores can be edited" }
+        val points = scannedPoints(command.cards, round)
+        val after = if (before.isComplete) {
+            before.copy(entries = before.entries + (command.participantId to requireNotNull(entry).copy(points = points)))
+        } else {
+            val withoutOldScore = applied(RoundEngine.removeEntry(before, command.participantId))
+            applied(RoundEngine.submitScore(withoutOldScore, command.participantId, points))
+        }
+        persistTransition(
+            match,
+            round,
+            after,
+            correction = true,
+            scoreWrite = ScoreWrite(
+                command.participantId,
+                "SCAN",
+                recognitionModelVersion = command.modelVersion,
+                cards = command.cards,
+            ),
+        )
+        audit(match.id, "UPDATE_SCANNED_SCORE", round, before, after)
     }
 
     override suspend fun acknowledgeResults(matchId: MatchId, revision: Long) = db.withTransaction {
@@ -240,20 +327,74 @@ class RoomMatchRepository(
         match: MatchEntity,
         round: RoundEntity,
         after: RoundDraft,
-        submissionToken: String? = null,
         correction: Boolean = false,
+        scoreWrite: ScoreWrite? = null,
     ) {
         val now = clock.millis()
         val oldScores = rounds.scores(round.id).associateBy { ParticipantId(it.participantId) }
         oldScores.filterKeys { it !in after.entries }.values.forEach { rounds.deleteScore(it.id) }
         after.entries.forEach { (participant, entry) ->
             val old = oldScores[participant]
-            val origin = if (entry.origin == RoundEntryOrigin.AUTOMATIC_WINNER) "AUTO_WINNER" else "MANUAL"
+            val targetWrite = scoreWrite?.takeIf { participant == it.participantId }
+            val origin = when {
+                targetWrite != null -> targetWrite.origin
+                entry.origin == RoundEntryOrigin.AUTOMATIC_WINNER -> "AUTO_WINNER"
+                old != null -> old.origin
+                else -> "MANUAL"
+            }
+            val submissionToken = targetWrite?.submissionToken ?: old?.submissionToken
+            val recognitionModelVersion = if (targetWrite != null) targetWrite.recognitionModelVersion else old?.recognitionModelVersion
+            val scoreId: String
             if (old == null) {
-                rounds.insertScore(RoundScoreEntity(uuid(), match.id, round.id, participant.value, entry.points, origin, now,
-                    if (origin == "AUTO_WINNER") null else requireNotNull(submissionToken)))
-            } else if (old.points != entry.points || old.origin != origin) {
-                rounds.updateScore(old.copy(points = entry.points, origin = origin))
+                scoreId = uuid()
+                rounds.insertScore(
+                    RoundScoreEntity(
+                        scoreId,
+                        match.id,
+                        round.id,
+                        participant.value,
+                        entry.points,
+                        origin,
+                        now,
+                        if (origin == "AUTO_WINNER") null else submissionToken,
+                        recognitionModelVersion,
+                    ),
+                )
+            } else {
+                scoreId = old.id
+                if (
+                    old.points != entry.points || old.origin != origin ||
+                    old.submissionToken != submissionToken || old.recognitionModelVersion != recognitionModelVersion
+                ) {
+                    rounds.updateScore(
+                        old.copy(
+                            points = entry.points,
+                            origin = origin,
+                            submissionToken = submissionToken,
+                            recognitionModelVersion = recognitionModelVersion,
+                        ),
+                    )
+                }
+            }
+            if (targetWrite != null) {
+                rounds.deleteCardObservations(scoreId)
+                targetWrite.cards?.takeIf { it.isNotEmpty() }?.let { cards ->
+                    rounds.insertCardObservations(cards.mapIndexed { ordinal, confirmed ->
+                        CardObservationEntity(
+                            id = uuid(),
+                            scoreId = scoreId,
+                            ordinal = ordinal,
+                            rank = confirmed.card.rank.name,
+                            suit = confirmed.card.suit.name,
+                            confidence = confirmed.recognitionConfidence,
+                            correctedByUser = confirmed.correctedByUser,
+                            left = confirmed.sourceBounds?.left,
+                            top = confirmed.sourceBounds?.top,
+                            right = confirmed.sourceBounds?.right,
+                            bottom = confirmed.sourceBounds?.bottom,
+                        )
+                    })
+                }
             }
         }
         val nextDealer = if (after.isComplete && round.status != "COMPLETE") {
@@ -396,6 +537,72 @@ class RoomMatchRepository(
     }.toString()
 
     private fun uuid(): String = UUID.randomUUID().toString()
+
+    private data class ScoreWrite(
+        val participantId: ParticipantId,
+        val origin: String,
+        val submissionToken: String? = null,
+        val recognitionModelVersion: String? = null,
+        val cards: List<com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard>? = null,
+    )
+
+    private fun scannedPoints(
+        cards: List<com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard>,
+        round: RoundEntity,
+    ): Int {
+        val indicator = Indicator(Rank.valueOf(round.indicatorRank), CardColor.valueOf(round.indicatorColor))
+        return cards.fold(0) { total, confirmed ->
+            Math.addExact(total, CardValueCalculator.value(confirmed.card, indicator))
+        }
+    }
+
+    private fun scannedFingerprint(command: SubmitScannedScore): String {
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { output ->
+            output.writeUtf8("pontinho-scanned-score-v1")
+            output.writeUtf8(command.matchId.value)
+            output.writeUtf8(command.roundId.value)
+            output.writeUtf8(command.participantId.value)
+            output.writeUtf8(command.modelVersion)
+            output.writeInt(command.cards.size)
+            command.cards.forEach { confirmed ->
+                output.writeUtf8(confirmed.card.rank.name)
+                output.writeUtf8(confirmed.card.suit.name)
+                output.writeBoolean(confirmed.correctedByUser)
+                output.writeNullableFloat(confirmed.recognitionConfidence)
+                val bounds = confirmed.sourceBounds
+                output.writeBoolean(bounds != null)
+                if (bounds != null) {
+                    output.writeInt(bounds.left.toRawBits())
+                    output.writeInt(bounds.top.toRawBits())
+                    output.writeInt(bounds.right.toRawBits())
+                    output.writeInt(bounds.bottom.toRawBits())
+                }
+            }
+            val prepared = command.preparedRound
+            output.writeBoolean(prepared != null)
+            if (prepared != null) {
+                output.writeUtf8(prepared.id.value)
+                output.writeUtf8(prepared.matchId.value)
+                output.writeInt(prepared.ordinal)
+                output.writeUtf8(prepared.indicator.rank.name)
+                output.writeUtf8(prepared.indicator.color.name)
+            }
+        }
+        return MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    }
+
+    private fun DataOutputStream.writeUtf8(value: String) {
+        val encoded = value.toByteArray(StandardCharsets.UTF_8)
+        writeInt(encoded.size)
+        write(encoded)
+    }
+
+    private fun DataOutputStream.writeNullableFloat(value: Float?) {
+        writeBoolean(value != null)
+        if (value != null) writeInt(value.toRawBits())
+    }
 
     // Call only inside the command transaction: lookup and insertion must serialize.
     private suspend fun resolvePlayer(

@@ -15,10 +15,14 @@ import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 sealed class CardRecognitionException(message: String, cause: Throwable? = null) :
@@ -49,16 +53,26 @@ class MediaPipeCardRecognitionEngineFactory internal constructor(
         MediaPipeCardRecognitionEngine(runnerFactory.create(model, metadata), metadata)
 }
 
+/**
+ * Owns one native detector for the process lifetime.
+ *
+ * [close] stops new admission immediately. It is deliberately synchronous and blocks its caller
+ * only while an already-active native call finishes; lifecycle code should therefore call it off
+ * the main thread when inference may still be running.
+ */
 internal class MediaPipeCardRecognitionEngine(
     private val runner: MediaPipeDetectorRunner,
     private val metadata: RecognitionModelMetadata,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val nanoTime: () -> Long = System::nanoTime,
 ) : CardRecognitionEngine {
-    private val lock = Any()
+    private val stateLock = Any()
+    private val inferenceMutex = Mutex()
+    private val closeCompletion = CompletableDeferred<Unit>()
 
     @Volatile
     private var closed = false
+    private var activeNativeCall: CompletableDeferred<Unit>? = null
 
     override val availability: RecognitionAvailability = RecognitionAvailability.Available(metadata)
 
@@ -66,11 +80,22 @@ internal class MediaPipeCardRecognitionEngine(
         withContext(dispatcher) {
             val coroutineContext = currentCoroutineContext()
             coroutineContext.ensureActive()
-            synchronized(lock) {
-                if (closed) throw CardRecognitionException.Closed()
+            inferenceMutex.withLock {
                 coroutineContext.ensureActive()
-                val startedAt = nanoTime()
-                val rawDetections = runner.detect(bitmap)
+                val nativeCompletion = synchronized(stateLock) {
+                    if (closed) throw CardRecognitionException.Closed()
+                    CompletableDeferred<Unit>().also { activeNativeCall = it }
+                }
+                var startedAt = 0L
+                val rawDetections = try {
+                    startedAt = nanoTime()
+                    runner.detect(bitmap)
+                } finally {
+                    synchronized(stateLock) {
+                        if (activeNativeCall === nativeCompletion) activeNativeCall = null
+                    }
+                    nativeCompletion.complete(Unit)
+                }
                 coroutineContext.ensureActive()
                 val durationMillis = ((nanoTime() - startedAt).coerceAtLeast(0L)) / NANOS_PER_MILLISECOND
                 val processed = postProcessor(metadata).process(rawDetections)
@@ -85,16 +110,39 @@ internal class MediaPipeCardRecognitionEngine(
         throw cancelled
     } catch (closed: CardRecognitionException.Closed) {
         throw closed
+    } catch (_: LinkageError) {
+        throw CardRecognitionException.InferenceFailed()
     } catch (_: Exception) {
         throw CardRecognitionException.InferenceFailed()
     }
 
     override fun close() {
-        synchronized(lock) {
-            if (closed) return
-            closed = true
-            runner.close()
+        val closePlan = synchronized(stateLock) {
+            if (closed) {
+                ClosePlan.AwaitExisting
+            } else {
+                closed = true
+                ClosePlan.Perform(activeNativeCall)
+            }
         }
+        when (closePlan) {
+            ClosePlan.AwaitExisting -> runBlocking { closeCompletion.await() }
+            is ClosePlan.Perform -> {
+                try {
+                    closePlan.activeNativeCall?.let { active -> runBlocking { active.await() } }
+                    runner.close()
+                    closeCompletion.complete(Unit)
+                } catch (failure: Throwable) {
+                    closeCompletion.completeExceptionally(failure)
+                    throw failure
+                }
+            }
+        }
+    }
+
+    private sealed interface ClosePlan {
+        data object AwaitExisting : ClosePlan
+        data class Perform(val activeNativeCall: CompletableDeferred<Unit>?) : ClosePlan
     }
 
     private companion object {
@@ -144,21 +192,47 @@ private class MediaPipeObjectDetectorRunner(
             model: ByteArray,
             metadata: RecognitionModelMetadata,
         ): MediaPipeObjectDetectorRunner {
-            val modelBuffer = ByteBuffer.allocateDirect(model.size)
-                .order(ByteOrder.nativeOrder())
-                .put(model)
-                .apply { rewind() }
-            val baseOptions = BaseOptions.builder()
-                .setModelAssetBuffer(modelBuffer)
-                .setDelegate(Delegate.CPU)
-                .build()
-            val options = ObjectDetector.ObjectDetectorOptions.builder()
-                .setBaseOptions(baseOptions)
-                .setRunningMode(RunningMode.IMAGE)
-                .setScoreThreshold(metadata.confidenceThreshold)
-                .setMaxResults(CardClassIndex.labels.size)
-                .build()
-            return MediaPipeObjectDetectorRunner(ObjectDetector.createFromOptions(context, options))
+            val setup = MediaPipeObjectDetectorOptionsFactory.create(model, metadata)
+            return MediaPipeObjectDetectorRunner(
+                ObjectDetector.createFromOptions(context, setup.buildOptions()),
+            )
         }
+    }
+}
+
+internal data class MediaPipeObjectDetectorSetup(
+    val modelBuffer: ByteBuffer,
+    val delegate: Delegate,
+    val runningMode: RunningMode,
+    val scoreThreshold: Float,
+    val maxResults: Int,
+) {
+    fun buildOptions(): ObjectDetector.ObjectDetectorOptions {
+        val baseOptions = BaseOptions.builder()
+            .setModelAssetBuffer(modelBuffer)
+            .setDelegate(delegate)
+            .build()
+        return ObjectDetector.ObjectDetectorOptions.builder()
+            .setBaseOptions(baseOptions)
+            .setRunningMode(runningMode)
+            .setScoreThreshold(scoreThreshold)
+            .setMaxResults(maxResults)
+            .build()
+    }
+}
+
+internal object MediaPipeObjectDetectorOptionsFactory {
+    fun create(model: ByteArray, metadata: RecognitionModelMetadata): MediaPipeObjectDetectorSetup {
+        val modelBuffer = ByteBuffer.allocateDirect(model.size)
+            .order(ByteOrder.nativeOrder())
+            .put(model)
+            .apply { rewind() }
+        return MediaPipeObjectDetectorSetup(
+            modelBuffer = modelBuffer,
+            delegate = Delegate.CPU,
+            runningMode = RunningMode.IMAGE,
+            scoreThreshold = metadata.confidenceThreshold,
+            maxResults = CardClassIndex.labels.size,
+        )
     }
 }

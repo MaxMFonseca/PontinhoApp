@@ -20,4 +20,5 @@ data class RoundScoreEntity(
     val origin: String,
     val submittedAt: Long,
     val submissionToken: String?,
+    val recognitionModelVersion: String? = null,
 )

@@ -7,15 +7,19 @@ import com.maxmfonseca.pontinho.domain.model.Suit
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -80,12 +84,13 @@ class MediaPipeCardRecognitionEngineTest {
     @Test
     fun `serializes concurrent inference`() = runBlocking {
         val runner = BlockingRunner()
-        val engine = engine(runner, dispatcher = Dispatchers.IO)
+        val engine = engine(runner, dispatcher = Dispatchers.Default)
 
         val first = async(Dispatchers.Default) { engine.recognize(bitmap()) }
         assertTrue(runner.firstEntered.await(5, TimeUnit.SECONDS))
-        val second = async(Dispatchers.Default) { engine.recognize(bitmap()) }
-        Thread.sleep(100)
+        val second = async(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            engine.recognize(bitmap())
+        }
 
         assertEquals(1, runner.detectCalls.get())
         assertEquals(1, runner.maxConcurrent.get())
@@ -94,6 +99,83 @@ class MediaPipeCardRecognitionEngineTest {
         second.await()
         assertEquals(2, runner.detectCalls.get())
         assertEquals(1, runner.maxConcurrent.get())
+    }
+
+    @Test
+    fun `queued cancellation returns before active native inference finishes`() = runBlocking {
+        val runner = BlockingRunner()
+        val engine = engine(runner, dispatcher = Dispatchers.Default)
+        val first = async(Dispatchers.Default) { engine.recognize(bitmap()) }
+        assertTrue(runner.firstEntered.await(5, TimeUnit.SECONDS))
+        val queuedStarted = CountDownLatch(1)
+        val queued = async(Dispatchers.Default) {
+            queuedStarted.countDown()
+            engine.recognize(bitmap())
+        }
+        assertTrue(queuedStarted.await(5, TimeUnit.SECONDS))
+
+        try {
+            withTimeout(1_000) {
+                queued.cancelAndJoin()
+            }
+            assertEquals(1, runner.detectCalls.get())
+            assertFalse(runner.release.await(0, TimeUnit.MILLISECONDS))
+        } finally {
+            runner.release.countDown()
+            first.await()
+        }
+    }
+
+    @Test
+    fun `close rejects queued inference and waits only for active native call`() = runBlocking {
+        val runner = BlockingRunner()
+        val engine = engine(runner, dispatcher = Dispatchers.Default)
+        val active = async(Dispatchers.Default) { engine.recognize(bitmap()) }
+        assertTrue(runner.firstEntered.await(5, TimeUnit.SECONDS))
+        val queued = async(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            runCatching { engine.recognize(bitmap()) }
+        }
+        val closeEntered = CountDownLatch(1)
+        val closeReturned = CountDownLatch(1)
+        val closer = Thread {
+            closeEntered.countDown()
+            engine.close()
+            closeReturned.countDown()
+        }.apply { start() }
+        assertTrue(closeEntered.await(5, TimeUnit.SECONDS))
+        assertFalse(closeReturned.await(250, TimeUnit.MILLISECONDS))
+
+        runner.release.countDown()
+        active.await()
+        closer.join(5_000)
+
+        assertTrue(closeReturned.await(0, TimeUnit.MILLISECONDS))
+        assertTrue(queued.await().exceptionOrNull() is CardRecognitionException.Closed)
+        assertEquals(1, runner.detectCalls.get())
+        assertEquals(1, runner.closeCalls.get())
+    }
+
+    @Test
+    fun `concurrent close calls close runner once and all return`() {
+        val runner = FakeRunner()
+        val engine = engine(runner)
+        val callers = 8
+        val start = CyclicBarrier(callers)
+        val pool = Executors.newFixedThreadPool(callers)
+        val futures = List(callers) {
+            pool.submit {
+                start.await(5, TimeUnit.SECONDS)
+                engine.close()
+            }
+        }
+
+        futures.forEach { it.get(5, TimeUnit.SECONDS) }
+        pool.shutdownNow()
+
+        assertEquals(1, runner.closeCalls.get())
+        assertThrows(CardRecognitionException.Closed::class.java) {
+            runBlocking { engine.recognize(bitmap()) }
+        }
     }
 
     @Test
@@ -133,6 +215,30 @@ class MediaPipeCardRecognitionEngineTest {
         assertFalse(error.message.orEmpty().contains(secret))
         assertEquals("Card recognition failed", error.message)
         assertNull(error.cause)
+    }
+
+    @Test
+    fun `native linkage failures become privacy-safe typed failures`() {
+        val engine = engine(FakeRunner(failure = UnsatisfiedLinkError("/private/lib.so")))
+
+        val error = assertThrows(CardRecognitionException.InferenceFailed::class.java) {
+            runBlocking { engine.recognize(bitmap()) }
+        }
+
+        assertEquals("Card recognition failed", error.message)
+        assertNull(error.cause)
+    }
+
+    @Test
+    fun `fatal VM errors from inference are not swallowed`() {
+        val fatal = OutOfMemoryError("native allocation")
+        val engine = engine(FakeRunner(failure = fatal))
+
+        val thrown = assertThrows(OutOfMemoryError::class.java) {
+            runBlocking { engine.recognize(bitmap()) }
+        }
+
+        assertTrue(thrown === fatal)
     }
 
     @Test
@@ -182,6 +288,45 @@ class MediaPipeCardRecognitionEngineTest {
         assertThrows(IllegalStateException::class.java) {
             runBlocking { engine.recognize(bitmap()) }
         }
+    }
+
+    @Test
+    fun `gated factory fails closed when native linkage is unavailable`() {
+        val model = "abc".encodeToByteArray()
+        val factory = AssetGatedCardRecognitionEngineFactory(
+            verifier = RecognitionAssetVerifier(),
+            delegate = MediaPipeCardRecognitionEngineFactory(
+                runnerFactory = MediaPipeDetectorRunnerFactory { _, _ ->
+                    throw NoClassDefFoundError("private native detail")
+                },
+            ),
+        )
+
+        val engine = factory.create(model, approvedReleaseJson())
+
+        assertEquals(
+            RecognitionAvailability.Unavailable(
+                com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason.ENGINE_NOT_INSTALLED,
+            ),
+            engine.availability,
+        )
+    }
+
+    @Test
+    fun `gated factory does not swallow fatal VM errors`() {
+        val fatal = OutOfMemoryError("native allocation")
+        val factory = AssetGatedCardRecognitionEngineFactory(
+            verifier = RecognitionAssetVerifier(),
+            delegate = MediaPipeCardRecognitionEngineFactory(
+                runnerFactory = MediaPipeDetectorRunnerFactory { _, _ -> throw fatal },
+            ),
+        )
+
+        val thrown = assertThrows(OutOfMemoryError::class.java) {
+            factory.create("abc".encodeToByteArray(), approvedReleaseJson())
+        }
+
+        assertTrue(thrown === fatal)
     }
 
     private fun engine(
@@ -238,6 +383,7 @@ class MediaPipeCardRecognitionEngineTest {
         val release = CountDownLatch(1)
         val detectCalls = AtomicInteger()
         val maxConcurrent = AtomicInteger()
+        val closeCalls = AtomicInteger()
         private val concurrent = AtomicInteger()
 
         override fun detect(bitmap: Bitmap): List<RawCardDetection> {
@@ -250,7 +396,9 @@ class MediaPipeCardRecognitionEngineTest {
             return emptyList()
         }
 
-        override fun close() = Unit
+        override fun close() {
+            closeCalls.incrementAndGet()
+        }
     }
 
     private fun approvedReleaseJson(): ByteArray {

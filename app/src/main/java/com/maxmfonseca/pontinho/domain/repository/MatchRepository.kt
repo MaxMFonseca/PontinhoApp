@@ -1,6 +1,7 @@
 package com.maxmfonseca.pontinho.domain.repository
 
 import com.maxmfonseca.pontinho.domain.model.*
+import com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
 import java.time.LocalDate
@@ -27,6 +28,22 @@ data class ChooseIndicator(val matchId: MatchId, val indicator: Indicator)
 data class PreparedRound(val id: RoundId, val matchId: MatchId, val ordinal: Int, val indicator: Indicator)
 data class DesignateWinner(val matchId: MatchId, val roundId: RoundId, val participantId: ParticipantId, val preparedRound: PreparedRound? = null)
 data class SubmitScore(val matchId: MatchId, val roundId: RoundId, val participantId: ParticipantId, val points: Int, val submissionToken: String, val preparedRound: PreparedRound? = null)
+data class SubmitScannedScore(
+    val matchId: MatchId,
+    val roundId: RoundId,
+    val participantId: ParticipantId,
+    val cards: List<ConfirmedCard>,
+    val submissionToken: String,
+    val modelVersion: String,
+    val preparedRound: PreparedRound? = null,
+)
+data class UpdateScannedScore(
+    val matchId: MatchId,
+    val roundId: RoundId,
+    val participantId: ParticipantId,
+    val cards: List<ConfirmedCard>,
+    val modelVersion: String,
+)
 data class RemoveRoundEntry(val matchId: MatchId, val roundId: RoundId, val participantId: ParticipantId)
 data class UpdateExplicitScore(val matchId: MatchId, val roundId: RoundId, val participantId: ParticipantId, val points: Int)
 
@@ -124,7 +141,9 @@ interface MatchRepository {
     suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound
     suspend fun designateWinner(command: DesignateWinner)
     suspend fun submitScore(command: SubmitScore)
+    suspend fun submitScannedScore(command: SubmitScannedScore): Unit = error("Scanned scoring is not implemented")
     suspend fun removeRoundEntry(command: RemoveRoundEntry)
     suspend fun updateExplicitScore(command: UpdateExplicitScore)
+    suspend fun updateScannedScore(command: UpdateScannedScore): Unit = error("Scanned score correction is not implemented")
     suspend fun acknowledgeResults(matchId: MatchId, revision: Long)
 }
