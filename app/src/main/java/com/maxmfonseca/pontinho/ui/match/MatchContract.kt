@@ -18,6 +18,7 @@ data class MatchScoreDialogState(
     val participantId: ParticipantId, val playerName: String, val roundId: RoundId,
     val roundNumber: Int, val indicator: Indicator, val wentOutEnabled: Boolean, val value: String = "",
     val isCorrection: Boolean = false, val readOnly: Boolean = false,
+    val canScan: Boolean = false,
 ) {
     val parsedScore: Int? get() = value.takeIf { it.isNotEmpty() && it.all { c -> c in '0'..'9' } }?.toIntOrNull()
     val canConfirm: Boolean get() = !readOnly && parsedScore != null
@@ -34,5 +35,6 @@ data class MatchUiState(
     val pausedRoundNumbers: List<Int> = emptyList(), val isCorrectingRound: Boolean = false,
 )
 sealed interface MatchEvent {
+    data class OpenScanner(val request: com.maxmfonseca.pontinho.ui.scanner.ScanRequest) : MatchEvent
     data class OpenResults(val matchId: MatchId) : MatchEvent
 }

@@ -4,6 +4,14 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelProvider
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import android.graphics.Bitmap
+import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
+import com.maxmfonseca.pontinho.domain.recognition.*
+import com.maxmfonseca.pontinho.ui.scanner.ScannerViewModel
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavHostController
 import androidx.compose.runtime.SideEffect
@@ -32,6 +40,190 @@ class MatchIntegrationTest {
     private val stores = mutableListOf<ViewModelStore>()
     @Before fun setup() { db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java).build() }
     @After fun close() { stores.forEach { it.clear() }; db.close() }
+
+    @Test fun scannerEducationCancelAndRecreationKeepManualDialogAndStableToken() = runBlocking<Unit> {
+        val repo = RoomMatchRepository(db)
+        val id = repo.createMatch(CreateMatch("scan-cancel", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
+        val educationGate = CompletableDeferred<Unit>()
+        val app = container(repo, scannerAvailable = true, educationWriteGate = educationGate)
+        lateinit var nav: NavHostController
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            val controller = rememberNavController()
+            SideEffect { nav = controller }
+            PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
+        lateinit var model: MatchViewModel
+        compose.runOnIdle {
+            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
+            model.addScore(model.uiState.value.players[0].id)
+            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        }
+        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
+        compose.onNodeWithTag("score_input").performTextInput("17")
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val permissionBefore = context.checkSelfPermission(Manifest.permission.CAMERA)
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("camera_education_root")
+        assertEquals(permissionBefore, context.checkSelfPermission(Manifest.permission.CAMERA))
+        restoration.emulateSavedInstanceStateRestore()
+        awaitTag("camera_education_root")
+        compose.onNodeWithTag("camera_education_dismiss").performScrollTo().performClick()
+        compose.onNodeWithTag("score_input").assertTextContains("17")
+        compose.waitForIdle()
+        educationGate.complete(Unit)
+        compose.waitUntil(5_000) { runBlocking { app.preferencesRepository.preferences.first().cameraEducationSeen } }
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("scanner_root")
+        assertEquals(PackageManager.PERMISSION_DENIED, permissionBefore)
+        compose.onNodeWithTag("scanner_capture").performScrollTo().performClick()
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.serviceInfo = automation.serviceInfo.apply {
+            flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        }
+        compose.waitUntil(5_000) {
+            automation.rootInActiveWindow?.findAccessibilityNodeInfosByViewId(
+                "com.android.permissioncontroller:id/permission_deny_button")?.isNotEmpty() == true
+        }
+        automation.rootInActiveWindow.findAccessibilityNodeInfosByViewId(
+            "com.android.permissioncontroller:id/permission_deny_button").first()
+            .performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+        awaitTag("scanner_permission_denied")
+        val token = compose.runOnIdle { nav.currentBackStackEntry!!.arguments!!.getString("token") }
+        restoration.emulateSavedInstanceStateRestore()
+        awaitTag("scanner_root")
+        compose.onNodeWithTag("scanner_cancel").performScrollTo().performClick()
+        compose.onNodeWithTag("score_input").assertTextContains("17")
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("scanner_root")
+        compose.runOnIdle { assertEquals(token, nav.currentBackStackEntry!!.arguments!!.getString("token")) }
+        compose.onNodeWithTag("scanner_manual").performScrollTo().performClick()
+        compose.runOnIdle { model.confirmScore() }
+        compose.waitUntil { model.uiState.value.scoreDialog == null && !model.uiState.value.isSaving }
+        assertEquals(17, repo.observeMatch(id).first()!!.openRound!!.draft.entries.values.single().points)
+        compose.onNodeWithTag("match_root").assertExists()
+    }
+
+    @Test fun scannerReviewSaveReturnsOnceAndCorrectionUpdatesExistingScore() = runBlocking {
+        val repo = RoomMatchRepository(db)
+        val id = repo.createMatch(CreateMatch("scan-save", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
+        lateinit var nav: NavHostController
+        val app = container(repo, scannerAvailable = true)
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            val controller = rememberNavController()
+            SideEffect { nav = controller }
+            PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+        }
+        compose.waitUntil { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
+        lateinit var model: MatchViewModel
+        compose.runOnIdle {
+            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
+            model.addScore(model.uiState.value.players[0].id)
+            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        }
+        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
+        val participant = model.uiState.value.scoreDialog!!.participantId
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val image = java.io.File.createTempFile("nav-scan-", ".png", context.cacheDir)
+        Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).let { bitmap ->
+            image.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+        }
+        try {
+            repeat(2) { index ->
+                if (index == 1) compose.runOnIdle { model.editScore(participant, 1) }
+                compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+                if (index == 0) {
+                    awaitTag("camera_education_root")
+                    compose.onNodeWithTag("camera_education_continue").performScrollTo().performClick()
+                }
+                awaitTag("scanner_root")
+                lateinit var scanner: ScannerViewModel
+                compose.runOnIdle {
+                    scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
+                    assertEquals(if (index == 0) null else participant.value, scanner.request.correctionScoreId)
+                    scanner.onPhotoSelected(Uri.fromFile(image))
+                }
+                compose.waitUntil { scanner.uiState.value.cards.isNotEmpty() }
+                val token = scanner.request.submissionToken
+                restoration.emulateSavedInstanceStateRestore()
+                awaitTag("scanner_root")
+                compose.runOnIdle {
+                    scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
+                    assertEquals(token, scanner.request.submissionToken)
+                }
+                assertEquals(index, repo.observeMatch(id).first()!!.rounds.size)
+                if (index == 1) compose.runOnIdle { scanner.addCard(Card.Suited(Rank.THREE, Suit.HEARTS)) }
+                compose.onNodeWithTag("scanner_confirm").performScrollTo().performClick()
+                compose.waitUntil { model.uiState.value.scoreDialog == null }
+                compose.onNodeWithTag("match_root").assertExists()
+                compose.runOnIdle { assertEquals(Destination.Match.route, nav.currentDestination!!.route) }
+                val round = repo.observeMatch(id).first()!!.rounds.single()
+                assertEquals(if (index == 0) 2 else 5, round.draft.entries.getValue(participant).points)
+                assertEquals(1, db.roundDao().scores(round.id.value).size)
+            }
+            compose.runOnIdle { model.editScore(participant, 1); model.deleteScore() }
+            compose.waitUntil { !model.uiState.value.isSaving && model.uiState.value.scoreDialog == null }
+        } finally { image.delete() }
+    }
+
+    @Test fun scannerRevalidatesRoundAfterEducationBeforeConstructingViewModel() = runBlocking<Unit> {
+        val repo = RoomMatchRepository(db)
+        val id = repo.createMatch(CreateMatch("scan-stale", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
+        val app = container(repo, scannerAvailable = true)
+        lateinit var nav: NavHostController
+        compose.setContent {
+            val controller = rememberNavController()
+            SideEffect { nav = controller }
+            PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+        }
+        compose.waitUntil { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
+        lateinit var model: MatchViewModel
+        compose.runOnIdle {
+            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
+            model.addScore(model.uiState.value.players[0].id)
+            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        }
+        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
+        val player = model.uiState.value.players[1].id
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("camera_education_root")
+        val other = repo.chooseIndicator(ChooseIndicator(id, Indicator(Rank.FIVE, CardColor.RED)))
+        repo.submitScore(SubmitScore(id, other.id, player, 7, "other", other))
+        compose.onNodeWithTag("camera_education_continue").performScrollTo().performClick()
+        compose.waitUntil { nav.currentDestination?.route == Destination.Match.route }
+        compose.onNodeWithTag("scanner_root", useUnmergedTree = true).assertDoesNotExist()
+        compose.runOnIdle { model.addScore(model.uiState.value.players[0].id) }
+        compose.onNodeWithTag("score_input").performTextInput("8")
+        compose.runOnIdle { model.confirmScore() }
+        compose.waitUntil { !model.uiState.value.isSaving && model.uiState.value.scoreDialog == null }
+        assertEquals(2, repo.observeMatch(id).first()!!.rounds.single().draft.entries.values.count { it.origin == RoundEntryOrigin.EXPLICIT })
+    }
+
+    @Test fun unavailableRecognitionKeepsManualScoreEntryUsable() = runBlocking<Unit> {
+        val repo = RoomMatchRepository(db)
+        val id = repo.createMatch(CreateMatch("scan-unavailable", listOf("Ana", "Bruno").map { CreateMatchPlayer(it, displayName = it) }))
+        lateinit var nav: NavHostController
+        compose.setContent {
+            val controller = rememberNavController()
+            SideEffect { nav = controller }
+            PontinhoNavHost(container(repo), navController = controller, startDestination = Destination.Match.createRoute(id.value))
+        }
+        compose.waitUntil { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
+        lateinit var model: MatchViewModel
+        compose.runOnIdle {
+            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
+            model.addScore(model.uiState.value.players[0].id)
+            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        }
+        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
+        compose.onNodeWithTag("score_camera").assertDoesNotExist()
+        compose.onNodeWithTag("score_input").performTextInput("8")
+        compose.runOnIdle { model.confirmScore() }
+        compose.waitUntil { !model.uiState.value.isSaving && model.uiState.value.scoreDialog == null }
+        assertEquals(8, repo.observeMatch(id).first()!!.rounds.single().draft.entries.values.sumOf { it.points })
+    }
 
     @Test fun immediateDragCommitsOneRoomPermutationAndFailedReleaseRestoresCommittedOrder() {
         val storage = RoomMatchRepository(db)
@@ -436,14 +628,34 @@ class MatchIntegrationTest {
     private fun vm(id: MatchId, repo: MatchRepository): MatchViewModel = MatchViewModel(id, repo, Dispatchers.Unconfined).also {
         val store = ViewModelStore(); store.put("match", it); stores += store
     }
-    private fun container(repo: MatchRepository) = object : AppContainer {
+    private fun awaitTag(tag: String) {
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+    }
+    private fun container(repo: MatchRepository, scannerAvailable: Boolean = false, educationSeen: Boolean = false,
+        educationWriteGate: CompletableDeferred<Unit>? = null) = object : AppContainer {
         override val playerRepository = RoomPlayerRepository(db)
         override val matchRepository = repo
         override val preferencesRepository = object : PreferencesRepository {
-            override val preferences = MutableStateFlow(AppPreferences())
+            override val preferences = MutableStateFlow(AppPreferences(cameraEducationSeen = educationSeen))
             override suspend fun setTheme(theme: ThemePreference) = Unit
             override suspend fun setLanguage(language: LanguagePreference) = Unit
             override suspend fun setReducedMotion(reducedMotion: Boolean?) = Unit
+            override suspend fun setCameraEducationSeen(seen: Boolean) {
+                educationWriteGate?.await()
+                preferences.value = preferences.value.copy(cameraEducationSeen = seen)
+            }
+        }
+        override val cardRecognitionEngineProvider = object : CardRecognitionEngineProvider {
+            override fun get(): CardRecognitionEngine = object : CardRecognitionEngine {
+                override val availability = if (scannerAvailable) RecognitionAvailability.Available(RecognitionModelMetadata(
+                    "test", "0".repeat(64), (0..51).map { "card-$it" }, 640, 640, .25f, .45f))
+                    else com.maxmfonseca.pontinho.recognition.UnavailableCardRecognitionEngineProvider.get().availability
+                override suspend fun recognize(bitmap: Bitmap) = CardRecognitionResult(listOf(
+                    RecognizedCard(Card.Suited(Rank.TWO, Suit.HEARTS), NormalizedRect(.1f, .1f, .5f, .5f), .9f, emptySet())
+                ), 1, "test")
+                override fun close() = Unit
+            }
+            override fun close() = Unit
         }
     }
 }

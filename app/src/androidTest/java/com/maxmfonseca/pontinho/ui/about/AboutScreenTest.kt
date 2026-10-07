@@ -22,10 +22,12 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performFirstLinkClick
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.espresso.Espresso.pressBack
 import com.maxmfonseca.pontinho.R
 import org.junit.Rule
 import org.junit.Test
@@ -37,7 +39,9 @@ class AboutScreenTest {
 
     @Test fun aboutContainsOnlyKnownFactsAndSupportAddress() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        composeRule.setContent { AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {}) }
+        composeRule.setContent {
+            AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {}, onCameraEducationSeen = {})
+        }
 
         composeRule.onNodeWithTag("about_root").assertIsDisplayed()
         composeRule.onNodeWithText("Pontinho").assertIsDisplayed()
@@ -62,7 +66,7 @@ class AboutScreenTest {
             CompositionLocalProvider(LocalContext provides context, LocalResources provides context.resources,
                 LocalDensity provides Density(base.resources.displayMetrics.density, scale)) {
                 Box(Modifier.size(320.dp, 568.dp)) {
-                    AboutScreen("1.0.0", {}, { learnClicks++ })
+                    AboutScreen("1.0.0", {}, { learnClicks++ }, {})
                 }
             }
         }
@@ -91,11 +95,130 @@ class AboutScreenTest {
         composeRule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, 1.5f)) {
                 Box(Modifier.size(width = 320.dp, height = 480.dp)) {
-                    AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {})
+                    AboutScreen(
+                        versionName = "1.0.0",
+                        onBack = {},
+                        onLearn = {},
+                        onCameraEducationSeen = {},
+                    )
                 }
             }
         }
 
         composeRule.onNodeWithTag("about_support_email").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun firstScannerUseRoutesToEducationWithoutRunningAnAction() {
+        assertEquals(ScannerEntryRoute.Education, scannerEntryRoute(cameraEducationSeen = false))
+        assertEquals(ScannerEntryRoute.Capture, scannerEntryRoute(cameraEducationSeen = true))
+
+        var seenCalls = 0
+        var continueCalls = 0
+        var dismissCalls = 0
+        composeRule.setContent {
+            CameraEducationScreen(
+                onEducationSeen = { seenCalls++ },
+                onContinue = { continueCalls++ },
+                onDismiss = { dismissCalls++ },
+            )
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(0, seenCalls)
+            assertEquals(0, continueCalls)
+            assertEquals(0, dismissCalls)
+        }
+    }
+
+    @Test fun educationMarksSeenOnlyOnContinueOrExplicitDismiss() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        var seenCalls = 0
+        var continueCalls = 0
+        var dismissCalls = 0
+        composeRule.setContent {
+            CameraEducationScreen(
+                onEducationSeen = { seenCalls++ },
+                onContinue = { continueCalls++ },
+                onDismiss = { dismissCalls++ },
+            )
+        }
+
+        composeRule.onNodeWithText(context.getString(R.string.camera_education_continue)).performScrollTo().performClick()
+        composeRule.runOnIdle {
+            assertEquals(1, seenCalls)
+            assertEquals(1, continueCalls)
+            assertEquals(0, dismissCalls)
+        }
+    }
+
+    @Test fun systemBackExplicitlyDismissesEducationExactlyOnce() {
+        var seenCalls = 0
+        var dismissCalls = 0
+        composeRule.setContent {
+            CameraEducationScreen(
+                onEducationSeen = { seenCalls++ },
+                onContinue = {},
+                onDismiss = { dismissCalls++ },
+            )
+        }
+
+        pressBack()
+        composeRule.waitForIdle()
+        pressBack()
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertEquals(1, seenCalls)
+            assertEquals(1, dismissCalls)
+        }
+    }
+
+    @Test fun aboutOpensReusableEducationWithCompleteCopyInBothLocales() {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        var locale by mutableStateOf("pt-BR")
+        var seenCalls = 0
+        composeRule.setContent {
+            val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
+                setLocale(Locale.forLanguageTag(locale))
+            })
+            CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources) {
+                AboutScreen(
+                    versionName = "1.0.0",
+                    onBack = {},
+                    onLearn = {},
+                    onCameraEducationSeen = { seenCalls++ },
+                )
+            }
+        }
+
+        val copies = mapOf(
+            "pt-BR" to listOf(
+                "A foto é processada inteiramente neste dispositivo. O aplicativo não envia nem retém a imagem.",
+                "Para obter melhores resultados, use boa iluminação, evite reflexos e mantenha todas as cartas totalmente visíveis e sem sobreposição.",
+                "Revise sempre as cartas reconhecidas e o total antes de salvar. Essa revisão é obrigatória.",
+                "Se a leitura não funcionar, volte e digite a pontuação manualmente.",
+            ),
+            "en-US" to listOf(
+                "The photo is processed entirely on this device. The app does not upload or retain the image.",
+                "For best results, use good lighting, avoid glare, and keep every card fully visible and free of overlap.",
+                "Always review the recognized cards and total before saving. This review is required.",
+                "If scanning does not work, go back and enter the score manually.",
+            ),
+        )
+        for (tag in listOf("pt-BR", "en-US")) {
+            composeRule.runOnIdle { locale = tag }
+            val seenBeforeOpen = seenCalls
+            val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
+                setLocale(Locale.forLanguageTag(tag))
+            })
+            composeRule.onNodeWithTag("about_camera_education").performScrollTo().performClick()
+            copies.getValue(tag).forEach { copy ->
+                composeRule.onNodeWithText(copy).performScrollTo().assertIsDisplayed()
+            }
+            composeRule.runOnIdle { assertEquals(seenBeforeOpen, seenCalls) }
+            composeRule.onNodeWithText(localized.getString(R.string.camera_education_dismiss)).performScrollTo().performClick()
+            composeRule.runOnIdle { assertEquals(seenBeforeOpen + 1, seenCalls) }
+            composeRule.onNodeWithTag("about_root").assertIsDisplayed()
+        }
     }
 }

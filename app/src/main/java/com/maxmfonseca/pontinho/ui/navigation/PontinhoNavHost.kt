@@ -12,6 +12,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.navigation.NavBackStackEntry
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
+import com.maxmfonseca.pontinho.ui.about.CameraEducationScreen
+import com.maxmfonseca.pontinho.ui.about.ScannerEntryRoute
+import com.maxmfonseca.pontinho.ui.about.scannerEntryRoute
+import com.maxmfonseca.pontinho.ui.scanner.*
+import kotlinx.coroutines.flow.first
 import android.content.Context
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -49,6 +62,7 @@ import com.maxmfonseca.pontinho.ui.results.ResultsScreen
 import com.maxmfonseca.pontinho.ui.results.ResultsViewModel
 import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
 import java.time.LocalDate
+import kotlinx.coroutines.launch
 
 @Composable
 fun PontinhoNavHost(
@@ -58,6 +72,7 @@ fun PontinhoNavHost(
     startDestination: String = Destination.Home.route,
 ) {
     val reducedMotion = LocalReducedMotion.current
+    val navigationScope = rememberCoroutineScope()
     // Sequential fade-through: 75 ms out, then 75 ms in, in every direction.
     val enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(durationMillis = 75, delayMillis = 75))
     val exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(durationMillis = 75))
@@ -136,12 +151,20 @@ fun PontinhoNavHost(
             // literal percent escapes and plus signs in a valid match identity.
             val matchId = MatchId(requireNotNull(entry.arguments?.getString(Destination.Match.MATCH_ID)))
             val matchViewModel: MatchViewModel = viewModel(factory = viewModelFactory {
-                initializer { MatchViewModel(matchId, container.matchRepository) }
+                initializer { MatchViewModel(matchId, container.matchRepository,
+                    savedStateHandle = createSavedStateHandle(),
+                    recognitionAvailable = { container.cardRecognitionEngineProvider.get().availability is RecognitionAvailability.Available }) }
             })
             val state by matchViewModel.uiState.collectAsStateWithLifecycle()
             LaunchedEffect(matchViewModel) {
                 matchViewModel.events.collect { event ->
                     when (event) {
+                        is MatchEvent.OpenScanner -> {
+                            val request = matchViewModel.validateScanner(ScannerContext.from(event.request))
+                            if (request != null && navController.currentBackStackEntry == entry) {
+                                navController.navigate(Destination.Scanner.createRoute(request)) { launchSingleTop = true }
+                            } else matchViewModel.scannerCancelled(event.request.submissionToken)
+                        }
                         is MatchEvent.OpenResults -> navController.navigate(Destination.Results.createRoute(event.matchId.value)) {
                             launchSingleTop = true
                         }
@@ -154,7 +177,16 @@ fun PontinhoNavHost(
                 onAddPlayer = matchViewModel::openAddPlayer, onPlayerNameChange = matchViewModel::updatePlayerName,
                 onConfirmPlayerName = matchViewModel::confirmPlayerName, onReorderPlayers = matchViewModel::reorderPlayers,
                 onEditScore = matchViewModel::editScore, onDeleteScore = matchViewModel::deleteScore,
-                onSelectIndicatorColor = matchViewModel::selectIndicatorColor)
+                onSelectIndicatorColor = matchViewModel::selectIndicatorColor,
+                onCamera = matchViewModel::openScanner)
+        }
+        composable(Destination.Scanner.route, arguments = Destination.Scanner.argumentNames.map { name ->
+            navArgument(name) { type = NavType.StringType; if (name == "correction") { nullable = true; defaultValue = null } }
+        }) { entry ->
+            ScannerDestination(container, navController, entry, onEducationSeen = {
+                // Dismissing education pops its entry; the preference write must outlive that entry.
+                navigationScope.launch { container.preferencesRepository.setCameraEducationSeen(true) }
+            })
         }
         composable(Destination.DayHistory.route, arguments = listOf(navArgument(Destination.DayHistory.LOCAL_DATE) { type = NavType.StringType })) { entry ->
             val localDate = LocalDate.parse(requireNotNull(entry.arguments?.getString(Destination.DayHistory.LOCAL_DATE)))
@@ -233,13 +265,92 @@ fun PontinhoNavHost(
         composable(Destination.Learn.route) { LearnScreen(onBack = { navController.popBackStack() }) }
         composable(Destination.About.route) {
             val context = androidx.compose.ui.platform.LocalContext.current
+            val scope = rememberCoroutineScope()
             val version = remember(context) {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
             }
             AboutScreen(versionName = version, onBack = { navController.popBackStack() },
-                onLearn = { navController.navigate(Destination.Learn.route) })
+                onLearn = { navController.navigate(Destination.Learn.route) },
+                onCameraEducationSeen = {
+                    scope.launch { container.preferencesRepository.setCameraEducationSeen(true) }
+                })
         }
     }
+}
+
+/** Sole navigation owner for scanner completion; the device screen only emits events. */
+@Composable
+private fun ScannerDestination(container: AppContainer, nav: NavHostController, entry: NavBackStackEntry,
+    onEducationSeen: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val route = remember(entry) { ScannerContext.decode { entry.arguments?.getString(it) } }
+    val parent = remember(entry) { nav.previousBackStackEntry?.takeIf { it.destination.route == Destination.Match.route } }
+    if (route == null || parent == null || parent.arguments?.getString(Destination.Match.MATCH_ID) != route.match) {
+        LaunchedEffect(entry) { if (nav.currentBackStackEntry == entry) nav.popBackStack() }
+        return
+    }
+    val matchViewModel: MatchViewModel = viewModel(viewModelStoreOwner = parent, factory = viewModelFactory {
+        initializer { MatchViewModel(MatchId(route.match), container.matchRepository,
+            savedStateHandle = createSavedStateHandle(),
+            recognitionAvailable = { container.cardRecognitionEngineProvider.get().availability is RecognitionAvailability.Available }) }
+    })
+    var request by remember(entry) { mutableStateOf<ScanRequest?>(null) }
+    var education by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var captureReady by remember(entry) { mutableStateOf(false) }
+    var scannerStarted by rememberSaveable { mutableStateOf(false) }
+    var handled by rememberSaveable { mutableStateOf(false) }
+    fun cancel() {
+        if (handled) return
+        handled = true
+        matchViewModel.scannerCancelled(route.token)
+        if (nav.currentBackStackEntry == entry) nav.popBackStack()
+    }
+    BackHandler { cancel() }
+    LaunchedEffect(entry) {
+        matchViewModel.uiState.first { !it.isLoading }
+        // Restoration may follow a committed write; the stable request is required for receipt replay.
+        val validated = matchViewModel.validateScanner(route, allowCommitted = scannerStarted)
+        if (validated == null) { cancel(); return@LaunchedEffect }
+        request = validated
+        if (education == null) education = scannerEntryRoute(
+            container.preferencesRepository.preferences.first().cameraEducationSeen) == ScannerEntryRoute.Education
+    }
+    if (request == null || education == null) { CircularProgressIndicator(); return }
+    if (education == true) {
+        CameraEducationScreen(
+            onEducationSeen = onEducationSeen,
+            onContinue = { education = false }, onDismiss = ::cancel,
+        )
+        return
+    }
+    LaunchedEffect(entry) {
+        val validated = matchViewModel.validateScanner(route, allowCommitted = scannerStarted)
+        if (validated == null) cancel()
+        else { request = validated; scannerStarted = true; captureReady = true }
+    }
+    if (!captureReady) { CircularProgressIndicator(); return }
+    val engine = remember(container) { container.cardRecognitionEngineProvider.get() }
+    val scanner: ScannerViewModel = viewModel(factory = viewModelFactory {
+        initializer { ScannerViewModel(requireNotNull(request), createSavedStateHandle(), engine,
+            container.matchRepository, ScannerImageLoader(context.contentResolver)::load) }
+    })
+    LaunchedEffect(scanner) {
+        scanner.events.collect { event ->
+            if (!handled) when (event) {
+                ScannerEvent.Cancelled -> cancel()
+                is ScannerEvent.Saved -> {
+                    if (event.matchId == request?.matchId && event.roundId == request?.roundId &&
+                        event.participantId == request?.participantId) {
+                        // Repository observation, not an inference result, closes the manual dialog.
+                        matchViewModel.scannerSaved(route.token, scanner.uiState.value.total)
+                        handled = true
+                        if (nav.currentBackStackEntry == entry) nav.popBackStack()
+                    }
+                }
+            }
+        }
+    }
+    ScannerScreen(scanner, engine.availability is RecognitionAvailability.Available)
 }
 
 private fun settingsFactory(container: AppContainer, context: Context) = viewModelFactory {

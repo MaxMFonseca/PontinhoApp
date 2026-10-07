@@ -26,8 +26,12 @@ class FakeMatchRepository(
     val home: MutableStateFlow<List<DaySummary>> = MutableStateFlow(emptyList()),
     private val createdMatchId: MatchId = MatchId("created-match"),
     private val createBlock: (suspend (CreateMatch) -> MatchId)? = null,
+    private val submitScanBlock: (suspend (SubmitScannedScore) -> Unit)? = null,
+    private val updateScanBlock: (suspend (UpdateScannedScore) -> Unit)? = null,
 ) : MatchRepository {
     val createdCommands = mutableListOf<CreateMatch>()
+    val submittedScans = mutableListOf<SubmitScannedScore>()
+    val updatedScans = mutableListOf<UpdateScannedScore>()
 
     override fun observeHome(): Flow<List<DaySummary>> = home
     override fun observeDay(localDate: LocalDate): Flow<DayHistory> = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
@@ -43,6 +47,14 @@ class FakeMatchRepository(
     override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound = unsupported()
     override suspend fun designateWinner(command: DesignateWinner) = unsupported()
     override suspend fun submitScore(command: SubmitScore) = unsupported()
+    override suspend fun submitScannedScore(command: SubmitScannedScore) {
+        submittedScans += command
+        submitScanBlock?.invoke(command)
+    }
+    override suspend fun updateScannedScore(command: UpdateScannedScore) {
+        updatedScans += command
+        updateScanBlock?.invoke(command)
+    }
     override suspend fun removeRoundEntry(command: RemoveRoundEntry) = unsupported()
     override suspend fun updateExplicitScore(command: UpdateExplicitScore) = unsupported()
     override suspend fun acknowledgeResults(matchId: MatchId, revision: Long) = unsupported()

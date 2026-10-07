@@ -2,8 +2,53 @@ package com.maxmfonseca.pontinho.ui.navigation
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.Assert.*
+import com.maxmfonseca.pontinho.domain.model.*
+import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
+import com.maxmfonseca.pontinho.ui.test.matchSnapshot
+import java.time.LocalDate
 
 class DestinationTest {
+    @Test fun scannerEncodesOnlyScalarContextAndValidatesPreparedRound() {
+        val match = matchSnapshot("m/a +%25", LocalDate.of(2026, 10, 14), 0, listOf("a" to "Ana", "b" to "Bruno"))
+        val indicator = Indicator(Rank.KING, CardColor.BLACK)
+        val request = ScanRequest(match.id, match.participants.first().id, RoundId("r/1"), indicator,
+            PreparedRound(RoundId("r/1"), match.id, 1, indicator), submissionToken = "t/+%25")
+        val context = ScannerContext.from(request)
+        val route = Destination.Scanner.createRoute(request)
+        assertTrue(route.contains("m%2Fa%20%2B%2525"))
+        assertTrue(route.contains("r%2F1"))
+        assertTrue(route.contains("t%2F%2B%2525"))
+        assertEquals(request, context.resolve(match))
+        assertNull(context.resolve(match.copy(id = MatchId("other"))))
+        assertNull(context.copy(participant = "missing").resolve(match))
+        assertNull(context.copy(ordinal = 2).resolve(match))
+        assertNull(context.copy(correction = "a").resolve(match))
+        assertNull(context.copy(token = " ").resolve(match))
+    }
+
+    @Test fun scannerRejectsMalformedAndMismatchedCorrectionWithoutDowngradingToSubmission() {
+        val match = matchSnapshot("match", LocalDate.of(2026, 10, 14), 0, listOf("a" to "Ana", "b" to "Bruno"))
+        val player = match.participants.first().id
+        val indicator = Indicator(Rank.KING, CardColor.BLACK)
+        val round = RoundSnapshot(RoundId("round"), 1, indicator, player,
+            RoundDraft(match.participants.map { it.id }, mapOf(player to RoundEntry(5, RoundEntryOrigin.EXPLICIT))),
+            java.time.Instant.EPOCH, null, RoundStatus.OPEN, false)
+        val snapshot = match.copy(rounds = listOf(round))
+        val context = ScannerContext("match", "round", player.value, 0, "KING", "BLACK", "token", player.value)
+        assertEquals(player.value, context.resolve(snapshot)!!.correctionScoreId)
+        assertNull(context.copy(correction = "another-score").resolve(snapshot))
+        assertNull(context.copy(round = "missing").resolve(snapshot))
+        assertNull(context.copy(rank = "ACE").resolve(snapshot))
+        assertNull(context.copy(ordinal = -1).resolve(snapshot))
+        assertNull(context.resolve(snapshot.copy(rounds = listOf(round.copy(draft = round.draft.copy(entries = emptyMap()))))))
+        assertNull(context.resolve(snapshot.copy(rounds = listOf(round.copy(draft = round.draft.copy(
+            entries = mapOf(player to RoundEntry(0, RoundEntryOrigin.AUTOMATIC_WINNER))))))))
+        assertNull(ScannerContext.decode { null })
+        assertNull(ScannerContext.decode { if (it == "ordinal") "NaN" else "value" })
+    }
+
     @Test
     fun staticDestinationsExposeStableRoutes() {
         assertEquals("home", Destination.Home.route)

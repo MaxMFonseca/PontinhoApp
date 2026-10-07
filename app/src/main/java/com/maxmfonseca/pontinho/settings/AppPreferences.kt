@@ -38,6 +38,7 @@ data class AppPreferences(
     val language: LanguagePreference = LanguagePreference.SYSTEM,
     /** `null` follows the device animation setting; a Boolean is an explicit override. */
     val reducedMotion: Boolean? = null,
+    val cameraEducationSeen: Boolean = false,
 ) {
     fun resolveReducedMotion(systemReducedMotion: Boolean): Boolean =
         reducedMotion ?: systemReducedMotion

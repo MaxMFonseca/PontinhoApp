@@ -50,6 +50,7 @@ fun MatchScreen(
     onEditScore: (ParticipantId, Int) -> Unit = { _, _ -> },
     onDeleteScore: () -> Unit = {},
     onSelectIndicatorColor: (CardColor) -> Unit = {},
+    onCamera: () -> Unit = {},
 ) {
     val historyScroll = rememberScrollState()
     val textMeasurer = rememberTextMeasurer()
@@ -155,6 +156,7 @@ fun MatchScreen(
     state.scoreDialog?.let { dialog ->
         ScoreDialog(dialog.playerName, dialog.roundNumber, wildcardPreview(dialog.indicator), dialog.value,
             onScoreChange, { onConfirmScore() }, onDismissDialog, onWentOut,
+            onCamera = onCamera.takeIf { dialog.canScan },
             wentOutEnabled = dialog.wentOutEnabled && !state.isSaving,
             enabled = !state.isSaving, hasSaveError = state.hasError,
             isCorrection = dialog.isCorrection, readOnly = dialog.readOnly, onDelete = onDeleteScore)

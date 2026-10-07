@@ -1,6 +1,9 @@
 package com.maxmfonseca.pontinho.ui.match
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
+import com.maxmfonseca.pontinho.ui.navigation.ScannerContext
+import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.ui.components.PlayerRoundHistory
@@ -14,6 +17,8 @@ class MatchViewModel(
     private val matchId: MatchId,
     private val repository: MatchRepository,
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val savedStateHandle: SavedStateHandle? = null,
+    private val recognitionAvailable: () -> Boolean = { false },
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableUiState = MutableStateFlow(MatchUiState())
@@ -26,6 +31,9 @@ class MatchViewModel(
     private var submissionToken = ""
     private var addPlayerToken: String? = null
     private var submittedPlayerName: String? = null
+    private var activeScanToken: String? = savedStateHandle?.get("activeScanToken")
+    private var restoredDialog = false
+    private var scannerLaunching = false
 
     init {
         scope.launch {
@@ -34,6 +42,10 @@ class MatchViewModel(
                 updateState { it.copy(isLoading = false, hasError = true) }
             }.collect { match ->
                 snapshot = match
+                if (!restoredDialog && match != null) {
+                    restoredDialog = true
+                    restoreDialog()
+                }
                 render()
                 if (match != null && match.hasPendingResults && emittedRevision != match.resultRevision) {
                     emittedRevision = match.resultRevision
@@ -55,6 +67,96 @@ class MatchViewModel(
                 updateState { it.copy(picker = IndicatorPickerState(participantId), hasError = false) }
             } else openDialog(participantId, pending.id, pending.ordinal, pending.indicator, true)
         } else openDialog(participantId, round.id, round.ordinal, round.indicator, round.draft.winner == null)
+    }
+
+    fun openScanner() {
+        val dialog = uiState.value.scoreDialog ?: return
+        if (!recognitionAvailable() || dialog.readOnly || uiState.value.isSaving || activeScanToken != null || scannerLaunching) return
+        val token = submissionToken
+        val context = scannerContext(dialog)
+        scannerLaunching = true
+        scope.launch {
+            try {
+                val current = repository.observeMatch(matchId).first()
+                val request = context.resolve(current)
+                if (request != null && submissionToken == token && uiState.value.scoreDialog == dialog) {
+                    activeScanToken = token
+                    persistDialog()
+                    eventChannel.send(MatchEvent.OpenScanner(request))
+                }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (_: Exception) { updateState { it.copy(hasError = true) }
+            } finally { scannerLaunching = false }
+        }
+    }
+
+    /** The navigation collector checks again: an event can outlive the dialog that emitted it. */
+    suspend fun validateScanner(context: ScannerContext, allowCommitted: Boolean = false): ScanRequest? {
+        val dialog = uiState.value.scoreDialog ?: return null
+        if (activeScanToken != context.token || scannerContext(dialog) != context || dialog.readOnly) return null
+        val current = try { repository.observeMatch(matchId).first() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return null }
+        if (uiState.value.scoreDialog != dialog || activeScanToken != context.token) return null
+        snapshot = current
+        return context.resolve(current, allowCommitted)
+    }
+
+    fun scannerCancelled(token: String) {
+        if (activeScanToken != token) return
+        activeScanToken = null
+        val dialog = uiState.value.scoreDialog
+        if (dialog != null && scannerContext(dialog).resolve(snapshot) == null) {
+            prepared = null
+            updateState { it.copy(scoreDialog = null) }
+            render()
+        } else persistDialog()
+    }
+
+    suspend fun scannerSaved(token: String, points: Int) {
+        val dialog = uiState.value.scoreDialog ?: return
+        if (activeScanToken != token || submissionToken != token) return
+        val committed = repository.observeMatch(matchId).first { match ->
+            match == null || match.rounds.any { round -> round.id == dialog.roundId &&
+                round.draft.entries[dialog.participantId]?.let { it.origin == RoundEntryOrigin.EXPLICIT && it.points == points } == true }
+        }
+        if (committed == null || activeScanToken != token || submissionToken != token) return
+        snapshot = committed
+        prepared = null
+        activeScanToken = null
+        updateState { it.copy(picker = null, scoreDialog = null) }
+        render()
+    }
+
+    private fun scannerContext(dialog: MatchScoreDialogState) = ScannerContext(
+        matchId.value, dialog.roundId.value, dialog.participantId.value,
+        prepared?.takeIf { it.id == dialog.roundId }?.ordinal ?: 0,
+        dialog.indicator.rank.name, dialog.indicator.color.name, submissionToken,
+        if (dialog.isCorrection) dialog.participantId.value else null,
+    )
+
+    private fun persistDialog() {
+        val state = savedStateHandle ?: return
+        state["activeScanToken"] = activeScanToken
+        state["scoreDialog"] = uiState.value.scoreDialog?.let { dialog ->
+            listOf(dialog.participantId.value, dialog.playerName, dialog.roundId.value, dialog.roundNumber.toString(),
+                dialog.indicator.rank.name, dialog.indicator.color.name, dialog.wentOutEnabled.toString(), dialog.value,
+                dialog.isCorrection.toString(), dialog.readOnly.toString(), submissionToken,
+                (prepared?.takeIf { it.id == dialog.roundId }?.ordinal ?: 0).toString())
+        }
+    }
+
+    private fun restoreDialog() {
+        val saved = savedStateHandle?.get<List<String>>("scoreDialog") ?: return
+        runCatching {
+            require(saved.size == 12)
+            val indicator = Indicator(Rank.valueOf(saved[4]), CardColor.valueOf(saved[5]))
+            submissionToken = saved[10].also { require(it.isNotBlank()) }
+            prepared = saved[11].toInt().takeIf { it > 0 }?.let { PreparedRound(RoundId(saved[2]), matchId, it, indicator) }
+            val dialog = MatchScoreDialogState(ParticipantId(saved[0]), saved[1], RoundId(saved[2]), saved[3].toInt(),
+                indicator, saved[6].toBooleanStrict(), saved[7], saved[8].toBooleanStrict(), saved[9].toBooleanStrict())
+            mutableUiState.value = mutableUiState.value.copy(scoreDialog = dialog)
+        }.onFailure { prepared = null; activeScanToken = null }
     }
 
     fun selectIndicatorRank(rank: Rank) {
@@ -93,6 +195,7 @@ class MatchViewModel(
         if (uiState.value.isSaving) return
         addPlayerToken = null
         submittedPlayerName = null
+        activeScanToken = null
         updateState { it.copy(picker = null, scoreDialog = null, playerName = null, hasError = false, duplicateNameError = false) }
     }
 
@@ -241,6 +344,7 @@ class MatchViewModel(
     private fun openDialog(id: ParticipantId, roundId: RoundId, ordinal: Int, indicator: Indicator, canWin: Boolean) {
         val name = snapshot?.participants?.singleOrNull { it.id == id }?.displayName ?: return
         submissionToken = UUID.randomUUID().toString()
+        activeScanToken = null
         updateState { it.copy(picker = null, hasError = false,
             scoreDialog = MatchScoreDialogState(id, name, roundId, ordinal, indicator, canWin)) }
     }
@@ -285,7 +389,7 @@ class MatchViewModel(
             pausedRoundNumbers = match.pausedRounds.map { it.ordinal }, isCorrectingRound = open?.isCorrection == true,
             playerName = old.playerName.takeIf { canJoinMatch() },
             picker = old.picker.takeUnless { match.isFinished },
-            scoreDialog = old.scoreDialog?.takeUnless { match.isFinished && !it.isCorrection }?.let { dialog ->
+            scoreDialog = old.scoreDialog?.takeUnless { match.isFinished && !it.isCorrection && activeScanToken == null }?.let { dialog ->
                 dialog.copy(wentOutEnabled = !dialog.isCorrection && if (dialog.roundId == open?.id) open.draft.winner == null else dialog.wentOutEnabled)
             }) }
     }
@@ -299,10 +403,13 @@ class MatchViewModel(
             val state = transform(old)
             val idle = !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
             state.copy(
+                scoreDialog = state.scoreDialog?.let { dialog -> dialog.copy(canScan = recognitionAvailable() &&
+                    !dialog.readOnly && scannerContext(dialog).resolve(snapshot) != null) },
                 canAddPlayer = canJoinMatch() && idle,
                 canReorderPlayers = canJoinMatch() && snapshot?.openRound == null && idle,
             )
         }
+        persistDialog()
     }
 
     override fun onCleared() { scope.cancel() }

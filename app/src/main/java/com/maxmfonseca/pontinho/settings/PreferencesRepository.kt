@@ -16,6 +16,7 @@ interface PreferencesRepository {
     suspend fun setTheme(theme: ThemePreference)
     suspend fun setLanguage(language: LanguagePreference)
     suspend fun setReducedMotion(reducedMotion: Boolean?)
+    suspend fun setCameraEducationSeen(seen: Boolean)
 }
 
 class DataStorePreferencesRepository(
@@ -33,6 +34,8 @@ class DataStorePreferencesRepository(
                 language = values[LANGUAGE]?.toEnumOrDefault(LanguagePreference.SYSTEM)
                     ?: LanguagePreference.SYSTEM,
                 reducedMotion = values[REDUCED_MOTION],
+                cameraEducationSeen = runCatching { values[CAMERA_EDUCATION_SEEN] }
+                    .getOrNull() ?: false,
             )
         }
 
@@ -51,6 +54,10 @@ class DataStorePreferencesRepository(
         }
     }
 
+    override suspend fun setCameraEducationSeen(seen: Boolean) {
+        dataStore.edit { it[CAMERA_EDUCATION_SEEN] = seen }
+    }
+
     private inline fun <reified T : Enum<T>> String.toEnumOrDefault(default: T): T =
         enumValues<T>().firstOrNull { it.name == this } ?: default
 
@@ -58,5 +65,6 @@ class DataStorePreferencesRepository(
         val THEME = stringPreferencesKey("theme")
         val LANGUAGE = stringPreferencesKey("language")
         val REDUCED_MOTION = booleanPreferencesKey("reduced_motion")
+        val CAMERA_EDUCATION_SEEN = booleanPreferencesKey("camera_education_seen")
     }
 }

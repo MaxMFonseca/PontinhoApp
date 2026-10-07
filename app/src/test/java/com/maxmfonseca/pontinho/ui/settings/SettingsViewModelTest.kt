@@ -68,6 +68,10 @@ class SettingsViewModelTest {
         override suspend fun setReducedMotion(reducedMotion: Boolean?) {
             mutable.update { it.copy(reducedMotion = reducedMotion) }
         }
+
+        override suspend fun setCameraEducationSeen(seen: Boolean) {
+            mutable.update { it.copy(cameraEducationSeen = seen) }
+        }
     }
 
     private class RecordingLocaleController : AppLocaleController {

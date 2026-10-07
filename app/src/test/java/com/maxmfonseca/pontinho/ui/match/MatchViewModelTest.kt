@@ -15,9 +15,149 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
 import java.time.LocalDate
+import androidx.lifecycle.SavedStateHandle
+import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun preparedScanIsOneShotAndCancellationPreservesManualContextAcrossRecreation() = runTest {
+        val repo = ScoringRepository()
+        val saved = SavedStateHandle()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), saved, { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.updateScore("17")
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        vm.openScanner(); vm.openScanner(); advanceUntilIdle()
+        val request = (events.single() as MatchEvent.OpenScanner).request
+        assertNotNull(request.preparedRound)
+        assertEquals(vm.uiState.value.scoreDialog!!.roundId, request.roundId)
+        val restored = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            SavedStateHandle(saved.keys().associateWith { saved.get<Any?>(it) }), { true })
+        runCurrent()
+        val restoredEvents = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { restored.events.collect { restoredEvents += it } }
+        restored.openScanner(); advanceUntilIdle()
+        assertTrue(restoredEvents.isEmpty())
+        assertEquals("17", restored.uiState.value.scoreDialog!!.value)
+        restored.scannerCancelled(request.submissionToken)
+        restored.openScanner(); advanceUntilIdle()
+        assertEquals(request, (restoredEvents.single() as MatchEvent.OpenScanner).request)
+        restored.scannerCancelled(request.submissionToken)
+        restored.confirmScore(); advanceUntilIdle()
+        assertNull(restored.uiState.value.scoreDialog)
+        assertEquals(17, repo.snapshot.value!!.openRound!!.draft.entries[request.participantId]!!.points)
+    }
+
+    @Test fun unavailableAndStaleScannerLaunchLeaveManualFlowUsable() = runTest {
+        val repo = ScoringRepository()
+        var available = false
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            recognitionAvailable = { available })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        vm.openScanner(); advanceUntilIdle()
+        assertTrue(events.isEmpty())
+        vm.updateScore("9"); assertTrue(vm.uiState.value.scoreDialog!!.canConfirm)
+        available = true
+        // A committed competing round invalidates this transient round's identity.
+        repo.snapshot.value = repo.snapshot.value!!.copy(rounds = listOf(repo.round(1, RoundDraft(repo.ids)).copy(id = RoundId("other"))))
+        vm.openScanner(); advanceUntilIdle()
+        assertTrue(events.isEmpty())
+        vm.dismissDialog(); vm.addScore(repo.ids[0]); vm.updateScore("9"); vm.confirmScore(); advanceUntilIdle()
+        assertEquals(9, repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[0]]!!.points)
+    }
+
+    @Test fun queuedScannerEventCannotOpenAfterDialogDismissOrParticipantRemoval() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.openScanner(); advanceUntilIdle()
+        val request = (vm.events.first() as MatchEvent.OpenScanner).request
+        val context = com.maxmfonseca.pontinho.ui.navigation.ScannerContext.from(request)
+        repo.snapshot.value = repo.snapshot.value!!.let { it.copy(participants = it.participants.drop(1)) }
+        runCurrent()
+        assertNull(vm.validateScanner(context))
+        vm.scannerCancelled(request.submissionToken)
+        assertNull(vm.uiState.value.scoreDialog)
+        vm.dismissDialog()
+        assertNull(vm.validateScanner(context))
+    }
+
+    @Test fun failedRepositoryRevalidationRejectsScannerWithoutBreakingManualDialog() = runTest {
+        val storage = ScoringRepository()
+        var fail = false
+        val repo = object : MatchRepository by storage {
+            override fun observeMatch(matchId: MatchId) = if (fail) kotlinx.coroutines.flow.flow<MatchSnapshot?> { error("offline db") }
+                else storage.observeMatch(matchId)
+        }
+        val vm = MatchViewModel(storage.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        runCurrent(); prepare(vm, storage.ids[0]); advanceUntilIdle()
+        vm.openScanner(); advanceUntilIdle()
+        val request = (vm.events.first() as MatchEvent.OpenScanner).request
+        fail = true
+        assertNull(vm.validateScanner(com.maxmfonseca.pontinho.ui.navigation.ScannerContext.from(request)))
+        vm.scannerCancelled(request.submissionToken)
+        vm.updateScore("9")
+        assertTrue(vm.uiState.value.scoreDialog!!.canConfirm)
+    }
+
+    @Test fun automaticWinnerHasNoCameraActionAndDeleteRemainsAvailable() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.updateScore("3"); vm.confirmScore(); advanceUntilIdle()
+        vm.addScore(repo.ids[1]); vm.updateScore("4"); vm.confirmScore(); advanceUntilIdle()
+        vm.editScore(repo.ids[2], 1)
+        assertTrue(vm.uiState.value.scoreDialog!!.readOnly)
+        assertFalse(vm.uiState.value.scoreDialog!!.canScan)
+        vm.openScanner(); advanceUntilIdle()
+        vm.deleteScore(); advanceUntilIdle()
+        assertNull(vm.uiState.value.scoreDialog)
+        assertNull(repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[2]])
+    }
+
+    @Test fun persistedScanAndExplicitCorrectionKeepValidatedCompositeAndSaveClosesOnce() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.updateScore("8"); vm.confirmScore(); advanceUntilIdle()
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        vm.addScore(repo.ids[1]); vm.openScanner(); advanceUntilIdle()
+        val request = (events.single() as MatchEvent.OpenScanner).request
+        assertNull(request.preparedRound); assertNull(request.correctionScoreId)
+        repo.submitScore(SubmitScore(request.matchId, request.roundId, request.participantId, 6, request.submissionToken))
+        vm.scannerSaved(request.submissionToken, 6); advanceUntilIdle()
+        assertNull(vm.uiState.value.scoreDialog)
+        vm.editScore(repo.ids[0], 1); vm.openScanner(); advanceUntilIdle()
+        val correction = (events.last() as MatchEvent.OpenScanner).request
+        assertEquals(repo.ids[0].value, correction.correctionScoreId)
+        assertEquals(request.roundId, correction.roundId)
+        vm.scannerSaved(request.submissionToken, 6); advanceUntilIdle()
+        assertNotNull(vm.uiState.value.scoreDialog)
+        vm.scannerCancelled(correction.submissionToken)
+        vm.deleteScore(); advanceUntilIdle()
+        assertNull(repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[0]])
+    }
+
+    @Test fun savedSignalWaitsForRepositoryObservationBeforeClosingDialog() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.openScanner(); advanceUntilIdle()
+        val request = (vm.events.first() as MatchEvent.OpenScanner).request
+        val completion = launch { vm.scannerSaved(request.submissionToken, 7) }
+        runCurrent()
+        assertFalse(completion.isCompleted)
+        assertNotNull(vm.uiState.value.scoreDialog)
+        repo.submitScore(SubmitScore(request.matchId, request.roundId, request.participantId, 7, request.submissionToken, request.preparedRound))
+        advanceUntilIdle()
+        assertTrue(completion.isCompleted)
+        assertNull(vm.uiState.value.scoreDialog)
+    }
+
     @Test fun activeRoundAllowsAddButNotReorder() = runTest {
         val repo = ScoringRepository()
         val initial = repo.snapshot.value!!

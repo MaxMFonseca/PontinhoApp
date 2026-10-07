@@ -108,8 +108,9 @@ fun ScoreDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    onCamera?.let {
-                        OutlinedButton(onClick = it) { Text(stringResource(R.string.camera)) }
+                    onCamera?.takeUnless { readOnly }?.let {
+                        OutlinedButton(onClick = it, enabled = enabled,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("score_camera")) { Text(stringResource(R.string.camera)) }
                     }
                     if (!isCorrection) OutlinedButton(onClick = onWentOut, enabled = enabled && wentOutEnabled) {
                         Text(stringResource(R.string.went_out))

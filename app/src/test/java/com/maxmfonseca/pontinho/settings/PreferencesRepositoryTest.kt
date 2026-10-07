@@ -3,6 +3,8 @@ package com.maxmfonseca.pontinho.settings
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.mutablePreferencesOf
+import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,9 +55,35 @@ class PreferencesRepositoryTest {
                 theme = ThemePreference.SYSTEM,
                 language = LanguagePreference.SYSTEM,
                 reducedMotion = null,
+                cameraEducationSeen = false,
             ),
             repository.preferences.first(),
         )
+    }
+
+    @Test
+    fun cameraEducationDefaultsToUnseenAndPersistsWhenCompleted() = runBlocking {
+        assertFalse(repository.preferences.first().cameraEducationSeen)
+
+        repository.setCameraEducationSeen(true)
+
+        val restored = DataStorePreferencesRepository(dataStore).preferences.first()
+        assertTrue(restored.cameraEducationSeen)
+    }
+
+    @Test
+    fun corruptedCameraEducationPreferenceFallsBackToUnseen() = runBlocking {
+        val corruptedStore = object : DataStore<Preferences> {
+            override val data: Flow<Preferences> = flow {
+                emit(mutablePreferencesOf(stringPreferencesKey("camera_education_seen") to "not-a-boolean"))
+            }
+            override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences =
+                error("not used")
+        }
+
+        val restored = DataStorePreferencesRepository(corruptedStore).preferences.first()
+
+        assertFalse(restored.cameraEducationSeen)
     }
 
     @Test
