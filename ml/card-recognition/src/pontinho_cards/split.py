@@ -125,6 +125,32 @@ def _labels(group: list[dict[str, Any]]) -> Counter[str]:
     return Counter(box["label"] for record in group for box in record["boxes"])
 
 
+def _eligible_partitions(group: list[dict[str, Any]]) -> list[str]:
+    explicit = ["taskRoles" in record for record in group]
+    if not any(explicit):
+        eligible = ["train", "validation"]
+        if all(record["isRealPhoto"] is True for record in group):
+            eligible.append("test")
+        return eligible
+    if not all(explicit):
+        raise SplitError("leakage-linked records must all preserve taskRoles provenance")
+
+    roles = {role for record in group for role in record["taskRoles"]}
+    if not roles:
+        raise SplitError("records with explicit taskRoles must declare an eligible role")
+    final_holdout = "FINAL_SCENE_HOLDOUT" in roles
+    training = bool({"DETECTOR_SCENE", "CLASSIFIER_CROP"}.intersection(roles))
+    if final_holdout and training:
+        raise SplitError("FINAL_SCENE_HOLDOUT records cannot share a training component")
+    if final_holdout:
+        if any(record["isRealPhoto"] is not True for record in group):
+            raise SplitError("FINAL_SCENE_HOLDOUT records must be real photos")
+        return ["test"]
+    if training:
+        return ["train", "validation"]
+    raise SplitError("records with explicit taskRoles have no eligible partition")
+
+
 def create_splits(
     records: Iterable[Mapping[str, Any]], *, seed: int
 ) -> dict[str, list[dict[str, Any]]]:
@@ -149,9 +175,7 @@ def create_splits(
     class_counts: dict[str, Counter[str]] = {name: Counter() for name in _PARTITIONS}
 
     for group_index, group in enumerate(groups):
-        eligible = ["train", "validation"]
-        if all(record["isRealPhoto"] is True for record in group):
-            eligible.append("test")
+        eligible = _eligible_partitions(group)
         remaining = len(groups) - group_index
         empty_eligible = [name for name in eligible if not result[name]]
         if empty_eligible and remaining <= len(empty_eligible):
@@ -178,6 +202,63 @@ def create_splits(
     for partition in _PARTITIONS:
         result[partition].sort(key=lambda record: record["imageId"])
     return result
+
+
+def validate_split_document(document: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Validate a serialized split boundary without opening any image bytes."""
+
+    if not isinstance(document, Mapping) or document.get("schemaVersion") != 1:
+        raise SplitError("split document must use schemaVersion 1")
+    seed = document.get("seed")
+    if type(seed) is not int:
+        raise SplitError("split document seed must be an integer")
+    raw_partitions = document.get("partitions")
+    if not isinstance(raw_partitions, Mapping) or set(raw_partitions) != set(_PARTITIONS):
+        raise SplitError("split document must contain exactly train, validation, and test")
+
+    partitions: dict[str, list[dict[str, Any]]] = {}
+    for partition in _PARTITIONS:
+        records = raw_partitions.get(partition)
+        if not isinstance(records, list):
+            raise SplitError(f"{partition} partition must be a list")
+        partitions[partition] = _validate_records(records)
+
+    locations: dict[str, str] = {}
+    for partition in _PARTITIONS:
+        image_ids = {record["imageId"] for record in partitions[partition]}
+        for record in partitions[partition]:
+            image_id = record["imageId"]
+            previous = locations.setdefault(image_id, partition)
+            if previous != partition:
+                raise SplitError(
+                    f"imageId appears in both {previous} and {partition} partitions: {image_id}"
+                )
+            parent = record["augmentationParentId"]
+            if parent is not None and parent not in image_ids:
+                raise SplitError(
+                    f"augmentation parent {parent!r} for {image_id!r} is outside {partition}"
+                )
+            roles = set(record.get("taskRoles", []))
+            if partition in {"train", "validation"} and "FINAL_SCENE_HOLDOUT" in roles:
+                raise SplitError(
+                    f"FINAL_SCENE_HOLDOUT record cannot appear in {partition}: {image_id}"
+                )
+            if partition == "test" and roles and "FINAL_SCENE_HOLDOUT" not in roles:
+                raise SplitError(
+                    f"test record with taskRoles must declare FINAL_SCENE_HOLDOUT: {image_id}"
+                )
+
+    for key in _LEAKAGE_KEYS[:-1]:
+        owners: dict[str, str] = {}
+        for partition in _PARTITIONS:
+            for record in partitions[partition]:
+                value = record[key]
+                previous = owners.setdefault(value, partition)
+                if previous != partition:
+                    raise SplitError(
+                        f"{key} appears in both {previous} and {partition} partitions: {value}"
+                    )
+    return partitions
 
 
 def _document(partitions: Mapping[str, list[dict[str, Any]]], seed: int) -> dict[str, Any]:

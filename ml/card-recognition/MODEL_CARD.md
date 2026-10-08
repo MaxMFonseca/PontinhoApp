@@ -1,134 +1,128 @@
-# Pontinho card detector model card
+# Pontinho two-stage card recognition model card
 
-**Release status:** `NOT_APPROVED`
+**Release status: NOT_APPROVED / BLOCKED_TWO_STAGE_INPUTS.**
 
-No card-detector model is approved or bundled with the Android application.
-There is therefore no production model version, model size, SHA-256, measured
-accuracy, or known weak-deck metric to report yet. The release gate deliberately
-keeps both Android assets absent until every item below is backed by immutable
-evidence.
+No reviewed two-stage candidate, selected thresholds, final quality metrics or
+Android latency measurements exist. No two-stage Android bundle has been
+published. Generated regression images and native trainer smoke tests establish
+software behavior only.
 
-## Current blockers
+## Current evidence and blockers
 
-- The reviewed source allow-list is empty. No downloaded card-image archive has
-  passed the source-specific CC0/public-domain, immutable revision, checksum,
-  annotation-provenance, archive-member binding, and configuration-pinned
-  human-approval checks. The pinned receipt is explicitly `NOT_APPROVED`.
-- There is no frozen real-photo holdout containing at least 200 unique photos
-  from at least 10 unseen physical deck designs with all 52 classes represented.
-- There is no approved candidate model, validation-selected threshold evidence,
-  one-use frozen-holdout validation receipt, or qualifying validation report.
-- Consequently, exact hand-total accuracy has not been measured against the
-  release holdout and cannot be claimed to meet the 95% minimum.
+The [source audit](reports/dataset-audit.md) admits 1,285 Poker Cards Cxcvz scenes
+and 5,574 annotations under CC BY 4.0 for experimentation, with one visual deck
+design. Its 128 upstream test scenes share that design and are not an unseen-deck
+holdout. The final reserve remains **0 qualifying photos / 0 unseen decks**.
 
-The machine-readable status is in
-[`reports/release/status.json`](reports/release/status.json). Dataset gaps and
-candidate-source findings are in
-[`reports/dataset-audit.md`](reports/dataset-audit.md).
+The reviewed input and validation manifests, reviewed detector/classifier
+candidates and physical-device benchmark are absent. The configuration-pinned
+source-audit receipt is still NOT_APPROVED. Real accuracy, model hashes/sizes,
+calibration quality and weak-deck performance are unmeasured. See
+[two-stage evaluation status](reports/release/two-stage-evaluation-status.json),
+[detector status](reports/release/detector-training-status.json), and
+[classifier status](reports/release/classifier-training-status.json).
 
-## Intended use
+## Intended use and limitations
 
-The future model is intended for fully offline assistance while entering a
-Pontinho round: detect face-up, fully visible, non-overlapping cards laid on a
-table, then propose the detected 52-card multiset and its score for human
-confirmation. It is an input convenience, not an authoritative scorekeeper.
+The optional scanner assists offline Pontinho scoring for one through ten
+complete, visible, non-overlapping standard cards. A one-class detector runs at
+320 × 320; a 52-class classifier receives original-resolution padded crops at
+224 × 224. Physically distinct equal cards remain separate observations.
+Printed jokers, stacks, overlaps and incomplete cards are unsupported. Unknown
+deck artwork, glare, blur, severe perspective and shadow may require review.
 
-Only the standard 52 suited cards are in scope. The game uses a selected suited
-card as the coringa; printed jokers are not part of the recognition vocabulary.
+Empty recognition requires retry. More than ten surviving detections requires
+split capture without truncation. Every scan remains reviewable; only user
+confirmation transfers points. Manual scoring remains available. The old
+single-stage experimental model is not a fallback.
 
-## Non-intended use and limitations
+## Calibration and validation selection
 
-The model is not intended for overlapping hands, partially hidden or clipped
-cards, card backs, printed jokers, novelty cards, video tracking, surveillance,
-identity recognition, gambling decisions, or cloud inference. Predictions from
-unknown deck artwork, severe glare, blur, shadows, extreme perspective, poor
-lighting, damaged cards, or clutter may be wrong or should abstain.
+The Python API `select_two_stage_thresholds` consumes T3/T4 candidates, a
+validation manifest, explicit `Thresholds` candidates and an immutable output.
+The manifest is schema 1 with `partition: "validation"` and `records` equal to
+the full canonical validation partition. Candidate projections are matched by
+task role, source image hashes and deck identities. Negative scenes contribute
+detector false positives; exact hand accuracy uses supported 1–10-card scenes.
 
-Weak deck designs and conditions will be listed only after the frozen evaluation
-produces measured per-deck, card-count, lighting, and abstention slices. None are
-claimed today.
+Both float16/int8 detector and classifier variants are compared. Each classifier
+uses its own model-bound validation transform:
+`softmax(log(max(raw_probability, 1e-12)) / temperature)`.
+Integer output is normalized through the shared T4 scale-aware boundary first.
+Combined confidence is `min(detector_score, calibrated_classifier_score)`.
 
-## Required user correction flow
+The T3 adapter converts native y/x boxes to normalized x/y bounds. Joint inference
+maps these to original pixels and pads by the selected margin (0–0.25 of box
+width/height). Class-independent NMS suppresses IoU strictly above the threshold.
+Review order is top, left, bottom, right. Incomplete boxes and low confidence
+cause abstention. The deterministic sweep prioritizes the joint hard envelope,
+then exact multiset/total accuracy, recall and false-positive share. It binds
+both candidate contracts and exact model hashes and opens no holdout images.
 
-Every scan must remain reviewable. The app must show the recognized cards and
-computed total, allow cards to be added, removed, or corrected, and require the
-user to confirm before points are saved. An abstention or scanner-unavailable
-state must fall back to manual numeric entry without blocking the game.
+## One-use final evaluation
 
-## Data, privacy, and licensing
+`evaluate_two_stage` consumes that immutable selection and the existing
+`pontinho-frozen-holdout` manifest. It requires 200 unique real photographs,
+ten unseen decks, all 52 labels and every supported count bucket 1–10.
+Candidate training, validation and frozen split identities are checked.
 
-Inference is designed to remain on-device. A released scanner must not upload,
-retain, or log table photos. Training data may enter the pipeline only through
-the strict source manifest described in
-[`docs/licenses/card-recognition.md`](../../docs/licenses/card-recognition.md).
-No third-party training images, weights, or model binaries are currently stored
-in this repository.
+An exclusive durable claim consumes the photo-set identity before inference.
+Changing candidates, output names, photo order or annotations cannot retry the
+same photo set in the same canonical evidence directory. Native failure also
+consumes it. Preserve the evidence directory; copying the dataset must never be
+used to circumvent the one-use protocol.
 
-The training/export toolchain is Python with TensorFlow, TensorFlow Lite Model
-Maker, TensorFlow Lite Support, NumPy, OpenCV, Pillow, PyYAML, and pycocotools.
-Exact resolved versions are recorded in `requirements.lock`; their upstream
-licenses must be reviewed before distribution. Android inference is expected to
-use the MediaPipe Tasks runtime under its upstream license.
+The immutable report records detector precision/recall and FP/(TP+FP), per-card
+precision/recall, exact physical multiset accuracy, abstention, and Pontinho
+totals for all 26 coringa contexts. Exact-total credit requires every context to
+match. Every metric is grouped by deck and card count.
 
-## Training and evaluation contract
+## Promotion and atomic bundle
 
-Training may use approved real data plus procedurally composed, non-overlapping
-tabletop scenes. Physical deck groups and every crop or augmented derivative
-must remain disjoint across train, validation, and the frozen test partition.
-Reviewed synthetic bundles bind every image, canonical record, deterministic
-generation configuration, distribution report, contact sheet, real train-only
-crop parent, and procedural background. Empty synthetic scenes remain genuine
-background examples rather than becoming a fake class. Positive card-scene
-bundles require a human audit covering at least 100 scenes.
-All synthetic authorization artifacts and generated bytes are securely captured
-once. Training and release reconstruction parse and hash those same immutable
-snapshots, so a later file replacement or symbolic-link swap cannot change the
-authorized dataset.
-The final holdout must be real-photo-only, cover all 52 classes, and remain
-unseen during training, threshold selection, and model selection.
+`promote_two_stage_release(ReleaseInputs(...), destination)` requires:
 
-Promotion requires exact model, Stage 6 contract/comparison, source manifest,
-frozen split/holdout, Stage 7 report/receipt, and dependency-provenance hashes.
-It separately binds the frozen real split (`splitManifestSha256`), exact merged
-training input (`trainingInputSha256`), and nullable reviewed synthetic manifest
-(`syntheticManifestSha256`), plus review and generation hashes. These bindings
-are carried unchanged through candidate, comparison, promotion, evaluation,
-and release evidence.
-The primary gate is at least 95% exact Pontinho hand-total accuracy across at
-least 200 unique photos and 10 unseen deck designs. Exact card-multiset accuracy,
-abstention rate, and all disclosed failure slices remain visible.
+- recall ≥0.97, FP/(TP+FP) ≤0.01, exact multiset ≥0.90 and exact total ≥0.95,
+  overall and in every supported count bucket;
+- the required frozen inventory and exact candidate/selection/report/receipt
+  hashes, plus recomputation from recorded one-use inference; promotion never
+  repeats final holdout inference;
+- source/license/archive-member evidence under the existing configuration-pinned
+  human source-audit trust root;
+- a model/report-bound physical representative mid-range Android benchmark,
+  cold start, memory, and at least three warm end-to-end samples per 1–10 bucket.
+  Every bucket median must be ≤2,000 ms; median and p95 are recomputed.
+
+Publication creates one new immutable directory containing
+`card_detector.tflite`, `card_classifier.tflite` and
+`card_recognition.release.json`, using held-directory staging and Linux
+`renameat2(RENAME_NOREPLACE)`. Existing directories and symlinks are rejected.
+Individual assets are never replaced. Android packaging must consume the complete
+bundle. Metadata binds tensor contracts, calibration, labels, thresholds,
+source evidence and measured quality.
+
+Android integration, actual device execution and the manual acceptance checklist
+are subsequent tasks and have not been performed by this tooling.
 
 ## Reproduction
 
-From `ml/card-recognition` in the locked Linux CPython 3.9 environment:
+From `ml/card-recognition`, using only the locked Linux CPython 3.9 environment:
 
 ```text
-python -m pontinho_cards.normalize --manifest datasets/sources.json --archive-root datasets/source-archives --out datasets/normalized
-python -m pontinho_cards.split --input datasets/normalized --out datasets/splits.json
-python -m pontinho_cards.synthetic --split datasets/splits.json --output datasets/generated
-python -m pontinho_cards.train --config config/model.yaml --splits datasets/splits.json --run-id <id>
-python -m pontinho_cards.export generate --checkpoint checkpoints/<id> --output artifacts/<version>-candidates
-python -m pontinho_cards.thresholds validation-manifest --split datasets/splits.json --output datasets/validation-manifest.json
-python -m pontinho_cards.thresholds --model artifacts/<version>-candidates/card_detector.<selected-variant>.tflite --contract artifacts/<version>-candidates/candidate-contract.json --validation-manifest datasets/validation-manifest.json --scores 0.3 0.4 0.5 0.6 0.7 --ious 0.3 0.4 0.5 0.6 0.7 --output artifacts/threshold-selection.json
-# Benchmark both immutable candidates on Android and write export-comparison.json.
-python -m pontinho_cards.export promote --checkpoint checkpoints/<id> --candidates artifacts/<version>-candidates --comparison artifacts/export-comparison.json --threshold-selection artifacts/threshold-selection.json --model-version <version> --exported-at <UTC-RFC3339> --output artifacts/<version>
-python -m pontinho_cards.evaluate --model artifacts/<version>/card_detector.tflite --test-manifest datasets/final-holdout.json --source-manifest datasets/sources.json --report reports/<version>.json
-python -m pontinho_cards.release --model artifacts/<version>/card_detector.tflite --report reports/<version>.json --contract artifacts/<version>/model-contract.json --candidate-contract artifacts/<version>-candidates/candidate-contract.json --comparison artifacts/export-comparison.json --validation-manifest datasets/validation-manifest.json --threshold-selection artifacts/threshold-selection.json --source-audit-receipt datasets/source-audit-receipt.json --source-archives datasets/source-archives
-# Synthetic runs additionally pass --training-input <exact merged splits.json> --synthetic-manifest <reviewed manifest.json> --synthetic-review <review receipt.json>.
+python -m pontinho_cards.train_detector --config config/detector.yaml --inputs datasets/two-stage-inputs.json --run-id reviewed-two-stage-detector-20261015
+python -m pontinho_cards.train_classifier --config config/classifier.yaml --inputs datasets/two-stage-inputs.json --run-id reviewed-two-stage-classifier-20261015
+python -m pontinho_cards.evaluate_two_stage select --detector artifacts/detector-candidates/reviewed-two-stage-detector-20261015 --classifier artifacts/classifier-candidates/reviewed-two-stage-classifier-20261015 --validation datasets/two-stage-validation.json --output artifacts/two-stage-threshold-selection.json
+# Only after passing validation and freezing the complete audited holdout:
+python -m pontinho_cards.evaluate_two_stage evaluate --detector artifacts/detector-candidates/reviewed-two-stage-detector-20261015 --classifier artifacts/classifier-candidates/reviewed-two-stage-classifier-20261015 --validation datasets/two-stage-validation.json --selection artifacts/two-stage-threshold-selection.json --holdout datasets/final-holdout.json --output reports/two-stage-evaluation.json
+python -m pytest tests -q
+python -m ruff check src tests
 ```
 
-The Android benchmark/comparison and validation-only threshold sweep are
-explicit producer steps, not inferred by promotion or evaluation. Their JSON
-schemas are cryptographically checked by the following commands. No repository
-CLI fabricates Android measurements; the comparison must come from the measured
-Android run, while `pontinho_cards.thresholds` deterministically reruns the
-candidate on validation images and records the full sweep.
+Optional `--grid` JSON contains `thresholds`, a list of objects with
+`detector_score`, `combined_score`, `iou` and `crop_margin`. Without it the
+CLI uses its explicit bounded grid. The reviewed selection command currently
+exits nonzero because the validation manifest is absent, creating no selection,
+holdout receipt or Android assets.
 
-Stage 8 does not trust the Stage 7 report or receipt as metric authority. It
-securely snapshots every frozen holdout image and the exact candidate bytes,
-runs inference again with the Stage 7 preprocessing/postprocessing contract and
-all 26 coringa contexts, recomputes the full scene/AP/count/total/abstention,
-slice, and bootstrap report, and requires canonical equality before promotion.
-
-The final command must return non-zero and leave Android assets untouched while
-the blockers above remain.
+Inference stays offline. Dependencies remain pinned in `requirements.lock`;
+their licenses must accompany an approved distribution. The app must not
+upload, retain or log photos.

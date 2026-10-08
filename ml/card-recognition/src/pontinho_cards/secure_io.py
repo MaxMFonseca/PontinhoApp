@@ -139,6 +139,76 @@ def secure_write_bytes(root: Path, relative: str | PurePosixPath, payload: bytes
                 pass
 
 
+def secure_write_bytes_immutable(
+    root: Path, relative: str | PurePosixPath, payload: bytes
+) -> None:
+    """Publish bytes once beneath a held root; never replace an existing name."""
+
+    member = safe_relative_posix(str(relative), field="secure output path")
+    descriptors: list[int] = []
+    temporary = f".pontinho-{secrets.token_hex(12)}.tmp"
+    created = False
+    publication_directory: int | None = None
+    try:
+        current, descriptors = _open_absolute_directory(root, create=True)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        for component in member.parts[:-1]:
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=current)
+            except FileExistsError:
+                pass
+            current = os.open(component, flags, dir_fd=current)
+            descriptors.append(current)
+        publication_directory = current
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=current,
+        )
+        created = True
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(
+                temporary,
+                member.name,
+                src_dir_fd=current,
+                dst_dir_fd=current,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            existing_descriptor = os.open(
+                member.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=current
+            )
+            descriptors.append(existing_descriptor)
+            if not stat.S_ISREG(os.fstat(existing_descriptor).st_mode):
+                raise SecureReadError("immutable destination is not a regular file")
+            with os.fdopen(existing_descriptor, "rb", closefd=False) as handle:
+                existing = handle.read()
+            if existing != payload:
+                raise SecureReadError("immutable destination content differs")
+        else:
+            os.fsync(current)
+    except (OSError, ValueError) as error:
+        raise SecureReadError(
+            f"cannot publish secure immutable output beneath {root}: {error}"
+        ) from error
+    finally:
+        if created and publication_directory is not None:
+            try:
+                os.unlink(temporary, dir_fd=publication_directory)
+            except OSError:
+                pass
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def secure_read_bytes(path: Path, *, root: Path | None = None) -> bytes:
     """Read one regular file through openat-held directories on POSIX only."""
 

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "stage": "two-stage-joint-evaluation",
+  "status": "BLOCKED_TWO_STAGE_INPUTS",
+  "releaseApproved": false,
+  "thresholdSelection": null,
+  "finalEvaluation": null,
+  "holdoutConsumed": false,
+  "androidBundle": null,
+  "blockers": [
+    "datasets/two-stage-validation.json is absent; the reviewed selection command exited nonzero before inference.",
+    "Reviewed detector and classifier training remain blocked because datasets/two-stage-inputs.json is absent.",
+    "The source audit reserves zero qualifying final-holdout photos and zero unseen final-holdout deck designs; at least 200 and ten are required.",
+    "No model-bound physical representative Android benchmark or approved source-audit trust-root evidence exists for this release."
+  ],
+  "qualityMetrics": null,
+  "reproduction": "python -m pontinho_cards.evaluate_two_stage select --detector artifacts/detector-candidates/reviewed-two-stage-detector-20261015 --classifier artifacts/classifier-candidates/reviewed-two-stage-classifier-20261015 --validation datasets/two-stage-validation.json --output artifacts/two-stage-threshold-selection.json"
+}

@@ -64,6 +64,20 @@ def test_image_with_no_usable_standard_cards_is_excluded_with_reason(tmp_path: P
     assert result.exclusion_reason == "no usable standard-card boxes"
 
 
+def test_audited_card_free_detector_scene_is_preserved(tmp_path: Path) -> None:
+    path, digest = _write_image(tmp_path)
+    record = _record(path, digest)
+    record["taskRoles"] = ["DETECTOR_SCENE"]
+    record["boxes"] = []
+
+    result = normalize_record(record, image_root=tmp_path)
+
+    assert result.record is not None
+    assert result.record["taskRoles"] == ["DETECTOR_SCENE"]
+    assert result.record["boxes"] == []
+    assert result.exclusion_reason is None
+
+
 def test_normalization_preserves_audited_archive_member_provenance(tmp_path: Path) -> None:
     path, digest = _write_image(tmp_path)
     record = _record(path, digest)
@@ -75,6 +89,17 @@ def test_normalization_preserves_audited_archive_member_provenance(tmp_path: Pat
     assert result.record is not None
     assert result.record["sourceArchiveMember"] == "photos/table.png"
     assert result.record["sourceArchiveMemberSha256"] == digest
+
+
+def test_normalization_preserves_audited_two_stage_task_roles(tmp_path: Path) -> None:
+    path, digest = _write_image(tmp_path)
+    record = _record(path, digest)
+    record["taskRoles"] = ["DETECTOR_SCENE", "CLASSIFIER_CROP"]
+
+    result = normalize_record(record, image_root=tmp_path)
+
+    assert result.record is not None
+    assert result.record["taskRoles"] == ["DETECTOR_SCENE", "CLASSIFIER_CROP"]
 
 
 @pytest.mark.parametrize(

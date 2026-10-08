@@ -1,5 +1,6 @@
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,29 @@ from pontinho_cards.manifest import (
     parse_source_manifest_bytes,
     verify_archive_sha256,
 )
+
+
+def test_rf100_manifest_repairs_the_publisher_class_name_shift() -> None:
+    """Bind visually audited YOLO class IDs instead of trusting the broken data.yaml names."""
+
+    document = json.loads(
+        (Path(__file__).parents[1] / "datasets" / "sources.json").read_text(encoding="utf-8")
+    )
+    expected_repairs = {
+        "10 Diamonds": "10H",
+        "10 Hearts": "10S",
+        "10 Spades": "10C",
+        "10 Trefoils": "2D",
+        "2 Diamonds": "2H",
+        "5 Spades": "5C",
+        "5 Trefoils": "JH",
+        "59": "10D",
+    }
+
+    for source in document["sources"]:
+        mapping = source["adapter"]["labelMap"]
+        assert {name: mapping[name] for name in expected_repairs} == expected_repairs
+        assert mapping["6 Diamonds"] == "6D"
 
 
 def test_manifest_bytes_parser_uses_the_single_snapshotted_payload(tmp_path: Path) -> None:
@@ -56,6 +80,8 @@ def _valid_source() -> dict[str, Any]:
         "annotationStatus": "BOUNDING_BOXES",
         "attribution": "Fixture publisher, Fixture cards release 2026-10-01",
         "deckGroupId": "fixture-physical-deck-a",
+        "visualDeckId": "fixture-visual-deck-a-v1",
+        "taskRoles": ["FINAL_SCENE_HOLDOUT"],
         "labels": ["AC", "10D", "QH", "KS"],
         "provides": {
             "realScenes": True,
@@ -70,10 +96,211 @@ def _valid_source() -> dict[str, Any]:
     }
 
 
+def _unannotated_real_source() -> dict[str, Any]:
+    source = _valid_source()
+    source["adapter"]["labelMap"] = {}
+    source["annotationStatus"] = "UNANNOTATED"
+    source["taskRoles"] = []
+    source["labels"] = []
+    source["provides"]["annotations"] = False
+    source["usablePhotoCount"] = 12
+    source["holdoutEligiblePhotoCount"] = 0
+    return source
+
+
 def _write_manifest(tmp_path: Path, source: dict[str, Any]) -> Path:
     path = tmp_path / "sources.json"
-    path.write_text(json.dumps({"schemaVersion": 1, "sources": [source]}), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "auditStatus": "BLOCKED_FOR_RELEASE",
+                "sources": [source],
+            }
+        ),
+        encoding="utf-8",
+    )
     return path
+
+
+def _write_manifest_document(
+    tmp_path: Path, sources: list[dict[str, Any]], *, audit_status: str
+) -> Path:
+    path = tmp_path / "sources.json"
+    path.write_text(
+        json.dumps(
+            {"schemaVersion": 2, "auditStatus": audit_status, "sources": sources}
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_two_stage_source_requires_task_role_and_visual_deck_identity(
+    tmp_path: Path,
+) -> None:
+    """Catch unaudited roles and one visual deck masquerading as separate split groups."""
+
+    for missing_key in ("taskRoles", "visualDeckId"):
+        source = _valid_source()
+        del source[missing_key]
+        with pytest.raises(ManifestError, match=missing_key):
+            load_source_manifest(_write_manifest(tmp_path, source))
+
+    source = _valid_source()
+    source["taskRoles"] = ["SEGMENTATION_MASK"]
+    with pytest.raises(ManifestError, match="taskRoles"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+    source = _valid_source()
+    del source["license"]["evidenceUrl"]
+    with pytest.raises(ManifestError, match="license.evidenceUrl"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+    first = _valid_source()
+    second = deepcopy(first)
+    second["id"] = "fixture-cards-v2"
+    second["deckGroupId"] = "fixture-physical-deck-b"
+    with pytest.raises(ManifestError, match="visualDeckId"):
+        load_source_manifest(
+            _write_manifest_document(
+                tmp_path, [first, second], audit_status="BLOCKED_FOR_RELEASE"
+            )
+        )
+
+
+def test_blocked_audit_accepts_unannotated_real_source_with_empty_roles(
+    tmp_path: Path,
+) -> None:
+    manifest = load_source_manifest(_write_manifest(tmp_path, _unannotated_real_source()))
+
+    assert manifest.audit_status == "BLOCKED_FOR_RELEASE"
+    assert manifest.sources[0].task_roles == ()
+    assert manifest.holdout_photo_count == 0
+
+
+def test_ready_audit_rejects_source_with_empty_roles(tmp_path: Path) -> None:
+    with pytest.raises(
+        ManifestError,
+        match="READY_FOR_TWO_STAGE_EXPERIMENT.*taskRoles",
+    ):
+        load_source_manifest(
+            _write_manifest_document(
+                tmp_path,
+                [_unannotated_real_source()],
+                audit_status="READY_FOR_TWO_STAGE_EXPERIMENT",
+            )
+        )
+
+
+def test_blocked_audit_only_source_still_requires_task_roles_field(
+    tmp_path: Path,
+) -> None:
+    source = _unannotated_real_source()
+    del source["taskRoles"]
+
+    with pytest.raises(ManifestError, match="taskRoles.*required"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+
+def test_schema_v1_unannotated_real_source_maps_to_no_roles(tmp_path: Path) -> None:
+    source = _unannotated_real_source()
+    del source["taskRoles"]
+    del source["visualDeckId"]
+    path = tmp_path / "sources.json"
+    path.write_text(
+        json.dumps({"schemaVersion": 1, "sources": [source]}),
+        encoding="utf-8",
+    )
+
+    manifest = load_source_manifest(path)
+
+    assert manifest.audit_status == "BLOCKED_FOR_RELEASE"
+    assert manifest.sources[0].task_roles == ()
+
+
+@pytest.mark.parametrize(
+    "task_role",
+    ["DETECTOR_SCENE", "FINAL_SCENE_HOLDOUT"],
+)
+def test_scene_roles_require_usable_box_annotated_real_scenes(
+    tmp_path: Path, task_role: str
+) -> None:
+    source = _valid_source()
+    source["adapter"] = {
+        "kind": "ISOLATED_CARD_FOLDERS",
+        "imagePrefix": "cards",
+        "labelMap": {label: label for label in source["labels"]},
+    }
+    source["annotationStatus"] = "CLASS_LABELS"
+    source["provides"]["realScenes"] = False
+    source["provides"]["isolatedCards"] = True
+    source["taskRoles"] = [task_role]
+    source["holdoutEligiblePhotoCount"] = 0
+
+    with pytest.raises(ManifestError, match=task_role):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+
+def test_classifier_role_requires_usable_isolated_cards_or_boxed_scene_crops(
+    tmp_path: Path,
+) -> None:
+    source = _valid_source()
+    source["provides"]["realScenes"] = False
+    source["taskRoles"] = ["CLASSIFIER_CROP"]
+    source["usablePhotoCount"] = 0
+    source["holdoutEligiblePhotoCount"] = 0
+
+    with pytest.raises(ManifestError, match="CLASSIFIER_CROP"):
+        load_source_manifest(_write_manifest(tmp_path, source))
+
+
+def test_holdout_inventory_requires_ten_unseen_deck_designs(tmp_path: Path) -> None:
+    """Catch a release-ready claim backed by enough photos but too few unseen decks."""
+
+    holdout_sources: list[dict[str, Any]] = []
+    for index in range(10):
+        source = _valid_source()
+        source["id"] = f"holdout-source-{index}"
+        source["deckGroupId"] = f"holdout-group-{index}"
+        source["visualDeckId"] = f"holdout-visual-deck-{index}"
+        source["taskRoles"] = ["FINAL_SCENE_HOLDOUT"]
+        source["usablePhotoCount"] = 23
+        source["holdoutEligiblePhotoCount"] = 23
+        holdout_sources.append(source)
+
+    with pytest.raises(ManifestError, match="ten unseen visual deck designs"):
+        load_source_manifest(
+            _write_manifest_document(
+                tmp_path,
+                holdout_sources[:9],
+                audit_status="READY_FOR_TWO_STAGE_EXPERIMENT",
+            )
+        )
+
+    manifest = load_source_manifest(
+        _write_manifest_document(
+            tmp_path,
+            holdout_sources,
+            audit_status="READY_FOR_TWO_STAGE_EXPERIMENT",
+        )
+    )
+
+    assert manifest.audit_status == "READY_FOR_TWO_STAGE_EXPERIMENT"
+    assert manifest.holdout_photo_count == 230
+    assert manifest.holdout_deck_group_count == 10
+
+    for source in holdout_sources:
+        source["deckGroupId"] = "one-shared-deck-group"
+
+    with pytest.raises(ManifestError, match="deckGroupId"):
+        load_source_manifest(
+            _write_manifest_document(
+                tmp_path,
+                holdout_sources,
+                audit_status="READY_FOR_TWO_STAGE_EXPERIMENT",
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -487,7 +714,7 @@ def test_valid_manifest_is_loaded_as_immutable_records(tmp_path: Path) -> None:
 
     manifest = load_source_manifest(_write_manifest(tmp_path, source))
 
-    assert manifest.schema_version == 1
+    assert manifest.schema_version == 2
     assert len(manifest.sources) == 1
     assert manifest.sources[0].source_id == "fixture-cards-v1"
     assert manifest.sources[0].source_revision.commit_sha == "a" * 40
@@ -577,7 +804,10 @@ def test_photo_counts_must_match_declared_capabilities(
 
 def test_empty_audited_manifest_is_valid_but_has_no_holdout_capacity(tmp_path: Path) -> None:
     path = tmp_path / "sources.json"
-    path.write_text('{"schemaVersion":1,"sources":[]}', encoding="utf-8")
+    path.write_text(
+        '{"schemaVersion":2,"auditStatus":"BLOCKED_FOR_RELEASE","sources":[]}',
+        encoding="utf-8",
+    )
 
     manifest = load_source_manifest(path)
 

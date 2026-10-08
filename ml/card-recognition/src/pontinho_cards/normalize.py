@@ -32,6 +32,7 @@ from pontinho_cards.secure_io import (
 )
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_TASK_ROLES = {"DETECTOR_SCENE", "CLASSIFIER_CROP", "FINAL_SCENE_HOLDOUT"}
 _REQUIRED_TEXT_FIELDS = (
     "imageId",
     "sourceId",
@@ -140,6 +141,17 @@ def normalize_record(
     if type(real) is not bool:
         raise NormalizationError("isRealPhoto must be a boolean")
     normalized["isRealPhoto"] = real
+    if "taskRoles" in record:
+        task_roles = record["taskRoles"]
+        if not isinstance(task_roles, list) or any(
+            not isinstance(role, str) or role not in _TASK_ROLES for role in task_roles
+        ):
+            raise NormalizationError(
+                f"taskRoles entries must be one of {sorted(_TASK_ROLES)}"
+            )
+        if len(task_roles) != len(set(task_roles)):
+            raise NormalizationError("taskRoles must not contain duplicates")
+        normalized["taskRoles"] = list(task_roles)
     canonical_member = record.get("sourceArchiveMember")
     canonical_member_hash = record.get("sourceArchiveMemberSha256")
     if canonical_member is not None or canonical_member_hash is not None:
@@ -160,11 +172,25 @@ def normalize_record(
     raw_boxes = record.get("boxes")
     if not isinstance(raw_boxes, list):
         raise NormalizationError("boxes must be a list")
+    indexed_boxes = any(
+        isinstance(raw_box, Mapping) and "boxIndex" in raw_box for raw_box in raw_boxes
+    )
+    if indexed_boxes and any(
+        not isinstance(raw_box, Mapping) or "boxIndex" not in raw_box for raw_box in raw_boxes
+    ):
+        raise NormalizationError("boxIndex must be present on every box when provided")
     boxes: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    seen_box_indexes: set[int] = set()
     for index, raw_box in enumerate(raw_boxes):
         if not isinstance(raw_box, Mapping):
             raise NormalizationError(f"box {index} must be an object")
+        box_index = raw_box.get("boxIndex", index)
+        if type(box_index) is not int or box_index < 0:
+            raise NormalizationError("boxIndex must be a non-negative integer")
+        if box_index in seen_box_indexes:
+            raise NormalizationError(f"duplicate boxIndex: {box_index}")
+        seen_box_indexes.add(box_index)
         label = raw_box.get("label")
         try:
             parse_card_label(label)  # type: ignore[arg-type]
@@ -177,17 +203,27 @@ def normalize_record(
         if xmax <= xmin or ymax <= ymin:
             rejected.append({"index": index, "reason": "zero-area box after bounds clamping"})
             continue
-        boxes.append(
-            {
-                "label": label,
-                "xmin": xmin,
-                "ymin": ymin,
-                "xmax": xmax,
-                "ymax": ymax,
-            }
-        )
+        normalized_box = {
+            "label": label,
+            "xmin": xmin,
+            "ymin": ymin,
+            "xmax": xmax,
+            "ymax": ymax,
+        }
+        if indexed_boxes:
+            normalized_box["boxIndex"] = box_index
+        boxes.append(normalized_box)
 
-    if not boxes:
+    audited_negative = (
+        not raw_boxes
+        and normalized["isRealPhoto"] is True
+        and bool(
+            {"DETECTOR_SCENE", "FINAL_SCENE_HOLDOUT"}.intersection(
+                normalized.get("taskRoles", [])
+            )
+        )
+    )
+    if not boxes and not audited_negative:
         return NormalizationResult(None, rejected, "no usable standard-card boxes")
     normalized["boxes"] = boxes
     return NormalizationResult(normalized, rejected)
@@ -332,6 +368,7 @@ def _base_archive_record(
         "sourceDerivativeId": f"{source.source_id}:{member}",
         "augmentationParentId": None,
         "isRealPhoto": True,
+        "taskRoles": list(source.task_roles),
         "sourceArchiveMember": member,
         "sourceArchiveMemberSha256": digest,
         "lighting": "unspecified",

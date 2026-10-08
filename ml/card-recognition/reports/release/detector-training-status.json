@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "stage": "one-class-detector",
+  "status": "BLOCKED_DETECTOR_QUALITY",
+  "reviewedRunId": "reviewed-two-stage-detector-20261015",
+  "inputManifest": "datasets/two-stage-inputs.json",
+  "blockers": [
+    "The reviewed input manifest does not exist; no reviewed training or validation run was performed.",
+    "No measured detector candidate supports the approved recall and false-positive envelope across unseen validation decks and required scene sizes."
+  ],
+  "approvedCandidate": null,
+  "validationMetrics": null,
+  "releaseApproved": false,
+  "smokeScope": "Generated fixtures exercise real CPU training, checkpoint reload, float16/int8 conversion, metadata inspection and inference. They are not dataset admission or quality evidence.",
+  "reproduction": "python -m pontinho_cards.train_detector --config config/detector.yaml --inputs datasets/two-stage-inputs.json --run-id reviewed-two-stage-detector-20261015"
+}

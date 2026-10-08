@@ -12,9 +12,11 @@ revision is [`921de60dffb6a0ebf7cd88140e38b00ce845ed32`](https://huggingface.co/
 The downloaded archive SHA-256 is
 `7b236c9caacd2a39dcba9d7f4453a75ac5d2460b35dafaa9bb357c70b6394782`.
 
-This attribution does not imply production approval. The dataset has only
-three declared split groups and the 128-photo test partition is below the
-release gate of 200 photographs from 10 unseen deck designs.
+This attribution does not imply production approval. All three upstream
+partitions share the immutable visual-deck identity
+`libreyolo-poker-cards-cxcvz-deck-v1`; therefore the 128-photo test partition is
+not an unseen final holdout. The frozen release inventory remains at 0 of 200
+required photographs and 0 of 10 required unseen deck designs.
 
 `ml/card-recognition/datasets/sources.json` is the sole allow-list for material
 that may enter the training pipeline. The 2026-10-15 beta audit admitted the
@@ -55,6 +57,21 @@ candidate matrix and release blocker.
   mandatory even when attribution is not legally required. Unannotated real
   photos may be recorded as `UNANNOTATED`, but contribute zero
   `holdoutEligiblePhotoCount` until evaluation-ready boxes exist.
+- Every source explicitly declares `taskRoles` from `DETECTOR_SCENE`,
+  `CLASSIFIER_CROP`, and `FINAL_SCENE_HOLDOUT`, plus an immutable
+  `visualDeckId`. An empty role list is permitted only while the audit is
+  `BLOCKED_FOR_RELEASE`; it records inventory but contributes no training or
+  holdout evidence. `visualDeckId` and `deckGroupId` form a one-to-one
+  identity: one visual deck may span archive partitions only when both IDs
+  remain the same, and a final-holdout visual deck may not occur in a training
+  role.
+- `DETECTOR_SCENE` and `FINAL_SCENE_HOLDOUT` require usable real scenes with
+  scene-adapter bounding boxes. `CLASSIFIER_CROP` requires either usable
+  class-labelled isolated cards or auditable crops from boxed real scenes.
+- `READY_FOR_TWO_STAGE_EXPERIMENT` is rejected if any source has no eligible
+  role, or unless the manifest proves at least 200 final-holdout photos across
+  ten unseen visual deck designs. The current audited manifest remains
+  `BLOCKED_FOR_RELEASE`.
 
 When a source is eventually admitted, its required courtesy or legal
 attribution will be added here verbatim before any model can be promoted.

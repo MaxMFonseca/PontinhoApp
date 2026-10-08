@@ -1,0 +1,21 @@
+schema_version: 1
+seed: 20261015
+detector_family: efficientdet_lite0
+image_size: 320
+batch_size: 8
+confidence_threshold: 0.50
+iou_threshold: 0.50
+labels: [card]
+partitions:
+  train: train
+  validation: validation
+training:
+  epochs: 50
+  early_stopping:
+    enabled: true
+    patience: 8
+  train_whole_model: true
+  augmentation:
+    autoaugment: false
+    horizontal_flip: true
+    scale_jitter: true

@@ -144,6 +144,7 @@ class RecognitionAssetVerifier(
 
     private fun validExperimentalEvidence(root: Map<String, JsonValue>): Boolean {
         if (root.int("trainingPhotoCount") <= 0 || root.int("validationPhotoCount") <= 0) return false
+        if (root.unitFloat("validationMap50") < MIN_EXPERIMENTAL_MAP50) return false
         if (root.string("sourceLicense") !in APPROVED_EXPERIMENTAL_LICENSES) return false
         val exportedAt = root.string("exportedAt")
         if (!RFC3339_UTC.matches(exportedAt)) return false
@@ -246,6 +247,7 @@ class RecognitionAssetVerifier(
         const val MIN_HELD_OUT_PHOTOS = 200
         const val MIN_HELD_OUT_DECKS = 10
         const val MIN_EXACT_TOTAL_ACCURACY = 0.95f
+        const val MIN_EXPERIMENTAL_MAP50 = 0.50f
         const val MIN_INPUT_ZERO_POINT = -128
         const val MAX_INPUT_ZERO_POINT = 255
 
@@ -270,7 +272,7 @@ class RecognitionAssetVerifier(
             "schemaVersion", "status", "modelVersion", "modelSha256", "modelSizeBytes",
             "labels", "inputWidth", "inputHeight", "quantization", "confidenceThreshold",
             "iouThreshold", "trainingPhotoCount", "validationPhotoCount", "sourceLicense",
-            "exportedAt",
+            "validationMap50", "exportedAt",
         )
         val APPROVED_EXPERIMENTAL_LICENSES = setOf("CC-BY-4.0", "CC0-1.0", "PUBLIC-DOMAIN")
         val HASH_FIELDS = setOf(

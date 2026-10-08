@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import yaml
 
+from pontinho_cards.classifier_scores import normalize_classifier_output
 from pontinho_cards.labels import CARD_LABELS
 from pontinho_cards.release_identity import validate_release_identity
 
@@ -903,7 +904,7 @@ def _builtin_operator_names(schema: Any) -> dict[int, str]:
     }
 
 
-def _flatbuffer_graph(model_path: Path) -> GraphContract:
+def _flatbuffer_graph(model_path: Path, *, require_detection: bool = True) -> GraphContract:
     try:
         from tflite_support import schema_py_generated as schema
 
@@ -980,7 +981,7 @@ def _flatbuffer_graph(model_path: Path) -> GraphContract:
                 raise ExportContractError("model contains multiple DetectionPostProcess ops")
             postprocess = [operator.Outputs(i) for i in range(operator.OutputsLength())]
             postprocess_inputs = [operator.Inputs(i) for i in range(operator.InputsLength())]
-    if postprocess is None:
+    if postprocess is None and require_detection:
         raise ExportContractError("model is missing TFLite_Detection_PostProcess")
     input_index = subgraph.Inputs(0)
     input_tensor = subgraph.Tensors(input_index)
@@ -998,7 +999,7 @@ def _flatbuffer_graph(model_path: Path) -> GraphContract:
     return GraphContract(
         input_index=input_index,
         graph_output_indices=[subgraph.Outputs(i) for i in range(subgraph.OutputsLength())],
-        postprocess_output_indices=postprocess,
+        postprocess_output_indices=postprocess or [],
         tensor_names=tensor_names,
         shapes=shapes,
         shape_signatures=signatures,
@@ -1275,6 +1276,7 @@ def _metadata_contract_from_document(
     *,
     graph_output_indices: list[int],
     postprocess_output_indices: list[int],
+    expected_labels: tuple[str, ...] = CARD_LABELS,
 ) -> tuple[list[str], dict[str, list[float]], dict[str, str]]:
     try:
         subgraph = metadata["subgraph_metadata"][0]
@@ -1313,8 +1315,8 @@ def _metadata_contract_from_document(
         labels = label_payload.decode("utf-8").splitlines()
     except UnicodeDecodeError as error:
         raise ExportContractError("class-output metadata labels are not UTF-8") from error
-    if labels != list(CARD_LABELS):
-        raise ExportContractError("class-output metadata labels do not match CARD_LABELS")
+    if labels != list(expected_labels):
+        raise ExportContractError("class-output metadata labels do not match expected labels")
     units = input_metadata.get("process_units") if isinstance(input_metadata, Mapping) else None
     if not isinstance(units, list):
         raise ExportContractError("input normalization metadata is missing")
@@ -1334,7 +1336,7 @@ def _metadata_contract_from_document(
 
 
 def _metadata_contract(
-    model_path: Path, graph: GraphContract
+    model_path: Path, graph: GraphContract, *, expected_labels: tuple[str, ...] = CARD_LABELS
 ) -> tuple[list[str], dict[str, list[float]], dict[str, str]]:
     try:
         from tflite_support import metadata as metadata_api
@@ -1354,10 +1356,14 @@ def _metadata_contract(
         files,
         graph_output_indices=graph.graph_output_indices,
         postprocess_output_indices=graph.postprocess_output_indices,
+        expected_labels=expected_labels,
     )
 
 
-def inspect_tflite(model_path: str | Path, *, expected_quantization: str) -> dict[str, Any]:
+def inspect_tflite(
+    model_path: str | Path, *, expected_quantization: str,
+    expected_labels: tuple[str, ...] = CARD_LABELS,
+) -> dict[str, Any]:
     """Inspect the real graph/metadata and execute one fixed-shape image."""
 
     path = Path(model_path)
@@ -1397,7 +1403,9 @@ def inspect_tflite(model_path: str | Path, *, expected_quantization: str) -> dic
         shape_signatures=runtime_signatures,
     )
     _validate_graph_contract(graph, expected_quantization=expected_quantization)
-    labels, normalization, metadata_names = _metadata_contract(path, graph)
+    labels, normalization, metadata_names = _metadata_contract(
+        path, graph, expected_labels=expected_labels
+    )
     semantics = ("boxes", "classes", "scores", "count")
     inspected_outputs: list[dict[str, Any]] = []
     for semantic, index in zip(semantics, graph.postprocess_output_indices):
@@ -1442,6 +1450,181 @@ def inspect_tflite(model_path: str | Path, *, expected_quantization: str) -> dic
         "quantization": {
             "variant": expected_quantization,
             "input": graph.input_quantization if graph.input_quantization["scales"] else None,
+            "nonemptyConstantTensorTypes": sorted(set(graph.nonempty_constant_tensor_types)),
+            "quantizedConstantCount": graph.quantized_constant_count,
+        },
+        "interpreterInvocation": "passed",
+    }
+
+
+def validate_classifier_metadata(document, associated_files):
+    """Require MediaPipe RGB normalization and the exact canonical score-axis labels."""
+    try:
+        subgraphs = document["subgraph_metadata"]
+        if len(subgraphs) != 1:
+            raise ExportContractError("classifier requires one metadata subgraph")
+        inputs = subgraphs[0]["input_tensor_metadata"]
+        outputs = subgraphs[0]["output_tensor_metadata"]
+        if len(inputs) != 1 or len(outputs) != 1:
+            raise ExportContractError("classifier metadata must describe one input/output")
+        content = inputs[0]["content"]
+        if (
+            content["content_properties_type"] != "ImageProperties"
+            or content["content_properties"]["color_space"] != "RGB"
+        ):
+            raise ExportContractError("classifier requires RGB image metadata")
+        files = outputs[0]["associated_files"]
+        if len(files) != 1 or files[0]["type"] != "TENSOR_AXIS_LABELS":
+            raise ExportContractError("classifier requires score-axis labels")
+        labels = associated_files[files[0]["name"]].decode("utf-8").splitlines()
+        if labels != list(CARD_LABELS):
+            raise ExportContractError("classifier label order differs from CARD_LABELS")
+        units = inputs[0]["process_units"]
+        normalizers = [
+            unit["options"] for unit in units if unit.get("options_type") == "NormalizationOptions"
+        ]
+        if len(normalizers) != 1:
+            raise ExportContractError("classifier requires one normalization transform")
+        normalization = {
+            "mean": _expand_rgb(normalizers[0]["mean"], "mean"),
+            "std": _expand_rgb(normalizers[0]["std"], "std", positive=True),
+        }
+        if normalization != {"mean": [0.0] * 3, "std": [255.0] * 3}:
+            raise ExportContractError("classifier must normalize RGB to [0,1]")
+        return normalization
+    except (KeyError, IndexError, TypeError, AttributeError, UnicodeDecodeError) as error:
+        raise ExportContractError("classifier metadata is malformed") from error
+
+
+def _validate_classifier_int32(graph, index):
+    # EfficientNet-Lite global spatial pooling carries exactly two mean axes.
+    if (
+        graph.constant_consumers.get(index) == [{"op": "MEAN", "inputPosition": 1}]
+        and graph.shapes.get(index) == [2]
+        and graph.constant_quantization.get(index, {}).get("scales") == []
+        and graph.constant_quantization.get(index, {}).get("zeroPoints") == []
+    ):
+        return
+    _validate_int32_constant_role(graph, index)
+
+
+def _validate_classifier_quantization(metadata, kind, shape, name):
+    # A rank-zero tensor uses per-tensor dimension 0; no per-axis scales exist.
+    if shape == []:
+        if len(metadata.get("scales", [])) != 1:
+            raise ExportContractError("classifier scalar requires one quantization scale")
+        shape = [1]
+    _validate_quantization_parameters(metadata, kind, shape, name)
+
+
+def inspect_classifier_tflite(model_path: Path, *, expected_quantization: str):
+    """Inspect classifier graph, actual quantization, metadata and real inference."""
+    import tensorflow as tf
+    from tflite_support import metadata as metadata_api
+
+    graph = _flatbuffer_graph(model_path, require_detection=False)
+    if (
+        graph.custom_ops
+        or len(graph.graph_output_indices) != 1
+        or expected_quantization not in {"float16", "int8"}
+    ):
+        raise ExportContractError("classifier requires builtin ops and one score output")
+    output = graph.graph_output_indices[0]
+    for index, shape in ((graph.input_index, [1, 224, 224, 3]), (output, [1, 52])):
+        if graph.shapes[index] != shape or graph.shape_signatures[index] != shape:
+            raise ExportContractError("classifier requires fixed [1,224,224,3] -> [1,52]")
+    if expected_quantization == "float16":
+        if (
+            graph.tensor_types[graph.input_index] != "FLOAT32"
+            or graph.tensor_types[output] != "FLOAT32"
+            or "FLOAT16" not in graph.nonempty_constant_tensor_types
+        ):
+            raise ExportContractError("float16 classifier requires float16 weights and float32 IO")
+        for index, kind in graph.constant_tensor_types.items():
+            if kind == "INT32":
+                _validate_classifier_int32(graph, index)
+            elif kind != "FLOAT16":
+                raise ExportContractError("float16 classifier has unsupported constant")
+    else:
+        if graph.tensor_types[graph.input_index] not in {"INT8", "UINT8"}:
+            raise ExportContractError("int8 classifier requires integer input")
+        _validate_quantization_parameters(
+            graph.input_quantization,
+            graph.tensor_types[graph.input_index],
+            graph.shapes[graph.input_index],
+            "classifier input",
+        )
+        for index, kind in graph.constant_tensor_types.items():
+            if kind == "INT32":
+                _validate_classifier_int32(graph, index)
+            elif kind in {"INT8", "UINT8"}:
+                _validate_classifier_quantization(
+                    graph.constant_quantization[index],
+                    kind,
+                    graph.shapes[index],
+                    f"classifier constant {index}",
+                )
+            else:
+                raise ExportContractError("int8 classifier has a non-integer constant")
+        if graph.quantized_constant_count == 0:
+            raise ExportContractError("int8 classifier has no quantized weights")
+    display = metadata_api.MetadataDisplayer.with_model_file(str(model_path))
+    normalization = validate_classifier_metadata(
+        json.loads(display.get_metadata_json()),
+        {
+            name: bytes(display.get_associated_file_buffer(name))
+            for name in display.get_packed_associated_file_list()
+        },
+    )
+    interpreter = tf.lite.Interpreter(model_path=str(model_path), num_threads=1)
+    interpreter.allocate_tensors()
+    inputs, outputs = interpreter.get_input_details(), interpreter.get_output_details()
+    if len(inputs) != 1 or len(outputs) != 1:
+        raise ExportContractError("classifier interpreter must expose one input/output")
+    source, target = inputs[0], outputs[0]
+    if int(source["index"]) != graph.input_index or int(target["index"]) != output:
+        raise ExportContractError("classifier interpreter graph differs")
+    if expected_quantization == "int8":
+        _validate_quantization_parameters(
+            {
+                "scales": target["quantization_parameters"]["scales"].tolist(),
+                "zeroPoints": target["quantization_parameters"]["zero_points"].tolist(),
+                "quantizedDimension": int(target["quantization_parameters"]["quantized_dimension"]),
+            },
+            graph.tensor_types[output],
+            graph.shapes[output],
+            "classifier output",
+        )
+    interpreter.set_tensor(source["index"], np.zeros((1, 224, 224, 3), dtype=source["dtype"]))
+    interpreter.invoke()
+    try:
+        normalize_classifier_output(
+            interpreter.get_tensor(target["index"]),
+            quantization=target["quantization"] if expected_quantization == "int8" else None,
+        )
+    except ValueError as error:
+        raise ExportContractError(
+            f"classifier invocation did not produce probabilities: {error}"
+        ) from error
+
+    def detail(value):
+        return {
+            "name": str(value["name"]),
+            "shape": value["shape"].tolist(),
+            "shapeSignature": value["shape_signature"].tolist(),
+            "dtype": np.dtype(value["dtype"]).name,
+            "quantization": [float(value["quantization"][0]), int(value["quantization"][1])],
+        }
+
+    return {
+        "modelSha256": _sha256(model_path),
+        "input": detail(source),
+        "outputs": [{"semantic": "class_probabilities", **detail(target)}],
+        "labels": list(CARD_LABELS),
+        "normalization": normalization,
+        "customOps": [],
+        "quantization": {
+            "variant": expected_quantization,
             "nonemptyConstantTensorTypes": sorted(set(graph.nonempty_constant_tensor_types)),
             "quantizedConstantCount": graph.quantized_constant_count,
         },

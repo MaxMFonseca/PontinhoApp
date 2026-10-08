@@ -972,6 +972,14 @@ def prepare_training_run(
     }
     if training_labels != set(CARD_LABELS):
         raise TrainingConfigError("training data must contain all 52 canonical classes")
+    validation_labels = {
+        str(box["label"])
+        for record in validation
+        for box in record["boxes"]
+        if isinstance(box, Mapping) and "label" in box
+    }
+    if validation_labels != set(CARD_LABELS):
+        raise TrainingConfigError("validation data must contain all 52 canonical classes")
     lock_hash = hashlib.sha256(lock_payload).hexdigest()
     split_manifest_hash = hashlib.sha256(split_payload).hexdigest()
     training_input_hash = split_manifest_hash

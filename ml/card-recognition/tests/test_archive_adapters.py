@@ -109,6 +109,7 @@ def test_coco_zip_adapter_reads_verified_snapshot_and_maps_labels(tmp_path: Path
     ]
     assert record["sourceArchiveMember"] == "images/one.png"
     assert record["sourceArchiveMemberSha256"] == hashlib.sha256(image).hexdigest()
+    assert record["taskRoles"] == ["DETECTOR_SCENE"]
 
 
 def test_yolo_adapter_reads_normalized_boxes_and_merges_source_alias(tmp_path: Path) -> None:

@@ -121,6 +121,23 @@ def test_test_partition_is_real_photo_only() -> None:
     assert all(record["isRealPhoto"] is True for record in split["test"])
 
 
+def test_final_holdout_role_is_reserved_for_test_and_training_roles_never_enter_it() -> None:
+    training = _record(1, deck="deck-training", label="AC")
+    training["taskRoles"] = ["DETECTOR_SCENE", "CLASSIFIER_CROP"]
+    holdout = _record(2, deck="deck-holdout", label="2D")
+    holdout["taskRoles"] = ["FINAL_SCENE_HOLDOUT"]
+
+    split = create_splits([training, holdout], seed=20261014)
+
+    assert [record["imageId"] for record in split["test"]] == ["image-2"]
+    assert all(
+        record["imageId"] != "image-2"
+        for partition in ("train", "validation")
+        for record in split[partition]
+    )
+    assert all(record["imageId"] != "image-1" for record in split["test"])
+
+
 def test_split_rejects_a_duplicate_image_id_with_different_content() -> None:
     records = [_record(1, deck="deck-a", label="AC"), _record(2, deck="deck-b", label="2D")]
     records[1]["imageId"] = "image-1"

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "stage": "52-class-classifier",
+  "status": "BLOCKED_CLASSIFIER_QUALITY",
+  "reviewedRunId": "reviewed-two-stage-classifier-20261015",
+  "inputManifest": "datasets/two-stage-inputs.json",
+  "blockers": [
+    "The reviewed input manifest does not exist; no reviewed training or validation run was performed.",
+    "No reviewed evidence measures classifier accuracy and confidence separation on unseen validation decks."
+  ],
+  "approvedCandidate": null,
+  "validationMetrics": null,
+  "releaseApproved": false,
+  "smokeScope": "Generated fixtures exercise training and export infrastructure only. They do not establish data admission, real-photo accuracy, calibration quality or release eligibility.",
+  "reproduction": "python -m pontinho_cards.train_classifier --config config/classifier.yaml --inputs datasets/two-stage-inputs.json --run-id reviewed-two-stage-classifier-20261015"
+}

@@ -26,6 +26,7 @@
   "iouThreshold": 0.5,
   "trainingPhotoCount": 964,
   "validationPhotoCount": 193,
+  "validationMap50": 0.023431377485394478,
   "sourceLicense": "CC-BY-4.0",
   "exportedAt": "2026-10-15T18:47:05Z"
 }

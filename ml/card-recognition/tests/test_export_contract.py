@@ -150,6 +150,32 @@ def _fake_generate(_snapshot: object, variant: str, target: Path) -> dict[str, o
     return _inspection(target, variant)
 
 
+def test_one_class_metadata_contract_accepts_card_without_weakening_legacy_labels():
+    document = _metadata([127.0], [128.0], "labels.txt")
+    labels, normalization, names = _metadata_contract_from_document(
+        document, {"labels.txt": b"card\n"},
+        graph_output_indices=[3, 1, 4, 2], postprocess_output_indices=[1, 2, 3, 4],
+        expected_labels=("card",),
+    )
+    assert labels == ["card"]
+    assert normalization["std"] == [128.0] * 3
+    assert names["boxes"] == "location"
+    with pytest.raises(ExportContractError, match="labels"):
+        _metadata_contract_from_document(
+            document, {"labels.txt": b"card\n"},
+            graph_output_indices=[3, 1, 4, 2], postprocess_output_indices=[1, 2, 3, 4],
+        )
+
+
+def test_one_class_metadata_rejects_canonical_card_identity_labels():
+    with pytest.raises(ExportContractError, match="labels"):
+        _metadata_contract_from_document(
+            _metadata([127.0], [128.0], "labels.txt"), {"labels.txt": b"AC\n"},
+            graph_output_indices=[3, 1, 4, 2], postprocess_output_indices=[1, 2, 3, 4],
+            expected_labels=("card",),
+        )
+
+
 def _comparison(candidates: Path, *, selected: str = "float16") -> Path:
     manifest = json.loads((candidates / "candidate-contract.json").read_text())
     path = candidates.parent / "export-comparison.json"
@@ -917,3 +943,80 @@ def test_genuine_model_maker_fixture_has_the_android_detection_contract(tmp_path
     assert int8_inspection["quantization"]["variant"] == "int8"
     assert int8_inspection["quantization"]["quantizedConstantCount"] > 0
     assert int8_inspection["interpreterInvocation"] == "passed"
+
+
+def test_classifier_metadata_requires_exact_canonical_order():
+    import copy
+
+    import pontinho_cards.export as api
+
+    assert hasattr(api, "validate_classifier_metadata"), "classifier metadata inspection absent"
+    document = {
+        "subgraph_metadata": [
+            {
+                "input_tensor_metadata": [
+                    {
+                        "content": {
+                            "content_properties_type": "ImageProperties",
+                            "content_properties": {"color_space": "RGB"},
+                        },
+                        "process_units": [
+                            {
+                                "options_type": "NormalizationOptions",
+                                "options": {"mean": [0.0], "std": [255.0]},
+                            }
+                        ],
+                    }
+                ],
+                "output_tensor_metadata": [
+                    {"associated_files": [{"name": "labels.txt", "type": "TENSOR_AXIS_LABELS"}]}
+                ],
+            }
+        ],
+    }
+    labels = "\n".join(CARD_LABELS).encode()
+    assert api.validate_classifier_metadata(document, {"labels.txt": labels}) == {
+        "mean": [0.0] * 3,
+        "std": [255.0] * 3,
+    }
+    with pytest.raises(api.ExportContractError):
+        api.validate_classifier_metadata(
+            document, {"labels.txt": "\n".join(sorted(CARD_LABELS)).encode()}
+        )
+    malformed = copy.deepcopy(document)
+    malformed["subgraph_metadata"][0]["input_tensor_metadata"][0]["process_units"] = ["bad"]
+    with pytest.raises(api.ExportContractError):
+        api.validate_classifier_metadata(malformed, {"labels.txt": labels})
+
+
+def test_classifier_allows_only_unquantized_mean_axes_integer_role():
+    from types import SimpleNamespace
+
+    import pontinho_cards.export as api
+
+    assert hasattr(api, "_validate_classifier_int32"), "classifier mean-axis validation absent"
+    graph = SimpleNamespace(
+        shapes={4: [2]},
+        constant_consumers={4: [{"op": "MEAN", "inputPosition": 1}]},
+        constant_quantization={4: {"scales": [], "zeroPoints": []}},
+    )
+    api._validate_classifier_int32(graph, 4)
+    graph.constant_consumers[4][0]["inputPosition"] = 0
+    with pytest.raises(api.ExportContractError):
+        api._validate_classifier_int32(graph, 4)
+    graph.constant_consumers[4][0]["inputPosition"] = 1
+    graph.constant_quantization[4]["scales"] = [0.5]
+    with pytest.raises(api.ExportContractError):
+        api._validate_classifier_int32(graph, 4)
+
+
+def test_classifier_accepts_scalar_per_tensor_quantization_but_not_per_axis():
+    import pontinho_cards.export as api
+
+    assert hasattr(api, "_validate_classifier_quantization"), "scalar quantization support absent"
+    metadata = {"scales": [1.0], "zeroPoints": [-128], "quantizedDimension": 0}
+    api._validate_classifier_quantization(metadata, "INT8", [], "scalar")
+    metadata["scales"] = [1.0, 2.0]
+    metadata["zeroPoints"] = [-128, -128]
+    with pytest.raises(api.ExportContractError):
+        api._validate_classifier_quantization(metadata, "INT8", [], "scalar")

@@ -125,8 +125,9 @@ class RecognitionAssetVerifierTest {
     fun `experimental assets are rejected by default and accepted only with explicit debug opt in`() {
         val release = experimentalReleaseJson()
 
-        assertUnavailable(verifier.verify(model, release))
-        val result = RecognitionAssetVerifier(allowExperimental = true).verify(model, release)
+        assertUnavailable(verifier.verify(model, release.encodeToByteArray()))
+        val result = RecognitionAssetVerifier(allowExperimental = true)
+            .verify(model, release.encodeToByteArray())
 
         assertTrue(result is RecognitionAvailability.Available)
         result as RecognitionAvailability.Available
@@ -141,7 +142,7 @@ class RecognitionAssetVerifierTest {
         assertUnavailable(
             debugVerifier.verify(
                 model,
-                experimentalReleaseJson().decodeToString()
+                experimentalReleaseJson()
                     .replace("\"trainingPhotoCount\":964", "\"trainingPhotoCount\":0")
                     .encodeToByteArray(),
             ),
@@ -149,7 +150,13 @@ class RecognitionAssetVerifierTest {
         assertUnavailable(
             debugVerifier.verify(
                 model,
-                experimentalReleaseJson().decodeToString()
+                experimentalReleaseJson(validationMap50 = 0.499).encodeToByteArray(),
+            ),
+        )
+        assertUnavailable(
+            debugVerifier.verify(
+                model,
+                experimentalReleaseJson()
                     .replace("\"sourceLicense\":\"CC-BY-4.0\"", "\"sourceLicense\":\"unknown\"")
                     .encodeToByteArray(),
             ),
@@ -405,7 +412,7 @@ class RecognitionAssetVerifierTest {
         """.trimIndent().encodeToByteArray()
     }
 
-    private fun experimentalReleaseJson(): ByteArray {
+    private fun experimentalReleaseJson(validationMap50: Double = 0.5): String {
         val quotedLabels = CANONICAL_LABELS.joinToString(",") { "\"$it\"" }
         return """
             {
@@ -422,10 +429,11 @@ class RecognitionAssetVerifierTest {
               "iouThreshold":0.4,
               "trainingPhotoCount":964,
               "validationPhotoCount":193,
+              "validationMap50":$validationMap50,
               "sourceLicense":"CC-BY-4.0",
               "exportedAt":"2026-10-15T12:00:00Z"
             }
-        """.trimIndent().encodeToByteArray()
+        """.trimIndent()
     }
 
     private class FakeEngine : CardRecognitionEngine {

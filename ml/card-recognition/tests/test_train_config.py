@@ -80,7 +80,13 @@ def _split_document(tmp_path: Path, *, full_vocabulary: bool = False) -> Path:
                 "seed": 20261014,
                 "partitions": {
                     "train": [_record(train_image, full_vocabulary=full_vocabulary)],
-                    "validation": [_record(validation_image, "2C")],
+                    "validation": [
+                        _record(
+                            validation_image,
+                            "2C",
+                            full_vocabulary=full_vocabulary,
+                        )
+                    ],
                     # Deliberately invalid: training must never inspect this partition.
                     "test": [{"path": "final-holdout-must-not-be-read.jpg"}],
                 },
@@ -769,6 +775,27 @@ def test_empty_training_inputs_fail_before_creating_a_run(tmp_path: Path) -> Non
             config_path=PROJECT_ROOT / "config" / "model.yaml",
             splits_path=splits,
             run_id="blocked-run",
+            checkpoint_root=checkpoint_root,
+            requirements_lock=PROJECT_ROOT / "requirements.lock",
+            git_commit="172a705d",
+        )
+
+    assert not checkpoint_root.exists()
+
+
+def test_validation_must_cover_all_52_classes_before_training(tmp_path: Path) -> None:
+    split_path = _split_document(tmp_path, full_vocabulary=True)
+    document = json.loads(split_path.read_text(encoding="utf-8"))
+    validation = document["partitions"]["validation"]
+    validation[0]["boxes"] = [box for box in validation[0]["boxes"] if box["label"] != "5C"]
+    split_path.write_text(json.dumps(document), encoding="utf-8")
+    checkpoint_root = tmp_path / "checkpoints"
+
+    with pytest.raises(TrainingConfigError, match="validation data must contain all 52"):
+        prepare_training_run(
+            config_path=PROJECT_ROOT / "config" / "model.yaml",
+            splits_path=split_path,
+            run_id="missing-validation-class",
             checkpoint_root=checkpoint_root,
             requirements_lock=PROJECT_ROOT / "requirements.lock",
             git_commit="172a705d",

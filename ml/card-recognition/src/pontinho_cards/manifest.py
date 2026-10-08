@@ -9,7 +9,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from pontinho_cards.labels import CARD_LABELS, parse_card_label
@@ -22,6 +22,15 @@ _PLATFORM_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PUBLIC_DOMAIN_LICENSES = frozenset({"CC0-1.0", "PUBLIC-DOMAIN-MARK-1.0"})
 _DISTRIBUTABLE_LICENSES = _PUBLIC_DOMAIN_LICENSES | {"CC-BY-4.0"}
 _ANNOTATION_STATUSES = frozenset({"BOUNDING_BOXES", "CLASS_LABELS", "UNANNOTATED"})
+TaskRole = Literal["DETECTOR_SCENE", "CLASSIFIER_CROP", "FINAL_SCENE_HOLDOUT"]
+AuditStatus = Literal["READY_FOR_TWO_STAGE_EXPERIMENT", "BLOCKED_FOR_RELEASE"]
+
+_TASK_ROLES: frozenset[TaskRole] = frozenset(
+    {"DETECTOR_SCENE", "CLASSIFIER_CROP", "FINAL_SCENE_HOLDOUT"}
+)
+_AUDIT_STATUSES: frozenset[AuditStatus] = frozenset(
+    {"READY_FOR_TWO_STAGE_EXPERIMENT", "BLOCKED_FOR_RELEASE"}
+)
 _GENERIC_LICENSE_HOSTS = frozenset(
     {"creativecommons.org", "spdx.org", "choosealicense.com", "opensource.org"}
 )
@@ -87,6 +96,8 @@ class DatasetSource:
     annotation_status: str
     attribution: str
     deck_group_id: str
+    visual_deck_id: str
+    task_roles: tuple[TaskRole, ...]
     labels: tuple[str, ...]
     provides: SourceCapabilities
     usable_photo_count: int
@@ -99,11 +110,16 @@ class DatasetSource:
 @dataclass(frozen=True)
 class SourceManifest:
     schema_version: int
+    audit_status: AuditStatus
     sources: tuple[DatasetSource, ...]
 
     @property
     def holdout_photo_count(self) -> int:
-        return sum(source.holdout_eligible_photo_count for source in self.sources)
+        return sum(
+            source.holdout_eligible_photo_count
+            for source in self.sources
+            if "FINAL_SCENE_HOLDOUT" in source.task_roles
+        )
 
     @property
     def holdout_deck_group_count(self) -> int:
@@ -112,6 +128,7 @@ class SourceManifest:
                 source.deck_group_id
                 for source in self.sources
                 if source.holdout_eligible_photo_count > 0
+                and "FINAL_SCENE_HOLDOUT" in source.task_roles
             }
         )
 
@@ -258,7 +275,7 @@ def _parse_revision(raw: Any, path: str, source_url: str) -> SourceRevision:
     raise ManifestError(f"{path}.kind must be GIT_COMMIT or PLATFORM_DATASET_VERSION, not {kind!r}")
 
 
-def _parse_source(raw: Any, index: int) -> DatasetSource:
+def _parse_source(raw: Any, index: int, *, schema_version: int) -> DatasetSource:
     path = f"sources[{index}]"
     source = _object(raw, path)
 
@@ -324,9 +341,6 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         if canonical not in CARD_LABELS:
             raise ManifestError(f"{path}.adapter.labelMap contains unsupported canonical label")
         label_map[source_label] = canonical
-    if not label_map:
-        raise ManifestError(f"{path}.adapter.labelMap must not be empty")
-
     license_path = f"{path}.license"
     license_raw = _object(_required(source, "license", path), license_path)
     license_kind = _text(license_raw, "kind", license_path)
@@ -404,6 +418,22 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
             f"{path}.annotationStatus must be one of {sorted(_ANNOTATION_STATUSES)}"
         )
 
+    if schema_version >= 2:
+        task_roles_raw = _required(source, "taskRoles", path)
+        if not isinstance(task_roles_raw, list):
+            raise ManifestError(f"{path}.taskRoles is required and must be a list")
+        task_roles: list[TaskRole] = []
+        for task_role in task_roles_raw:
+            if not isinstance(task_role, str) or task_role not in _TASK_ROLES:
+                raise ManifestError(
+                    f"{path}.taskRoles entries must be one of {sorted(_TASK_ROLES)}"
+                )
+            task_roles.append(cast(TaskRole, task_role))
+        if len(task_roles) != len(set(task_roles)):
+            raise ManifestError(f"{path}.taskRoles must not contain duplicates")
+    else:
+        task_roles = []
+
     labels_raw = _required(source, "labels", path)
     if not isinstance(labels_raw, list):
         raise ManifestError(f"{path}.labels is required and must be a list")
@@ -440,6 +470,8 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         raise ManifestError(f"{path}.labels must not be empty for annotated content")
     if not annotated and labels:
         raise ManifestError(f"{path}.labels must be empty for UNANNOTATED content")
+    if annotated and not label_map:
+        raise ManifestError(f"{path}.adapter.labelMap must not be empty for annotated content")
     if usable_count and not (provides.real_scenes or provides.isolated_cards):
         raise ManifestError(
             f"{path}.usablePhotoCount requires realScenes=true or isolatedCards=true"
@@ -456,11 +488,58 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         raise ManifestError(f"{path}.adapter.labelMap must map exactly the declared labels")
     if (
         adapter_kind in {"COCO_JSON_SCENES", "YOLO_SCENES"}
-        and annotation_status != "BOUNDING_BOXES"
+        and annotation_status not in {"BOUNDING_BOXES", "UNANNOTATED"}
     ):
-        raise ManifestError(f"{path}.adapter scene annotations require BOUNDING_BOXES")
+        raise ManifestError(
+            f"{path}.adapter scene sources require BOUNDING_BOXES or UNANNOTATED"
+        )
     if adapter_kind == "ISOLATED_CARD_FOLDERS" and annotation_status != "CLASS_LABELS":
         raise ManifestError(f"{path}.adapter isolated folders require CLASS_LABELS")
+
+    usable_boxed_scenes = (
+        usable_count > 0
+        and provides.real_scenes
+        and provides.annotations
+        and annotation_status == "BOUNDING_BOXES"
+        and adapter_kind in {"COCO_JSON_SCENES", "YOLO_SCENES"}
+    )
+    usable_isolated_cards = (
+        usable_count > 0
+        and provides.isolated_cards
+        and provides.annotations
+        and annotation_status == "CLASS_LABELS"
+        and adapter_kind == "ISOLATED_CARD_FOLDERS"
+    )
+
+    deck_group_id = _safe_manifest_name(source, "deckGroupId", path)
+    if schema_version >= 2:
+        visual_deck_id = _safe_manifest_name(source, "visualDeckId", path)
+    else:
+        visual_deck_id = deck_group_id
+        if usable_boxed_scenes:
+            task_roles.append("DETECTOR_SCENE")
+        if usable_isolated_cards:
+            task_roles.append("CLASSIFIER_CROP")
+
+    if "DETECTOR_SCENE" in task_roles and not usable_boxed_scenes:
+        raise ManifestError(
+            f"{path}.taskRoles DETECTOR_SCENE requires usable real scenes with "
+            "bounding-box scene annotations"
+        )
+    if "FINAL_SCENE_HOLDOUT" in task_roles and (
+        not usable_boxed_scenes or holdout_count == 0
+    ):
+        raise ManifestError(
+            f"{path}.taskRoles FINAL_SCENE_HOLDOUT requires usable holdout real scenes "
+            "with bounding-box scene annotations"
+        )
+    if "CLASSIFIER_CROP" in task_roles and not (
+        usable_isolated_cards or usable_boxed_scenes
+    ):
+        raise ManifestError(
+            f"{path}.taskRoles CLASSIFIER_CROP requires usable isolated cards with class "
+            "labels or auditable crops from bounding-box scene annotations"
+        )
 
     return DatasetSource(
         source_id=source_id,
@@ -482,7 +561,9 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         ),
         annotation_status=annotation_status,
         attribution=_text(source, "attribution", path),
-        deck_group_id=_safe_manifest_name(source, "deckGroupId", path),
+        deck_group_id=deck_group_id,
+        visual_deck_id=visual_deck_id,
+        task_roles=tuple(task_roles),
         labels=tuple(labels),
         provides=provides,
         usable_photo_count=usable_count,
@@ -505,17 +586,95 @@ def parse_source_manifest_bytes(
 
     root = _object(raw, "manifest")
     schema_version = _required(root, "schemaVersion", "manifest")
-    if schema_version != 1:
-        raise ManifestError("manifest.schemaVersion must equal 1")
+    if schema_version not in {1, 2}:
+        raise ManifestError("manifest.schemaVersion must equal 1 or 2")
+    audit_status_raw = (
+        _text(root, "auditStatus", "manifest")
+        if schema_version >= 2
+        else "BLOCKED_FOR_RELEASE"
+    )
+    if audit_status_raw not in _AUDIT_STATUSES:
+        raise ManifestError(
+            f"manifest.auditStatus must be one of {sorted(_AUDIT_STATUSES)}"
+        )
+    audit_status = cast(AuditStatus, audit_status_raw)
     sources_raw = _required(root, "sources", "manifest")
     if not isinstance(sources_raw, list):
         raise ManifestError("manifest.sources is required and must be a list")
 
-    sources = tuple(_parse_source(source, index) for index, source in enumerate(sources_raw))
+    sources = tuple(
+        _parse_source(source, index, schema_version=schema_version)
+        for index, source in enumerate(sources_raw)
+    )
     source_ids = [source.source_id for source in sources]
     if len(source_ids) != len(set(source_ids)):
         raise ManifestError("manifest.sources must use unique ids")
-    return SourceManifest(schema_version=schema_version, sources=sources)
+
+    deck_groups_by_visual_id: dict[str, set[str]] = {}
+    visual_ids_by_deck_group: dict[str, set[str]] = {}
+    training_visual_ids: set[str] = set()
+    holdout_visual_ids: set[str] = set()
+    for source in sources:
+        deck_groups_by_visual_id.setdefault(source.visual_deck_id, set()).add(
+            source.deck_group_id
+        )
+        visual_ids_by_deck_group.setdefault(source.deck_group_id, set()).add(
+            source.visual_deck_id
+        )
+        if {"DETECTOR_SCENE", "CLASSIFIER_CROP"}.intersection(source.task_roles):
+            training_visual_ids.add(source.visual_deck_id)
+        if "FINAL_SCENE_HOLDOUT" in source.task_roles:
+            holdout_visual_ids.add(source.visual_deck_id)
+    reused_visual_ids = sorted(
+        visual_id
+        for visual_id, deck_group_ids in deck_groups_by_visual_id.items()
+        if len(deck_group_ids) > 1
+    )
+    if reused_visual_ids:
+        raise ManifestError(
+            "manifest.sources visualDeckId values must map to one deckGroupId; "
+            f"reused identities: {reused_visual_ids}"
+        )
+    reused_deck_groups = sorted(
+        deck_group_id
+        for deck_group_id, visual_ids in visual_ids_by_deck_group.items()
+        if len(visual_ids) > 1
+    )
+    if reused_deck_groups:
+        raise ManifestError(
+            "manifest.sources deckGroupId values must map to one visualDeckId; "
+            f"reused identities: {reused_deck_groups}"
+        )
+    leaked_visual_ids = sorted(training_visual_ids.intersection(holdout_visual_ids))
+    if leaked_visual_ids:
+        raise ManifestError(
+            "manifest.sources visualDeckId values used for FINAL_SCENE_HOLDOUT must be "
+            f"unseen in training roles; reused identities: {leaked_visual_ids}"
+        )
+
+    manifest = SourceManifest(
+        schema_version=schema_version,
+        audit_status=audit_status,
+        sources=sources,
+    )
+    if audit_status == "READY_FOR_TWO_STAGE_EXPERIMENT":
+        roleless_source_ids = sorted(
+            source.source_id for source in manifest.sources if not source.task_roles
+        )
+        if roleless_source_ids:
+            raise ManifestError(
+                "READY_FOR_TWO_STAGE_EXPERIMENT requires non-empty taskRoles for every "
+                f"source; missing roles: {roleless_source_ids}"
+            )
+        if manifest.holdout_photo_count < 200:
+            raise ManifestError(
+                "READY_FOR_TWO_STAGE_EXPERIMENT requires at least 200 real holdout photos"
+            )
+        if manifest.holdout_deck_group_count < 10:
+            raise ManifestError(
+                "READY_FOR_TWO_STAGE_EXPERIMENT requires ten unseen visual deck designs"
+            )
+    return manifest
 
 
 def load_source_manifest(path: str | Path) -> SourceManifest:
