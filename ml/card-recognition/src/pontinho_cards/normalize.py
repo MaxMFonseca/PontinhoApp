@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import yaml
 from PIL import Image
 
 from pontinho_cards.labels import parse_card_label
@@ -438,6 +439,70 @@ def _records_from_archive(
             if image.get("width") != record["width"] or image.get("height") != record["height"]:
                 raise NormalizationError("COCO image dimensions differ from archive bytes")
             record["boxes"] = boxes_by_image.get(image_id, [])
+            records.append(record)
+    elif source.adapter.kind == "YOLO_SCENES":
+        annotation_member = str(source.adapter.annotation_member)
+        try:
+            dataset = yaml.safe_load(members[annotation_member])
+        except (KeyError, UnicodeError, yaml.YAMLError) as error:
+            raise NormalizationError("YOLO data member is missing or invalid") from error
+        if not isinstance(dataset, Mapping) or not isinstance(dataset.get("names"), list):
+            raise NormalizationError("YOLO data must declare an ordered names list")
+        names = dataset["names"]
+        if not all(isinstance(name, str) and name for name in names):
+            raise NormalizationError("YOLO class names must be non-empty text")
+        image_members = sorted(
+            member
+            for member in members
+            if member.startswith(prefix)
+            and PurePosixPath(member).suffix.casefold() in {".jpg", ".jpeg", ".png", ".webp"}
+        )
+        for index, member in enumerate(image_members):
+            record = _base_archive_record(source, member, members[member], output, index)
+            relative = PurePosixPath(member).relative_to(PurePosixPath(source.adapter.image_prefix))
+            label_member = (
+                PurePosixPath(source.adapter.image_prefix).parent
+                / "labels"
+                / relative.with_suffix(".txt")
+            ).as_posix()
+            try:
+                lines = members[label_member].decode("utf-8").splitlines()
+            except (KeyError, UnicodeError) as error:
+                raise NormalizationError(f"YOLO label member is missing: {label_member}") from error
+            boxes: list[dict[str, Any]] = []
+            for line in lines:
+                fields = line.split()
+                if len(fields) != 5:
+                    raise NormalizationError("YOLO row must contain class and four coordinates")
+                try:
+                    class_id = int(fields[0])
+                    center_x, center_y, box_width, box_height = map(float, fields[1:])
+                except ValueError as error:
+                    raise NormalizationError("YOLO row contains invalid numeric data") from error
+                if not 0 <= class_id < len(names):
+                    raise NormalizationError("YOLO class index is outside the names list")
+                if any(
+                    not math.isfinite(value) or not 0 <= value <= 1
+                    for value in (center_x, center_y, box_width, box_height)
+                ):
+                    raise NormalizationError("YOLO coordinates must be finite and normalized")
+                source_label = names[class_id]
+                if source_label not in source.adapter.label_map:
+                    raise NormalizationError("YOLO class lacks an explicit canonical label mapping")
+                xmin = (center_x - box_width / 2) * record["width"]
+                ymin = (center_y - box_height / 2) * record["height"]
+                xmax = (center_x + box_width / 2) * record["width"]
+                ymax = (center_y + box_height / 2) * record["height"]
+                boxes.append(
+                    {
+                        "label": source.adapter.label_map[source_label],
+                        "xmin": xmin,
+                        "ymin": ymin,
+                        "xmax": xmax,
+                        "ymax": ymax,
+                    }
+                )
+            record["boxes"] = boxes
             records.append(record)
     else:
         image_members = sorted(member for member in members if member.startswith(prefix))

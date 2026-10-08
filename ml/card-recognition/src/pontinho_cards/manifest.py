@@ -20,6 +20,7 @@ _GIT_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _PLATFORM_VERSION_RE = re.compile(r"^[1-9][0-9]*$")
 _PLATFORM_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PUBLIC_DOMAIN_LICENSES = frozenset({"CC0-1.0", "PUBLIC-DOMAIN-MARK-1.0"})
+_DISTRIBUTABLE_LICENSES = _PUBLIC_DOMAIN_LICENSES | {"CC-BY-4.0"}
 _ANNOTATION_STATUSES = frozenset({"BOUNDING_BOXES", "CLASS_LABELS", "UNANNOTATED"})
 _GENERIC_LICENSE_HOSTS = frozenset(
     {"creativecommons.org", "spdx.org", "choosealicense.com", "opensource.org"}
@@ -27,6 +28,7 @@ _GENERIC_LICENSE_HOSTS = frozenset(
 _LEGAL_TOOL_URLS = {
     "CC0-1.0": "https://creativecommons.org/publicdomain/zero/1.0/",
     "PUBLIC-DOMAIN-MARK-1.0": "https://creativecommons.org/publicdomain/mark/1.0/",
+    "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
 }
 
 
@@ -90,6 +92,7 @@ class DatasetSource:
     usable_photo_count: int
     holdout_eligible_photo_count: int
     public_domain_approved: bool
+    distribution_approved: bool
     approval_note: str
 
 
@@ -284,7 +287,7 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
 
     adapter_raw = _object(_required(source, "adapter", path), f"{path}.adapter")
     adapter_kind = _text(adapter_raw, "kind", f"{path}.adapter")
-    if adapter_kind not in {"COCO_JSON_SCENES", "ISOLATED_CARD_FOLDERS"}:
+    if adapter_kind not in {"COCO_JSON_SCENES", "ISOLATED_CARD_FOLDERS", "YOLO_SCENES"}:
         raise ManifestError(f"{path}.adapter.kind is unsupported")
     try:
         image_prefix = safe_relative_posix(
@@ -294,7 +297,7 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
     except ValueError as error:
         raise ManifestError(str(error)) from error
     annotation_member_raw = adapter_raw.get("annotationMember")
-    if adapter_kind == "COCO_JSON_SCENES":
+    if adapter_kind in {"COCO_JSON_SCENES", "YOLO_SCENES"}:
         if not isinstance(annotation_member_raw, str) or not annotation_member_raw:
             raise ManifestError(f"{path}.adapter.annotationMember is required")
         try:
@@ -327,9 +330,9 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
     license_path = f"{path}.license"
     license_raw = _object(_required(source, "license", path), license_path)
     license_kind = _text(license_raw, "kind", license_path)
-    if license_kind not in _PUBLIC_DOMAIN_LICENSES:
+    if license_kind not in _DISTRIBUTABLE_LICENSES:
         raise ManifestError(
-            f"{license_path}.kind must be CC0 or public-domain; got {license_kind!r}"
+            f"{license_path}.kind must permit commercial distribution; got {license_kind!r}"
         )
     evidence_url = _url(license_raw, "evidenceUrl", license_path)
     evidence_text = _text(license_raw, "evidenceText", license_path)
@@ -382,10 +385,15 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         raise ManifestError(f"{license_path}.evidenceText must state the CC0 dedication")
     if license_kind == "PUBLIC-DOMAIN-MARK-1.0" and "public domain" not in evidence_text.casefold():
         raise ManifestError(f"{license_path}.evidenceText must state the public-domain mark")
+    if license_kind == "CC-BY-4.0" and "cc by 4.0" not in evidence_text.casefold():
+        raise ManifestError(f"{license_path}.evidenceText must state CC BY 4.0")
 
-    approved = _required(source, "publicDomainApproved", path)
+    approval_field = (
+        "publicDomainApproved" if license_kind in _PUBLIC_DOMAIN_LICENSES else "licenseApproved"
+    )
+    approved = _required(source, approval_field, path)
     if approved is not True:
-        raise ManifestError(f"{path}.publicDomainApproved is required and must be literal true")
+        raise ManifestError(f"{path}.{approval_field} is required and must be literal true")
     approval_note = _text(source, "approvalNote", path)
     if evidence_url not in approval_note:
         raise ManifestError(f"{path}.approvalNote must point to the reviewed license evidence URL")
@@ -446,8 +454,11 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         )
     if set(label_map.values()) != set(labels):
         raise ManifestError(f"{path}.adapter.labelMap must map exactly the declared labels")
-    if adapter_kind == "COCO_JSON_SCENES" and annotation_status != "BOUNDING_BOXES":
-        raise ManifestError(f"{path}.adapter COCO scenes require BOUNDING_BOXES")
+    if (
+        adapter_kind in {"COCO_JSON_SCENES", "YOLO_SCENES"}
+        and annotation_status != "BOUNDING_BOXES"
+    ):
+        raise ManifestError(f"{path}.adapter scene annotations require BOUNDING_BOXES")
     if adapter_kind == "ISOLATED_CARD_FOLDERS" and annotation_status != "CLASS_LABELS":
         raise ManifestError(f"{path}.adapter isolated folders require CLASS_LABELS")
 
@@ -476,7 +487,8 @@ def _parse_source(raw: Any, index: int) -> DatasetSource:
         provides=provides,
         usable_photo_count=usable_count,
         holdout_eligible_photo_count=holdout_count,
-        public_domain_approved=True,
+        public_domain_approved=license_kind in _PUBLIC_DOMAIN_LICENSES,
+        distribution_approved=True,
         approval_note=approval_note,
     )
 

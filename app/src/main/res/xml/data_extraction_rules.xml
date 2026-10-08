@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
+        <!-- cacheDir/scans is excluded by Android. Guard future scan directories too. -->
+        <exclude domain="root" path="scans/" />
+        <exclude domain="file" path="scans/" />
+        <exclude domain="external" path="scans/" />
+        <exclude domain="device_root" path="scans/" />
+        <exclude domain="device_file" path="scans/" />
         <exclude domain="root" path="." />
         <exclude domain="file" path="." />
         <exclude domain="database" path="." />
@@ -12,6 +18,12 @@
         <exclude domain="device_sharedpref" path="." />
     </cloud-backup>
     <device-transfer>
+        <!-- These explicit exclusions survive a future relaxation of general rules. -->
+        <exclude domain="root" path="scans/" />
+        <exclude domain="file" path="scans/" />
+        <exclude domain="external" path="scans/" />
+        <exclude domain="device_root" path="scans/" />
+        <exclude domain="device_file" path="scans/" />
         <exclude domain="root" path="." />
         <exclude domain="file" path="." />
         <exclude domain="database" path="." />

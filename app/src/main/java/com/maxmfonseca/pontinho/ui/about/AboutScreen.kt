@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.booleanResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
@@ -89,6 +90,13 @@ fun AboutScreen(
                 modifier = Modifier.fillMaxWidth().testTag("about_camera_education"),
             ) {
                 Text(stringResource(R.string.about_camera_education))
+            }
+            if (booleanResource(R.bool.allow_experimental_card_model)) {
+                Text(
+                    stringResource(R.string.about_card_model_attribution),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Text(stringResource(R.string.about_support), style = MaterialTheme.typography.titleMedium)
             Text(

@@ -1,0 +1,9 @@
+case,index,classIndex,label,confidence,left,top,right,bottom,keep
+competing_classes,0,9,10C,0.875,0.125,0.125,0.75,0.75,false
+competing_classes,1,0,AC,0.875,0.125,0.125,0.75,0.75,true
+left_before_top,0,1,2C,0.875,0.1875,0.125,0.8125,0.75,false
+left_before_top,1,1,2C,0.875,0.125,0.1875,0.75,0.8125,true
+right_before_bottom,0,1,2C,0.875,0.125,0.125,0.875,0.75,false
+right_before_bottom,1,1,2C,0.875,0.125,0.125,0.75,0.875,true
+exact_tie,0,1,2C,0.875,0.125,0.125,0.75,0.75,true
+exact_tie,1,1,2C,0.875,0.125,0.125,0.75,0.75,false

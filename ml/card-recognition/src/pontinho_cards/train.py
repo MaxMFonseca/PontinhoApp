@@ -234,21 +234,27 @@ def _load_training_partitions(
         validation_partition=validation_partition,
     )
 
-    def resolve(records: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-        resolved: list[Mapping[str, Any]] = []
-        for raw in records:
-            record = dict(raw)
-            value = record.get("path")
-            if isinstance(value, str) and not Path(value).is_absolute():
-                try:
-                    relative = safe_relative_posix(value, field="training image path")
-                except ValueError as error:
-                    raise TrainingConfigError(str(error)) from error
-                record["path"] = str(path.parent.joinpath(*relative.parts))
-            resolved.append(record)
-        return resolved
+    return (
+        _resolve_training_paths(train, path.parent),
+        _resolve_training_paths(validation, path.parent),
+    )
 
-    return resolve(train), resolve(validation)
+
+def _resolve_training_paths(
+    records: list[Mapping[str, Any]], base: Path
+) -> list[Mapping[str, Any]]:
+    resolved: list[Mapping[str, Any]] = []
+    for raw in records:
+        record = dict(raw)
+        value = record.get("path")
+        if isinstance(value, str) and not Path(value).is_absolute():
+            try:
+                relative = safe_relative_posix(value, field="training image path")
+            except ValueError as error:
+                raise TrainingConfigError(str(error)) from error
+            record["path"] = str(base.joinpath(*relative.parts))
+        resolved.append(record)
+    return resolved
 
 
 def _json_payload(payload: bytes, name: str) -> dict[str, Any]:
@@ -944,6 +950,8 @@ def prepare_training_run(
             list(source_document["partitions"][config.validation_partition]),
         )
     )
+    train = _resolve_training_paths(train, splits_file.parent)
+    validation = _resolve_training_paths(validation, splits_file.parent)
     if not train:
         raise TrainingConfigError("no audited training records; refusing to create a run")
     if not validation:
@@ -1009,8 +1017,8 @@ def prepare_training_run(
         else:
             merged_payload = split_payload
         _atomic_write(merged_path, merged_payload)
-        splits_file = merged_path
         if source_document is not None:
+            splits_file = merged_path
             snapshotted_train, snapshotted_validation = _load_training_partitions(
                 splits_file,
                 train_partition=config.train_partition,
@@ -1289,6 +1297,15 @@ def run_training(prepared: PreparedRun, *, one_batch_smoke: bool = False) -> dic
     """Train, validate, then atomically publish one complete run directory."""
 
     try:
+        # Export needs representative real images for integer calibration. Keep the
+        # exact train/validation CSV inside the atomically published run so a valid
+        # checkpoint can always be exported without reconstructing hidden inputs.
+        write_model_maker_csv(
+            prepared.splits_path,
+            prepared.staging_dir / "annotations.csv",
+            train_partition=prepared.config.train_partition,
+            validation_partition=prepared.config.validation_partition,
+        )
         outcome = _run_model_maker_training(prepared, one_batch_smoke)
         metrics = _finalize_training_result(prepared, outcome, one_batch_smoke=one_batch_smoke)
         _publish_staged_run(prepared)

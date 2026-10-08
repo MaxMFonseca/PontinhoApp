@@ -1,10 +1,13 @@
 package com.maxmfonseca.pontinho.recognition
 
+import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,6 +16,25 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class MediaPipeCardRecognitionEngineTest {
+    @Test
+    fun packagedExperimentalModelLoadsAndRunsOneOfflineInference() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val model = context.assets.open("card_detector.tflite").use { it.readBytes() }
+        val release = context.assets.open("card_detector.release.json").use { it.readBytes() }
+        val availability = RecognitionAssetVerifier(allowExperimental = true).verify(model, release)
+        assertTrue(availability is RecognitionAvailability.Available)
+        availability as RecognitionAvailability.Available
+        val engine = MediaPipeCardRecognitionEngineFactory(context).create(model, availability.metadata)
+        val bitmap = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888)
+        try {
+            val result = engine.recognize(bitmap)
+            assertEquals("rf100-beta-20261015-int8", result.modelVersion)
+        } finally {
+            bitmap.recycle()
+            engine.close()
+        }
+    }
+
     @Test
     fun productionOptionsUseVerifiedDirectModelBytesCpuAndImageMode() {
         val bytes = byteArrayOf(1, 2, 3)

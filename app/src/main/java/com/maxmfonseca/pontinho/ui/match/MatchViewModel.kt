@@ -19,6 +19,7 @@ class MatchViewModel(
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val savedStateHandle: SavedStateHandle? = null,
     private val recognitionAvailable: () -> Boolean = { false },
+    recognitionAvailabilityChanges: Flow<com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability>? = null,
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableUiState = MutableStateFlow(MatchUiState())
@@ -32,20 +33,20 @@ class MatchViewModel(
     private var addPlayerToken: String? = null
     private var submittedPlayerName: String? = null
     private var activeScanToken: String? = savedStateHandle?.get("activeScanToken")
-    private var restoredDialog = false
     private var scannerLaunching = false
 
     init {
+        // Restore before either flow can persist the initial empty UI state.
+        restoreDialog()
+        recognitionAvailabilityChanges?.let { availability ->
+            scope.launch { availability.collect { updateState { it } } }
+        }
         scope.launch {
             repository.observeMatch(matchId).catch { failure ->
                 if (failure is CancellationException) throw failure
                 updateState { it.copy(isLoading = false, hasError = true) }
             }.collect { match ->
                 snapshot = match
-                if (!restoredDialog && match != null) {
-                    restoredDialog = true
-                    restoreDialog()
-                }
                 render()
                 if (match != null && match.hasPendingResults && emittedRevision != match.resultRevision) {
                     emittedRevision = match.resultRevision
@@ -111,6 +112,12 @@ class MatchViewModel(
             updateState { it.copy(scoreDialog = null) }
             render()
         } else persistDialog()
+    }
+
+    /** Run after state restoration using the actual navigation stack, never inferred timing. */
+    fun reconcileScannerNavigation(destinationToken: String?) {
+        val active = activeScanToken ?: return
+        if (destinationToken != active) scannerCancelled(active)
     }
 
     suspend fun scannerSaved(token: String, points: Int) {

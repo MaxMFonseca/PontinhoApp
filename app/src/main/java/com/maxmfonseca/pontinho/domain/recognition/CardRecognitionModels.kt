@@ -85,6 +85,8 @@ enum class RecognitionUnavailableReason {
 }
 
 sealed interface RecognitionAvailability {
+    data object Checking : RecognitionAvailability
+
     data class Available(val metadata: RecognitionModelMetadata) : RecognitionAvailability
 
     data class Unavailable(val reason: RecognitionUnavailableReason) : RecognitionAvailability

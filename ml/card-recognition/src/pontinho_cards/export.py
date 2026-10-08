@@ -354,6 +354,7 @@ def _generate_and_inspect_variant(
 ) -> dict[str, Any]:
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     try:
+        import tensorflow as tf
         from tensorflow_examples.lite.model_maker.core.task import configs
         from tflite_model_maker import object_detector
     except ImportError as error:
@@ -374,7 +375,11 @@ def _generate_and_inspect_variant(
             raise ExportContractError("int8 representative label map is not canonical")
         representative_data = train_data
     detector = object_detector.ObjectDetector(spec, label_map, representative_data)
-    detector.create_model()
+    model = detector.create_model()
+    # EfficientDet is a subclassed Keras model. Its variables do not exist until
+    # the first call, and HDF5 checkpoints cannot be restored before that point.
+    model(tf.zeros([1, snapshot.input_size, snapshot.input_size, 3], dtype=tf.float32))
+    detector.model = model
     try:
         detector.model.load_weights(str(snapshot.root / "selected.weights.h5"))
     except (OSError, RuntimeError, ValueError) as error:

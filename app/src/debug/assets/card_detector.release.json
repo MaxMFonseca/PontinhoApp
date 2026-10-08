@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "status": "EXPERIMENTAL",
+  "modelVersion": "rf100-beta-20261015-int8",
+  "modelSha256": "d4a9f4b6dbfb1d0148fc32822198595876e7254be0eea97e7e3a6769521cc468",
+  "modelSizeBytes": 4515098,
+  "labels": [
+    "AC", "2C", "3C", "4C", "5C", "6C", "7C", "8C", "9C", "10C", "JC", "QC", "KC",
+    "AD", "2D", "3D", "4D", "5D", "6D", "7D", "8D", "9D", "10D", "JD", "QD", "KD",
+    "AH", "2H", "3H", "4H", "5H", "6H", "7H", "8H", "9H", "10H", "JH", "QH", "KH",
+    "AS", "2S", "3S", "4S", "5S", "6S", "7S", "8S", "9S", "10S", "JS", "QS", "KS"
+  ],
+  "inputWidth": 320,
+  "inputHeight": 320,
+  "quantization": {
+    "variant": "int8",
+    "input": {
+      "scales": [0.0078125],
+      "zeroPoints": [127],
+      "quantizedDimension": 0
+    },
+    "nonemptyConstantTensorTypes": ["FLOAT32", "INT32", "INT8"],
+    "quantizedConstantCount": 142
+  },
+  "confidenceThreshold": 0.5,
+  "iouThreshold": 0.5,
+  "trainingPhotoCount": 964,
+  "validationPhotoCount": 193,
+  "sourceLicense": "CC-BY-4.0",
+  "exportedAt": "2026-10-15T18:47:05Z"
+}

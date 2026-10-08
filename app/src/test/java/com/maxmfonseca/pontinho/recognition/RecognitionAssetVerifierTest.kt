@@ -122,6 +122,41 @@ class RecognitionAssetVerifierTest {
     }
 
     @Test
+    fun `experimental assets are rejected by default and accepted only with explicit debug opt in`() {
+        val release = experimentalReleaseJson()
+
+        assertUnavailable(verifier.verify(model, release))
+        val result = RecognitionAssetVerifier(allowExperimental = true).verify(model, release)
+
+        assertTrue(result is RecognitionAvailability.Available)
+        result as RecognitionAvailability.Available
+        assertEquals("2026.10.15-beta", result.metadata.modelVersion)
+        assertEquals(CANONICAL_LABELS, result.metadata.labels)
+    }
+
+    @Test
+    fun `debug opt in does not weaken experimental manifest validation`() {
+        val debugVerifier = RecognitionAssetVerifier(allowExperimental = true)
+
+        assertUnavailable(
+            debugVerifier.verify(
+                model,
+                experimentalReleaseJson().decodeToString()
+                    .replace("\"trainingPhotoCount\":964", "\"trainingPhotoCount\":0")
+                    .encodeToByteArray(),
+            ),
+        )
+        assertUnavailable(
+            debugVerifier.verify(
+                model,
+                experimentalReleaseJson().decodeToString()
+                    .replace("\"sourceLicense\":\"CC-BY-4.0\"", "\"sourceLicense\":\"unknown\"")
+                    .encodeToByteArray(),
+            ),
+        )
+    }
+
+    @Test
     fun `float16 release emitted by the model pipeline is available`() {
         val result = verifier.verify(
             model,
@@ -366,6 +401,29 @@ class RecognitionAssetVerifierTest {
               "heldOutPhotoCount":200,
               "heldOutDeckCount":10,
               "exportedAt":"$exportedAt"
+            }
+        """.trimIndent().encodeToByteArray()
+    }
+
+    private fun experimentalReleaseJson(): ByteArray {
+        val quotedLabels = CANONICAL_LABELS.joinToString(",") { "\"$it\"" }
+        return """
+            {
+              "schemaVersion":1,
+              "status":"EXPERIMENTAL",
+              "modelVersion":"2026.10.15-beta",
+              "modelSha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+              "modelSizeBytes":3,
+              "labels":[$quotedLabels],
+              "inputWidth":320,
+              "inputHeight":320,
+              "quantization":{"variant":"float16","input":null,"nonemptyConstantTensorTypes":["FLOAT16","FLOAT32"],"quantizedConstantCount":0},
+              "confidenceThreshold":0.5,
+              "iouThreshold":0.4,
+              "trainingPhotoCount":964,
+              "validationPhotoCount":193,
+              "sourceLicense":"CC-BY-4.0",
+              "exportedAt":"2026-10-15T12:00:00Z"
             }
         """.trimIndent().encodeToByteArray()
     }

@@ -153,10 +153,14 @@ fun PontinhoNavHost(
             val matchViewModel: MatchViewModel = viewModel(factory = viewModelFactory {
                 initializer { MatchViewModel(matchId, container.matchRepository,
                     savedStateHandle = createSavedStateHandle(),
-                    recognitionAvailable = { container.cardRecognitionEngineProvider.get().availability is RecognitionAvailability.Available }) }
+                    recognitionAvailable = { container.cardRecognitionEngineProvider.availability.value is RecognitionAvailability.Available },
+                    recognitionAvailabilityChanges = container.cardRecognitionEngineProvider.availability) }
             })
             val state by matchViewModel.uiState.collectAsStateWithLifecycle()
             LaunchedEffect(matchViewModel) {
+                matchViewModel.uiState.first { !it.isLoading }
+                matchViewModel.reconcileScannerNavigation(navController.currentBackStackEntry
+                    ?.takeIf { it.destination.route == Destination.Scanner.route }?.arguments?.getString("token"))
                 matchViewModel.events.collect { event ->
                     when (event) {
                         is MatchEvent.OpenScanner -> {
@@ -292,7 +296,8 @@ private fun ScannerDestination(container: AppContainer, nav: NavHostController, 
     val matchViewModel: MatchViewModel = viewModel(viewModelStoreOwner = parent, factory = viewModelFactory {
         initializer { MatchViewModel(MatchId(route.match), container.matchRepository,
             savedStateHandle = createSavedStateHandle(),
-            recognitionAvailable = { container.cardRecognitionEngineProvider.get().availability is RecognitionAvailability.Available }) }
+            recognitionAvailable = { container.cardRecognitionEngineProvider.availability.value is RecognitionAvailability.Available },
+            recognitionAvailabilityChanges = container.cardRecognitionEngineProvider.availability) }
     })
     var request by remember(entry) { mutableStateOf<ScanRequest?>(null) }
     var education by rememberSaveable { mutableStateOf<Boolean?>(null) }
@@ -305,9 +310,12 @@ private fun ScannerDestination(container: AppContainer, nav: NavHostController, 
         matchViewModel.scannerCancelled(route.token)
         if (nav.currentBackStackEntry == entry) nav.popBackStack()
     }
-    BackHandler { cancel() }
+    // A restored scanner may already be saving/saved. Until its adapter reattaches its
+    // state-aware back handler, do not let the temporary loading UI cancel that operation.
+    BackHandler { if (!scannerStarted) cancel() }
     LaunchedEffect(entry) {
         matchViewModel.uiState.first { !it.isLoading }
+        matchViewModel.reconcileScannerNavigation(route.token)
         // Restoration may follow a committed write; the stable request is required for receipt replay.
         val validated = matchViewModel.validateScanner(route, allowCommitted = scannerStarted)
         if (validated == null) { cancel(); return@LaunchedEffect }
@@ -343,14 +351,17 @@ private fun ScannerDestination(container: AppContainer, nav: NavHostController, 
                         event.participantId == request?.participantId) {
                         // Repository observation, not an inference result, closes the manual dialog.
                         matchViewModel.scannerSaved(route.token, scanner.uiState.value.total)
-                        handled = true
-                        if (nav.currentBackStackEntry == entry) nav.popBackStack()
+                        if (nav.currentBackStackEntry == entry && nav.popBackStack()) {
+                            scanner.acknowledgeSaved(event)
+                            handled = true
+                        }
                     }
                 }
             }
         }
     }
-    ScannerScreen(scanner, engine.availability is RecognitionAvailability.Available)
+    val availability by container.cardRecognitionEngineProvider.availability.collectAsStateWithLifecycle()
+    ScannerScreen(scanner, availability is RecognitionAvailability.Available)
 }
 
 private fun settingsFactory(container: AppContainer, context: Context) = viewModelFactory {

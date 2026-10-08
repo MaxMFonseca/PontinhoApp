@@ -106,8 +106,9 @@ python -m pontinho_cards.normalize --manifest datasets/sources.json \
   --archive-root datasets/source-archives --out datasets/normalized
 ```
 
-`datasets/sources.json` remains empty until a real source completes the human
-license review; these adapters do not constitute approval.
+`datasets/sources.json` contains the reviewed Poker Cards Cxcvz archive for the
+experimental beta. CC BY 4.0 inputs require explicit approval and preserved
+attribution. Admission does not imply production release approval.
 
 ## Validation thresholds and promotion order
 
@@ -163,5 +164,14 @@ All commands run from this directory. Future tools are invoked as
 `python -m pontinho_cards.<command>`. The fixed `seed` in
 `config/model.yaml` is the sole seed used by split, synthesis, and training.
 
-Only CC0 or public-domain inputs may enter the pipeline. Keep raw downloads,
-derived data, checkpoints, artifacts, caches, and local reports out of Git.
+Only reviewed CC0, public-domain, or explicitly approved CC BY 4.0 inputs may
+enter the pipeline. Keep raw downloads, derived data, checkpoints, artifacts,
+caches, and local reports out of Git.
+
+Android and the evaluator share the NMS tie order: confidence descending, canonical
+class index ascending (`AC, 2C, ..., KC, AD, ..., KS`), left/top/right/bottom
+ascending, then original model-output index. Exact ties keep the first output.
+IoU equality survives; only IoU greater than the threshold suppresses a box.
+`tests/fixtures/android-release/nms-ties.csv` is consumed by both test suites,
+including competing classes and overlapping equal-confidence boxes. Android's
+final review display remains spatially ordered after suppression.

@@ -83,6 +83,7 @@
     <string name="about_purpose">Marcador offline para partidas presenciais do jogo de cartas Pontinho. Aprenda a jogar.</string>
     <string name="about_support">Suporte</string>
     <string name="about_camera_education">Como funciona a leitura de cartas</string>
+    <string name="about_card_model_attribution">Modelo experimental treinado com Poker Cards Cxcvz, por LibreYOLO / Roboflow 100 / Augmented Startups, sob CC BY 4.0.</string>
     <string name="camera_education_title">Antes de escanear</string>
     <string name="camera_education_offline">A foto é processada inteiramente neste dispositivo. O aplicativo não envia nem retém a imagem.</string>
     <string name="camera_education_capture">Para obter melhores resultados, use boa iluminação, evite reflexos e mantenha todas as cartas totalmente visíveis e sem sobreposição.</string>

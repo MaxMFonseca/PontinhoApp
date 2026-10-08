@@ -17,7 +17,9 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 
-class RecognitionAssetVerifier {
+class RecognitionAssetVerifier(
+    private val allowExperimental: Boolean = false,
+) {
     fun verify(model: ByteArray?, releaseJson: ByteArray?): RecognitionAvailability {
         if (model == null || releaseJson == null || model.isEmpty() || releaseJson.isEmpty()) {
             return RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS)
@@ -26,9 +28,15 @@ class RecognitionAssetVerifier {
 
         return try {
             val root = parseStrictJson(releaseJson).objectValue()
-            if (root.keys != RELEASE_FIELDS) return invalid()
             if (root.int("schemaVersion") != RELEASE_SCHEMA_VERSION) return invalid()
-            if (root.string("status") != APPROVED_STATUS) return invalid()
+            val status = root.string("status")
+            when (status) {
+                APPROVED_STATUS -> if (root.keys != RELEASE_FIELDS) return invalid()
+                EXPERIMENTAL_STATUS -> {
+                    if (!allowExperimental || root.keys != EXPERIMENTAL_FIELDS) return invalid()
+                }
+                else -> return invalid()
+            }
 
             val modelVersion = root.string("modelVersion")
             if (!MODEL_VERSION.matches(modelVersion)) return invalid()
@@ -53,7 +61,8 @@ class RecognitionAssetVerifier {
 
             val confidence = root.unitFloat("confidenceThreshold")
             val iou = root.unitFloat("iouThreshold")
-            if (!validReleaseEvidence(root)) return invalid()
+            if (status == APPROVED_STATUS && !validReleaseEvidence(root)) return invalid()
+            if (status == EXPERIMENTAL_STATUS && !validExperimentalEvidence(root)) return invalid()
 
             RecognitionAvailability.Available(
                 RecognitionModelMetadata(
@@ -128,6 +137,14 @@ class RecognitionAssetVerifier {
         root.unitFloat("abstentionRate")
         if (root.int("heldOutPhotoCount") < MIN_HELD_OUT_PHOTOS) return false
         if (root.int("heldOutDeckCount") < MIN_HELD_OUT_DECKS) return false
+        val exportedAt = root.string("exportedAt")
+        if (!RFC3339_UTC.matches(exportedAt)) return false
+        return runCatching { Instant.parse(exportedAt) }.isSuccess
+    }
+
+    private fun validExperimentalEvidence(root: Map<String, JsonValue>): Boolean {
+        if (root.int("trainingPhotoCount") <= 0 || root.int("validationPhotoCount") <= 0) return false
+        if (root.string("sourceLicense") !in APPROVED_EXPERIMENTAL_LICENSES) return false
         val exportedAt = root.string("exportedAt")
         if (!RFC3339_UTC.matches(exportedAt)) return false
         return runCatching { Instant.parse(exportedAt) }.isSuccess
@@ -223,6 +240,7 @@ class RecognitionAssetVerifier {
         const val MAX_JSON_DEPTH = 16
         const val RELEASE_SCHEMA_VERSION = 1
         const val APPROVED_STATUS = "APPROVED"
+        const val EXPERIMENTAL_STATUS = "EXPERIMENTAL"
         const val INPUT_WIDTH = 320
         const val INPUT_HEIGHT = 320
         const val MIN_HELD_OUT_PHOTOS = 200
@@ -248,6 +266,13 @@ class RecognitionAssetVerifier {
             "exactCardMultisetAccuracy", "abstentionRate", "heldOutPhotoCount",
             "heldOutDeckCount", "exportedAt",
         )
+        val EXPERIMENTAL_FIELDS = setOf(
+            "schemaVersion", "status", "modelVersion", "modelSha256", "modelSizeBytes",
+            "labels", "inputWidth", "inputHeight", "quantization", "confidenceThreshold",
+            "iouThreshold", "trainingPhotoCount", "validationPhotoCount", "sourceLicense",
+            "exportedAt",
+        )
+        val APPROVED_EXPERIMENTAL_LICENSES = setOf("CC-BY-4.0", "CC0-1.0", "PUBLIC-DOMAIN")
         val HASH_FIELDS = setOf(
             "sourceReportSha256", "modelContractSha256", "candidateContractSha256",
             "comparisonSha256", "validationManifestSha256", "thresholdSelectionSha256",

@@ -1,20 +1,32 @@
 # Card-recognition data and model notices
 
-**Status:** No third-party card images, annotations, trained weights, or model
-artifact are currently included in the repository or Android application.
+**Status:** The debug build contains an experimental model trained from the
+source below. Release builds contain no model and keep the scanner disabled.
+
+## Experimental model attribution
+
+The debug-only `rf100-beta-20261015-int8` model was trained from **Poker Cards
+Cxcvz** by LibreYOLO / Roboflow 100 / Augmented Startups, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The immutable source
+revision is [`921de60dffb6a0ebf7cd88140e38b00ce845ed32`](https://huggingface.co/datasets/LibreYOLO/poker-cards-cxcvz/commit/921de60dffb6a0ebf7cd88140e38b00ce845ed32).
+The downloaded archive SHA-256 is
+`7b236c9caacd2a39dcba9d7f4453a75ac5d2460b35dafaa9bb357c70b6394782`.
+
+This attribution does not imply production approval. The dataset has only
+three declared split groups and the 128-photo test partition is below the
+release gate of 200 photographs from 10 unseen deck designs.
 
 `ml/card-recognition/datasets/sources.json` is the sole allow-list for material
-that may enter the training pipeline. It is empty because the 2026-10-15 audit
-did not find a candidate with all required source-specific evidence, immutable
-archive identity, verified SHA-256, deck provenance, and human approval. See the
+that may enter the training pipeline. The 2026-10-15 beta audit admitted the
+source above for attributed experimental use. See the
 [dataset audit](../../ml/card-recognition/reports/dataset-audit.md) for the
 candidate matrix and release blocker.
 
 ## Admission policy
 
-- Only CC0 1.0 or an explicit public-domain mark/dedication is eligible.
-- A general open-source, permissive, attribution, or commercial-use license is
-  not a substitute for source-specific public-domain evidence.
+- CC0 1.0, explicit public-domain material, and CC BY 4.0 with recorded
+  attribution may be admitted. Attribution licenses require an explicit human
+  approval flag and source-specific evidence.
 - `license.evidenceUrl` and its quoted/paraphrased evidence text must identify
   the publisher's statement for that named source. A Creative Commons or SPDX
   deed URL is rejected in this field. The canonical
@@ -29,8 +41,8 @@ candidate matrix and release blocker.
 - `archiveInput.localPath` names one immutable local ZIP/TAR snapshot and the
   downloaded archive is hashed before use; a mismatch is fatal. Normalization
   reads members directly without trusting a mutable extracted directory.
-- `adapter.kind` must be `COCO_JSON_SCENES` or
-  `ISOLATED_CARD_FOLDERS`. The manifest explicitly binds the annotation member
+- `adapter.kind` must be `COCO_JSON_SCENES`, `ISOLATED_CARD_FOLDERS`, or
+  `YOLO_SCENES`. The manifest explicitly binds the annotation member
   when applicable, image prefix, and complete source-label-to-`CARD_LABELS`
   map. Unsafe members, archive links, unmapped labels, and other formats fail
   closed.
@@ -49,8 +61,9 @@ attribution will be added here verbatim before any model can be promoted.
 
 ## Model release and dependency notice
 
-The Android application currently contains no card-recognition model or
-third-party card imagery. A future model may be promoted only when the strict
+The Android release application currently contains no card-recognition model
+or third-party card imagery. The experimental model is isolated to the debug
+source set. A future production model may be promoted only when the strict
 manifest parser accepts every source and the release receipt cryptographically
 binds that manifest, the frozen split and holdout, the selected exported model,
 and its validation report. Each declared source archive must also exist at its

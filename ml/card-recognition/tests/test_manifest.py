@@ -210,14 +210,32 @@ def test_evidence_text_must_identify_the_source_or_publisher(tmp_path: Path) -> 
         load_source_manifest(_write_manifest(tmp_path, source))
 
 
-@pytest.mark.parametrize("license_kind", ["MIT", "Apache-2.0", "CC-BY-4.0", "CC-BY-SA-4.0"])
-def test_permissive_or_commercial_license_is_not_public_domain(
+def test_cc_by_4_is_accepted_with_explicit_distribution_approval(tmp_path: Path) -> None:
+    source = _valid_source()
+    source["license"] = {
+        "kind": "CC-BY-4.0",
+        "evidenceUrl": "https://example.test/cards/license",
+        "evidenceText": "Fixture publisher releases Fixture cards under CC BY 4.0.",
+        "legalToolUrl": "https://creativecommons.org/licenses/by/4.0/",
+    }
+    source.pop("publicDomainApproved")
+    source["licenseApproved"] = True
+
+    parsed = load_source_manifest(_write_manifest(tmp_path, source)).sources[0]
+
+    assert parsed.license.kind == "CC-BY-4.0"
+    assert parsed.distribution_approved is True
+    assert parsed.public_domain_approved is False
+
+
+@pytest.mark.parametrize("license_kind", ["MIT", "Apache-2.0", "CC-BY-SA-4.0"])
+def test_unreviewed_license_kind_is_not_admitted(
     tmp_path: Path, license_kind: str
 ) -> None:
     source = _valid_source()
     source["license"]["kind"] = license_kind
 
-    with pytest.raises(ManifestError, match="CC0 or public-domain"):
+    with pytest.raises(ManifestError, match="permit commercial distribution"):
         load_source_manifest(_write_manifest(tmp_path, source))
 
 

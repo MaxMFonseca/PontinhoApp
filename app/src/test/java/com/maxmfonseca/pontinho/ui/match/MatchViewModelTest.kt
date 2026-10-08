@@ -10,6 +10,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -20,6 +22,71 @@ import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun availabilityEmissionsBeforeRepositoryRestorePreserveSavedScannerContext() = runTest {
+        val storage = ScoringRepository()
+        val saved = SavedStateHandle()
+        val vm = MatchViewModel(storage.snapshot.value!!.id, storage, StandardTestDispatcher(testScheduler), saved, { true })
+        runCurrent(); prepare(vm, storage.ids[0]); advanceUntilIdle()
+        vm.updateScore("17"); vm.openScanner(); advanceUntilIdle()
+        val request = (vm.events.first() as MatchEvent.OpenScanner).request
+        val restoredSaved = SavedStateHandle(saved.keys().associateWith { saved.get<Any?>(it) })
+        val repositoryReady = CompletableDeferred<Unit>()
+        val repo = object : MatchRepository by storage {
+            override fun observeMatch(matchId: MatchId) = flow {
+                repositoryReady.await()
+                emitAll(storage.observeMatch(matchId))
+            }
+        }
+        val availability = MutableStateFlow<com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability>(
+            com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Checking)
+        val restored = MatchViewModel(storage.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            restoredSaved,
+            recognitionAvailable = { availability.value is com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Available },
+            recognitionAvailabilityChanges = availability)
+        runCurrent()
+        assertEquals(saved.get<List<String>>("scoreDialog"), restoredSaved.get<List<String>>("scoreDialog"))
+        assertEquals(request.submissionToken, restoredSaved.get<String>("activeScanToken"))
+        repositoryReady.complete(Unit)
+        runCurrent()
+        assertEquals("17", restored.uiState.value.scoreDialog!!.value)
+        assertTrue(restored.uiState.value.scoreDialog!!.canConfirm)
+        assertFalse(restored.uiState.value.scoreDialog!!.canScan)
+        restored.reconcileScannerNavigation(request.submissionToken)
+        assertEquals(request, restored.validateScanner(com.maxmfonseca.pontinho.ui.navigation.ScannerContext.from(request)))
+        availability.value = com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Available(
+            com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata("fixture", "0".repeat(64),
+                (0..51).map { "card-$it" }, 320, 320, .5f, .5f))
+        runCurrent()
+        assertTrue(restored.uiState.value.scoreDialog!!.canScan)
+        restored.reconcileScannerNavigation(null)
+        restored.openScanner(); advanceUntilIdle()
+        assertEquals(MatchEvent.OpenScanner(request), restored.events.first())
+        assertEquals("17", restored.uiState.value.scoreDialog!!.value)
+    }
+
+    @Test fun pendingAvailabilityAllowsManualEntryAndUpdatesCameraWithoutAnotherUserAction() = runTest {
+        val repo = ScoringRepository()
+        val availability = MutableStateFlow<com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability>(
+            com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Checking)
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            recognitionAvailable = { availability.value is com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Available },
+            recognitionAvailabilityChanges = availability)
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.updateScore("17")
+        assertTrue(vm.uiState.value.scoreDialog!!.canConfirm)
+        assertFalse(vm.uiState.value.scoreDialog!!.canScan)
+        availability.value = com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Available(
+            com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata("fixture", "0".repeat(64),
+                (0..51).map { "card-$it" }, 320, 320, .5f, .5f))
+        runCurrent()
+        assertTrue(vm.uiState.value.scoreDialog!!.canScan)
+        assertEquals("17", vm.uiState.value.scoreDialog!!.value)
+        availability.value = com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability.Checking
+        runCurrent(); vm.confirmScore(); advanceUntilIdle()
+        assertNull(vm.uiState.value.scoreDialog)
+        assertEquals(17, repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[0]]!!.points)
+    }
+
     @Test fun preparedScanIsOneShotAndCancellationPreservesManualContextAcrossRecreation() = runTest {
         val repo = ScoringRepository()
         val saved = SavedStateHandle()
@@ -35,6 +102,7 @@ class MatchViewModelTest {
         val restored = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
             SavedStateHandle(saved.keys().associateWith { saved.get<Any?>(it) }), { true })
         runCurrent()
+        restored.reconcileScannerNavigation(request.submissionToken)
         val restoredEvents = mutableListOf<MatchEvent>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { restored.events.collect { restoredEvents += it } }
         restored.openScanner(); advanceUntilIdle()
@@ -47,6 +115,28 @@ class MatchViewModelTest {
         restored.confirmScore(); advanceUntilIdle()
         assertNull(restored.uiState.value.scoreDialog)
         assertEquals(17, repo.snapshot.value!!.openRound!!.draft.entries[request.participantId]!!.points)
+    }
+
+    @Test fun restoredPendingLaunchWithoutScannerDestinationCanRetrySameContextAndToken() = runTest {
+        val repo = ScoringRepository()
+        val saved = SavedStateHandle()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), saved, { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.updateScore("17"); vm.openScanner(); advanceUntilIdle()
+        // Event was emitted and consumed, but navigation has not completed before process loss.
+        val request = (vm.events.first() as MatchEvent.OpenScanner).request
+        val restored = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            SavedStateHandle(saved.keys().associateWith { saved.get<Any?>(it) }), { true })
+        runCurrent()
+        restored.reconcileScannerNavigation(null)
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { restored.events.collect { events += it } }
+        restored.openScanner(); restored.openScanner(); advanceUntilIdle()
+        assertEquals(listOf(MatchEvent.OpenScanner(request)), events)
+        assertEquals("17", restored.uiState.value.scoreDialog!!.value)
+        restored.reconcileScannerNavigation(request.submissionToken)
+        restored.openScanner(); advanceUntilIdle()
+        assertEquals(1, events.size)
     }
 
     @Test fun unavailableAndStaleScannerLaunchLeaveManualFlowUsable() = runTest {

@@ -47,6 +47,7 @@ android {
     sourceSets.named("test") {
         resources.directories.add("../ml/card-recognition/tests/fixtures/android-release")
     }
+    sourceSets.named("androidTest") { assets.directories.add("$projectDir/schemas") }
 
     lint {
         // The task deliberately pins AGP 9.4.0 and Gradle 9.6.0 as one tested baseline.
@@ -84,6 +85,29 @@ tasks.register("verifyOfflineScannerDependencies") {
 
 room {
     schemaDirectory("$projectDir/schemas")
+}
+
+// Inspect the packaged release artifact, including features implied by CAMERA permission.
+tasks.register("verifyManualOnlyReleaseApk") {
+    dependsOn("assembleRelease")
+    val sdkDirectory = androidComponents.sdkComponents.sdkDirectory
+    val buildToolsVersion = android.buildToolsVersion
+    val apk = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk")
+    inputs.file(apk)
+    doLast {
+        val suffix = if (System.getProperty("os.name").startsWith("Windows")) ".exe" else ""
+        val aapt = sdkDirectory.get().file("build-tools/$buildToolsVersion/aapt$suffix").asFile
+        val process = ProcessBuilder(aapt.absolutePath, "dump", "badging", apk.get().asFile.absolutePath)
+            .redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        check(process.waitFor() == 0) { output }
+        val required = output.lineSequence().map(String::trim).filter { it.startsWith("uses-feature:") || it.startsWith("uses-implied-feature:") }
+            .filter { it.contains("android.hardware.camera") }.toList()
+        check(required.isEmpty()) { "Manual-only devices excluded by release APK: $required" }
+        listOf("android.hardware.camera", "android.hardware.camera.autofocus", "android.hardware.camera.any").forEach { feature ->
+            check(output.contains("uses-feature-not-required: name='$feature'")) { "Missing optional feature $feature" }
+        }
+    }
 }
 
 dependencies {

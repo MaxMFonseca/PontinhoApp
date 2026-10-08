@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -29,6 +30,25 @@ from pontinho_cards.evaluate import (
     prepare_model_input,
 )
 from pontinho_cards.split import write_split_manifests
+
+
+def test_shared_android_equal_confidence_nms_fixtures() -> None:
+    with (Path(__file__).parent / "fixtures/android-release/nms-ties.csv").open() as handle:
+        rows = list(csv.DictReader(handle))
+    for case in dict.fromkeys(row["case"] for row in rows):
+        group = [row for row in rows if row["case"] == case]
+
+        def detection(row):
+            return Detection(row["label"], tuple(float(row[key]) for key in
+                ("left", "top", "right", "bottom")), float(row["confidence"]))
+        expected = detection(next(row for row in group if row["keep"] == "true"))
+        for order in (group, list(reversed(group))):
+            inputs = list(map(detection, order))
+            result = postprocess_detections(inputs, confidence_threshold=.5, iou_threshold=.5)
+            assert result.detections == (expected,), case
+            if case == "exact_tie":
+                assert result.detections[0] is inputs[0]
+
 
 
 def _d(label: str, box: tuple[float, float, float, float], score: float = 0.9) -> Detection:

@@ -5,20 +5,21 @@
 
 ## Stop/go result
 
-No dataset has yet satisfied every admission requirement at the same time: an
-explicit CC0/public-domain statement from the publisher, an immutable source
-revision, a SHA-256 computed from the downloaded archive before extraction,
-annotation provenance, physical-deck grouping, and recorded human approval.
-Consequently, `datasets/sources.json` intentionally contains no source entries.
+Poker Cards Cxcvz was admitted for an attributed CC BY 4.0 experiment at the
+immutable Hugging Face revision
+`921de60dffb6a0ebf7cd88140e38b00ce845ed32`. Its deterministic archive SHA-256
+is `7b236c9caacd2a39dcba9d7f4453a75ac5d2460b35dafaa9bb357c70b6394782`.
+Normalization accepted 1,285 photographed scenes and 5,574 annotations with no
+rejections. This is sufficient for a debug beta, but not for production.
 
 | Release requirement | Audited and reserved | Minimum | Result |
 |---|---:|---:|---|
-| Real, public photographs held out from training | 0 | 200 | Blocked |
-| Unseen physical deck groups in that holdout | 0 | 10 | Blocked |
+| Real, public photographs held out from training | 128 | 200 | Blocked |
+| Unseen physical deck groups in that holdout | 1 | 10 | Blocked |
 
-Training may continue only as an internal experiment. Synthetic images and
-isolated-card crops cannot satisfy the final holdout. No model produced from the
-current manifest is eligible for promotion to the Android app.
+Training may continue only as an experiment. The resulting model may be bundled
+only in a clearly labelled debug build; it is not eligible for production
+promotion.
 
 ## Candidate-source audit
 

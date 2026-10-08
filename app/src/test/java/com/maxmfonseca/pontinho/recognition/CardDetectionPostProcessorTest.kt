@@ -9,6 +9,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CardDetectionPostProcessorTest {
+    @Test fun `shared evaluator fixtures retain the same equal confidence detection`() {
+        val rows = checkNotNull(javaClass.classLoader!!.getResourceAsStream("nms-ties.csv"))
+            .bufferedReader().use { it.readLines() }.drop(1).map { it.split(',') }
+        rows.groupBy { it[0] }.forEach { (name, group) ->
+            fun detection(row: List<String>) = RawCardDetection(row[2].toInt(), row[4].toFloat(),
+                row[5].toFloat(), row[6].toFloat(), row[7].toFloat(), row[8].toFloat())
+            val expected = group.single { it[9] == "true" }
+            for (input in listOf(group, group.reversed())) {
+                val kept = processor.process(input.map(::detection)).cards.single()
+                assertEquals(name, expected[3], CardClassIndex.labels[CardClassIndex.indexOf(kept.card)])
+                assertEquals(name, listOf(expected[5], expected[6], expected[7], expected[8]).map(String::toFloat),
+                    listOf(kept.bounds.left, kept.bounds.top, kept.bounds.right, kept.bounds.bottom))
+            }
+        }
+    }
+
     private val processor = CardDetectionPostProcessor(
         DetectionPostProcessingConfig(
             confidenceThreshold = 0.50f,

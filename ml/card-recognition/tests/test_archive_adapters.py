@@ -43,13 +43,13 @@ def _source(archive: Path, *, adapter: dict[str, object]) -> dict[str, object]:
             "legalToolUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
         },
         "annotationStatus": "BOUNDING_BOXES"
-        if adapter["kind"] == "COCO_JSON_SCENES"
+        if adapter["kind"] in {"COCO_JSON_SCENES", "YOLO_SCENES"}
         else "CLASS_LABELS",
         "attribution": "Publisher",
         "deckGroupId": "deck-a",
         "labels": sorted(set(adapter["labelMap"].values())),
         "provides": {
-            "realScenes": adapter["kind"] == "COCO_JSON_SCENES",
+            "realScenes": adapter["kind"] in {"COCO_JSON_SCENES", "YOLO_SCENES"},
             "isolatedCards": adapter["kind"] == "ISOLATED_CARD_FOLDERS",
             "annotations": True,
             "distinctPhysicalDeckDesigns": 1,
@@ -109,6 +109,36 @@ def test_coco_zip_adapter_reads_verified_snapshot_and_maps_labels(tmp_path: Path
     ]
     assert record["sourceArchiveMember"] == "images/one.png"
     assert record["sourceArchiveMemberSha256"] == hashlib.sha256(image).hexdigest()
+
+
+def test_yolo_adapter_reads_normalized_boxes_and_merges_source_alias(tmp_path: Path) -> None:
+    archive = tmp_path / "cards.tar"
+    image = _png()
+    with tarfile.open(archive, "w") as bundle:
+        for name, payload in (
+            ("data.yaml", b"names: ['10 Diamonds', '59']\n"),
+            ("train/images/one.png", image),
+            ("train/labels/one.txt", b"1 0.5 0.5 0.5 0.5\n"),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            bundle.addfile(info, io.BytesIO(payload))
+    source = _source(
+        archive,
+        adapter={
+            "kind": "YOLO_SCENES",
+            "annotationMember": "data.yaml",
+            "imagePrefix": "train/images",
+            "labelMap": {"10 Diamonds": "10D", "59": "10D"},
+        },
+    )
+
+    record = _run(tmp_path, source)
+
+    assert record["boxes"] == [
+        {"label": "10D", "xmin": 5.0, "ymin": 7.5, "xmax": 15.0, "ymax": 22.5}
+    ]
+    assert record["sourceArchiveMember"] == "train/images/one.png"
 
 
 def _run_coco_document(tmp_path: Path, document: object) -> None:

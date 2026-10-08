@@ -84,7 +84,7 @@ class CardDetectionPostProcessor(
     private val config: DetectionPostProcessingConfig,
 ) {
     fun process(rawDetections: List<RawCardDetection>): CardDetectionPostProcessingResult {
-        val candidates = rawDetections.mapNotNull(::normalize)
+        val candidates = rawDetections.mapIndexedNotNull { index, raw -> normalize(raw)?.copy(sourceIndex = index) }
             .sortedWith(suppressionOrder)
         val retained = mutableListOf<Candidate>()
         candidates.forEach { candidate ->
@@ -139,15 +139,18 @@ class CardDetectionPostProcessor(
         val classIndex: Int,
         val confidence: Float,
         val bounds: NormalizedRect,
+        val sourceIndex: Int = 0,
     )
 
     private companion object {
+        // Shared with evaluate.py: confidence desc, canonical class index, L/T/R/B, input index.
         val suppressionOrder = compareByDescending<Candidate> { it.confidence }
             .thenBy { it.classIndex }
-            .thenBy { it.bounds.top }
             .thenBy { it.bounds.left }
-            .thenBy { it.bounds.bottom }
+            .thenBy { it.bounds.top }
             .thenBy { it.bounds.right }
+            .thenBy { it.bounds.bottom }
+            .thenBy { it.sourceIndex }
 
         val spatialOrder = compareBy<Candidate> { it.bounds.top }
             .thenBy { it.bounds.left }

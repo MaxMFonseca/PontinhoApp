@@ -9,6 +9,9 @@ interface CardRecognitionEngine : AutoCloseable {
 }
 
 interface CardRecognitionEngineProvider : AutoCloseable {
+    /** Production overrides with asynchronous verification; static injected engines use this snapshot. */
+    val availability: kotlinx.coroutines.flow.StateFlow<RecognitionAvailability>
+        get() = kotlinx.coroutines.flow.MutableStateFlow(get().availability)
     fun get(): CardRecognitionEngine
 }
 

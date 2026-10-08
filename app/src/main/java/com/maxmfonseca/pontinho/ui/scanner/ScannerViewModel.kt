@@ -14,6 +14,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.merge
 import java.util.UUID
 
 /**
@@ -36,14 +38,17 @@ class ScannerViewModel(
     private val mutableUiState = MutableStateFlow(restoreState())
     val uiState = mutableUiState.asStateFlow()
     private val eventChannel = Channel<ScannerEvent>(Channel.BUFFERED)
-    val events = eventChannel.receiveAsFlow()
+    private var savedAcknowledged = uiState.value.saved &&
+        savedStateHandle.get<String>(COMPLETION_ACK) == request.submissionToken
+    private val pendingSaved = MutableStateFlow<ScannerEvent.Saved?>(null)
+    /** Saved is a durable pending completion, replayed to each collector until explicitly acknowledged. */
+    val events = merge(eventChannel.receiveAsFlow(), pendingSaved.filterNotNull())
     private var processingJob: Job? = null
     private var generation = 0
     private var closed = false
 
     init {
         transition(mutableUiState.value)
-        if (uiState.value.saved) eventChannel.trySend(savedEvent())
     }
 
     fun beginCapture(source: ScanImageSource) {
@@ -164,7 +169,6 @@ class ScannerViewModel(
                     ))
                 }
                 transition(uiState.value.copy(phase = ScannerPhase.Review, saved = true))
-                eventChannel.trySend(savedEvent())
             } catch (cancelled: CancellationException) {
                 // Keep the saved Saving snapshot on disposal, so recreation offers an exact retry.
                 if (!closed) saveFailed()
@@ -198,6 +202,14 @@ class ScannerViewModel(
         eventChannel.trySend(ScannerEvent.Cancelled)
     }
 
+    /** Called only after repository observation and successful destination handling. */
+    fun acknowledgeSaved(event: ScannerEvent.Saved) {
+        if (!uiState.value.saved || event != savedEvent()) return
+        savedStateHandle[COMPLETION_ACK] = request.submissionToken
+        savedAcknowledged = true
+        pendingSaved.value = null
+    }
+
     private fun savedEvent() = ScannerEvent.Saved(request.matchId, request.roundId, request.participantId)
     private fun total(cards: List<ReviewCard>) = cards.fold(0) { sum, card ->
         Math.addExact(sum, CardValueCalculator.value(card.card, request.indicator))
@@ -206,6 +218,7 @@ class ScannerViewModel(
     private fun transition(state: ScannerUiState) {
         savedStateHandle[SNAPSHOT] = encodeState(state)
         mutableUiState.value = state
+        pendingSaved.value = if (state.saved && !savedAcknowledged) savedEvent() else null
     }
 
     private fun restoreState(): ScannerUiState {
@@ -268,6 +281,7 @@ class ScannerViewModel(
 
     private companion object {
         const val SNAPSHOT = "scanner_snapshot"
+        const val COMPLETION_ACK = "scanner_completion_acknowledged_token"
 
         fun encodeRequest(request: ScanRequest) = Bundle().apply {
             putString("match", request.matchId.value)

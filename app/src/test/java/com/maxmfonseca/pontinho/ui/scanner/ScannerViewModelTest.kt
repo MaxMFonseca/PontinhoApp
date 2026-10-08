@@ -25,6 +25,36 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 @OptIn(ExperimentalCoroutinesApi::class)
 class ScannerViewModelTest {
+    @Test fun consumedSavedRemainsPendingForRetainedCollectorUntilAcknowledged() = runTest {
+        val saved = SavedStateHandle()
+        val repo = FakeMatchRepository()
+        val vm = vm(saved, repo = repo)
+        vm.onPhotoSelected(uri); advanceUntilIdle()
+        vm.confirm(); advanceUntilIdle()
+        val first = mutableListOf<ScannerEvent>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { first += it } }
+        runCurrent()
+        assertEquals(listOf(ScannerEvent.Saved(request.matchId, request.roundId, request.participantId)), first)
+        collector.cancel(); runCurrent()
+        val second = mutableListOf<ScannerEvent>()
+        val replacement = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { second += it } }
+        runCurrent()
+        assertEquals(first, second)
+        vm.confirm(); vm.cancel(); advanceUntilIdle()
+        assertTrue(vm.uiState.value.saved)
+        assertFalse(vm.uiState.value.canConfirm)
+        assertEquals(1, repo.submittedScans.size)
+        vm.acknowledgeSaved(first.single() as ScannerEvent.Saved)
+        replacement.cancel(); runCurrent()
+        val restored = vm(roundTrip(saved), repo = repo)
+        val afterAck = mutableListOf<ScannerEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { restored.events.collect { afterAck += it } }
+        runCurrent()
+        assertTrue(afterAck.isEmpty())
+        assertTrue(restored.uiState.value.saved)
+        assertFalse(restored.uiState.value.canConfirm)
+    }
+
     private val request = ScanRequest(
         MatchId("match"), ParticipantId("participant"), RoundId("round"),
         Indicator(Rank.FIVE, CardColor.RED), submissionToken = "stable-token",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -354,6 +355,16 @@ def test_repository_config_defines_a_bounded_reproducible_training_contract() ->
         "horizontal_flip": True,
         "scale_jitter": True,
     }
+
+
+def test_experimental_beta_config_caps_the_cpu_training_budget() -> None:
+    config = load_training_config(PROJECT_ROOT / "config" / "experimental-beta.yaml")
+
+    assert config.detector_family == "efficientdet_lite0"
+    assert config.labels == CARD_LABELS
+    assert config.epochs == 8
+    assert config.early_stopping_patience == 2
+    assert config.batch_size == 8
 
 
 @pytest.mark.parametrize(
@@ -858,6 +869,27 @@ def test_run_metadata_hashes_every_reproducibility_input_atomically(tmp_path: Pa
     assert (prepared.staging_dir / "resolved-config.yaml").exists()
     assert not prepared.output_dir.exists()
     assert not list(prepared.staging_dir.glob(".*.tmp"))
+
+
+def test_prepare_resolves_relative_images_against_split_manifest(tmp_path: Path) -> None:
+    split_path = _split_document(tmp_path, full_vocabulary=True)
+    document = json.loads(split_path.read_text(encoding="utf-8"))
+    for partition in ("train", "validation"):
+        for record in document["partitions"][partition]:
+            record["path"] = Path(record["path"]).name
+    split_path.write_text(json.dumps(document), encoding="utf-8")
+
+    prepared = prepare_training_run(
+        config_path=PROJECT_ROOT / "config" / "model.yaml",
+        splits_path=split_path,
+        run_id="relative-images",
+        checkpoint_root=tmp_path / "checkpoints",
+        requirements_lock=PROJECT_ROOT / "requirements.lock",
+        git_commit="0123456789abcdef",
+    )
+
+    assert prepared.staging_dir.exists()
+    assert prepared.splits_path == split_path.resolve()
     assert not (prepared.staging_dir / "metrics.json").exists()
     assert not list(prepared.staging_dir.glob("*.ckpt"))
 
@@ -954,6 +986,12 @@ def test_success_publishes_one_selected_checkpoint_and_matching_metrics(
     assert metrics["selectedCheckpoint"] == "selected.weights.h5"
     assert metrics["selectedCheckpointSha256"] == selected_hash
     assert json.loads((prepared.output_dir / "metrics.json").read_text()) == metrics
+    annotations = prepared.output_dir / "annotations.csv"
+    assert annotations.exists()
+    assert {row[0] for row in csv.reader(annotations.read_text().splitlines())} == {
+        "TRAIN",
+        "VAL",
+    }
     assert not prepared.staging_dir.exists()
     assert not list((tmp_path / "checkpoints").glob(".selected-best.*"))
 

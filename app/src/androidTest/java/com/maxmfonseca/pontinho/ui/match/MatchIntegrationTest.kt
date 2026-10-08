@@ -15,6 +15,9 @@ import com.maxmfonseca.pontinho.ui.scanner.ScannerViewModel
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavHostController
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
@@ -40,6 +43,129 @@ class MatchIntegrationTest {
     private val stores = mutableListOf<ViewModelStore>()
     @Before fun setup() { db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java).build() }
     @After fun close() { stores.forEach { it.clear() }; db.close() }
+
+    @Test fun restoredMatchWithoutScannerEntryReconcilesConsumedLaunchAndAllowsRetry() = runBlocking<Unit> {
+        val repository = RoomMatchRepository(db)
+        val id = repository.createMatch(CreateMatch("launch-recreation", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
+        val app = container(repository, scannerAvailable = true, educationSeen = true)
+        lateinit var nav: NavHostController
+        var mounted by mutableStateOf(true)
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            val controller = rememberNavController()
+            SideEffect { nav = controller }
+            if (mounted) PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+        }
+        compose.waitUntil { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
+        lateinit var model: MatchViewModel
+        compose.runOnIdle {
+            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
+            model.addScore(model.uiState.value.players[0].id)
+            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        }
+        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
+        compose.onNodeWithTag("score_input").performTextInput("17")
+        // Remove the navigation collector, then consume the event without creating its destination.
+        compose.runOnIdle { mounted = false }
+        compose.waitForIdle()
+        compose.runOnIdle { model.openScanner() }
+        val request = withTimeout(5_000) { (model.events.first() as MatchEvent.OpenScanner).request }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.runOnIdle { mounted = true }
+        awaitTag("score_input")
+        compose.onNodeWithTag("score_input").assertTextContains("17")
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("scanner_root")
+        compose.runOnIdle {
+            val scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
+            assertEquals(request, scanner.request)
+        }
+        compose.onNodeWithTag("scanner_cancel").performScrollTo().performClick()
+        compose.onNodeWithTag("score_input").assertTextContains("17")
+        assertTrue(repository.observeMatch(id).first()!!.rounds.isEmpty())
+    }
+
+    @Test fun consumedSavedSurvivesCollectorRecreationUntilObservedAndNavigationAcknowledged() = runBlocking<Unit> {
+        val real = RoomMatchRepository(db)
+        val id = real.createMatch(CreateMatch("save-recreation", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
+        val committed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val interruptedObservers = java.util.concurrent.atomic.AtomicInteger()
+        val observationStarted = CompletableDeferred<Unit>()
+        val observationGate = CompletableDeferred<Unit>()
+        val repository = object : MatchRepository by real {
+            override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = flow {
+                if (committed.get()) {
+                    observationStarted.complete(Unit)
+                    try { observationGate.await() }
+                    finally { if (!observationGate.isCompleted) interruptedObservers.incrementAndGet() }
+                }
+                emitAll(real.observeMatch(matchId))
+            }
+            override suspend fun submitScannedScore(command: SubmitScannedScore) {
+                real.submitScannedScore(command)
+                writes.incrementAndGet()
+                committed.set(true)
+            }
+        }
+        val app = container(repository, scannerAvailable = true, educationSeen = true)
+        lateinit var nav: NavHostController
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            val controller = rememberNavController()
+            SideEffect { nav = controller }
+            PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+        }
+        awaitTag("match_root")
+        compose.waitUntil { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
+        lateinit var model: MatchViewModel
+        compose.runOnIdle {
+            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
+            model.addScore(model.uiState.value.players[0].id)
+            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        }
+        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("scanner_root")
+        lateinit var scanner: ScannerViewModel
+        val image = java.io.File.createTempFile("saved-recreation-", ".png", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir)
+        Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).let { bitmap ->
+            image.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+        }
+        try {
+            compose.runOnIdle {
+                scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
+                scanner.onPhotoSelected(Uri.fromFile(image))
+            }
+            compose.waitUntil { scanner.uiState.value.canConfirm }
+            compose.onNodeWithTag("scanner_confirm").performScrollTo().performClick()
+            // This gate is reached only after Saved has been delivered to the NavHost collector.
+            compose.waitUntil(5_000) { observationStarted.isCompleted }
+            assertTrue(scanner.uiState.value.saved)
+            assertNotNull(model.uiState.value.scoreDialog)
+            compose.onNodeWithTag("scanner_confirm").performScrollTo().assertIsNotEnabled()
+            compose.onNodeWithTag("scanner_cancel").performScrollTo().assertIsNotEnabled()
+            restoration.emulateSavedInstanceStateRestore()
+            compose.runOnIdle { assertSame(scanner, ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]) }
+            assertTrue(interruptedObservers.get() > 0)
+            assertTrue(scanner.uiState.value.saved)
+            assertFalse(scanner.uiState.value.canConfirm)
+            androidx.test.espresso.Espresso.pressBack()
+            compose.runOnIdle { assertEquals(Destination.Scanner.route, nav.currentDestination!!.route) }
+            val returns = java.util.concurrent.atomic.AtomicInteger()
+            compose.runOnIdle { nav.addOnDestinationChangedListener { _, destination, _ ->
+                if (destination.route == Destination.Match.route) returns.incrementAndGet()
+            } }
+            observationGate.complete(Unit)
+            compose.waitUntil(5_000) { model.uiState.value.scoreDialog == null }
+            awaitTag("match_root")
+            compose.waitForIdle()
+            compose.runOnIdle { assertEquals(Destination.Match.route, nav.currentDestination!!.route) }
+            assertEquals(1, returns.get())
+            assertEquals(1, writes.get())
+            assertEquals(1, real.observeMatch(id).first()!!.rounds.single().draft.entries.size)
+        } finally { observationGate.complete(Unit); image.delete() }
+    }
 
     @Test fun scannerEducationCancelAndRecreationKeepManualDialogAndStableToken() = runBlocking<Unit> {
         val repo = RoomMatchRepository(db)

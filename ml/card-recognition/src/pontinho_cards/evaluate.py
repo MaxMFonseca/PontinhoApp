@@ -237,7 +237,13 @@ def postprocess_detections(
     iou_threshold: float,
     maximum_card_count: int = 15,
 ) -> PostprocessResult:
-    """Apply caller-supplied thresholds without deduplicating by class label."""
+    """Apply class-agnostic NMS using the Android canonical deterministic order.
+
+    Sort by confidence descending, canonical CARD_LABELS class index ascending,
+    left/top/right/bottom ascending, then original input index. Labels are not
+    sorted lexically. Exact ties retain the first model output. Suppress only
+    when IoU is strictly greater than the threshold (equality survives).
+    """
 
     confidence_threshold = _unit(confidence_threshold, "confidence threshold")
     iou_threshold = _unit(iou_threshold, "IoU threshold")
@@ -249,11 +255,14 @@ def postprocess_detections(
     if any(uncertainty_floor <= item.confidence < confidence_threshold for item in raw):
         flags.append("low_confidence_detection")
     candidates = sorted(
-        (item for item in raw if item.confidence >= confidence_threshold),
-        key=lambda item: (-item.confidence, item.label, item.box),
+        ((index, item) for index, item in enumerate(raw)
+         if item.confidence >= confidence_threshold),
+        key=lambda pair: (
+            -pair[1].confidence, CARD_LABELS.index(pair[1].label), *pair[1].box, pair[0]
+        ),
     )
     kept: list[Detection] = []
-    for candidate in candidates:
+    for _, candidate in candidates:
         # Class-agnostic NMS also removes two competing labels for one physical card.
         if all(_iou(candidate, accepted) <= iou_threshold for accepted in kept):
             kept.append(candidate)
