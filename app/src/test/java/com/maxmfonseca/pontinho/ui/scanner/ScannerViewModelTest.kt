@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModelStore
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.*
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.recognition.RecognitionImageException
 import com.maxmfonseca.pontinho.ui.test.FakeMatchRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -181,18 +182,47 @@ class ScannerViewModelTest {
         assertEquals(Card.Suited(Rank.SIX, Suit.HEARTS), vm.uiState.value.cards.single().card)
     }
 
-    @Test fun emptyDetectionStaysInReviewAndRequiresACardBeforeSaving() = runTest {
+    @Test fun emptyDetectionRequiresANewCaptureAndCannotBecomeAManualScan() = runTest {
         val repo = FakeMatchRepository()
         val vm = vm(engine = FakeEngine(result = result(emptyList())), repo = repo)
         vm.onPhotoSelected(uri); advanceUntilIdle()
-        assertEquals(ScannerPhase.Review, vm.uiState.value.phase)
+        assertEquals(ScannerPhase.Error, vm.uiState.value.phase)
+        assertEquals(ScannerRecovery.Capture, vm.uiState.value.recovery)
         assertFalse(vm.uiState.value.canConfirm)
         assertNotNull(vm.uiState.value.message)
+        assertEquals(ScannerMessage.NoCards, vm.uiState.value.message)
         vm.confirm(); advanceUntilIdle()
         assertTrue(repo.submittedScans.isEmpty())
         vm.addCard(Card.Suited(Rank.ACE, Suit.CLUBS))
-        assertEquals(15, vm.uiState.value.total)
-        assertTrue(vm.uiState.value.canConfirm)
+        assertTrue(vm.uiState.value.cards.isEmpty())
+        assertFalse(vm.uiState.value.canConfirm)
+        vm.retry()
+        assertEquals(ScannerPhase.Capture, vm.uiState.value.phase)
+    }
+
+    @Test fun elevenReturnedCardsRequireRecaptureWithoutSavingPartialHand() = runTest {
+        val repo = FakeMatchRepository()
+        val vm = vm(engine = FakeEngine(result = result(List(11) { candidate() })), repo = repo)
+        vm.onPhotoSelected(uri); advanceUntilIdle()
+        assertEquals(ScannerPhase.Error, vm.uiState.value.phase)
+        assertEquals(ScannerRecovery.Capture, vm.uiState.value.recovery)
+        assertTrue(vm.uiState.value.cards.isEmpty())
+        assertFalse(vm.uiState.value.canConfirm)
+        vm.confirm(); advanceUntilIdle()
+        assertTrue(repo.submittedScans.isEmpty())
+    }
+
+    @Test fun everySupportedCardCountEntersEditableReviewWithoutSaving() = runTest {
+        for (count in 1..10) {
+            val repo = FakeMatchRepository()
+            val vm = vm(engine = FakeEngine(result = result(List(count) { candidate() })), repo = repo)
+            vm.onPhotoSelected(uri); advanceUntilIdle()
+            assertEquals(ScannerPhase.Review, vm.uiState.value.phase)
+            assertEquals(count, vm.uiState.value.cards.size)
+            assertTrue(vm.uiState.value.canEdit)
+            assertTrue(vm.uiState.value.canConfirm)
+            assertTrue(repo.submittedScans.isEmpty())
+        }
     }
 
     @Test fun inferenceFailureCanReturnToCaptureAndRetry() = runTest {
@@ -201,12 +231,51 @@ class ScannerViewModelTest {
         vm.onCameraCaptured(uri); advanceUntilIdle()
         assertEquals(ScannerPhase.Error, vm.uiState.value.phase)
         assertEquals(ScannerRecovery.Capture, vm.uiState.value.recovery)
-        assertFalse(vm.uiState.value.message.orEmpty().contains("private details"))
+        assertEquals(ScannerMessage.RecognitionFailed, vm.uiState.value.message)
         vm.retry()
         assertEquals(ScannerPhase.Capture, vm.uiState.value.phase)
         engine.block = null
         vm.onPhotoSelected(uri); advanceUntilIdle()
         assertEquals(ScannerPhase.Review, vm.uiState.value.phase)
+    }
+
+    @Test fun typedFailuresSurviveRecreationAndOfferCaptureRetryWithoutCardsOrSave() = runTest {
+        val failures = listOf(
+            CardRecognitionFailure.NoCards() to ScannerMessage.NoCards,
+            CardRecognitionFailure.TooManyCards(11) to ScannerMessage.TooManyCards,
+            CardRecognitionFailure.IncompleteCards() to ScannerMessage.IncompleteCards,
+        )
+        for ((failure, message) in failures) {
+            val repo = FakeMatchRepository()
+            val saved = SavedStateHandle()
+            val bitmap = bitmap()
+            val vm = ScannerViewModel(request, saved, FakeEngine(block = { throw failure }), repo,
+                { bitmap }, StandardTestDispatcher(testScheduler))
+            vm.onPhotoSelected(uri); advanceUntilIdle()
+            assertEquals(message, vm.uiState.value.message)
+            assertTrue(bitmap.isRecycled)
+            val restored = vm(roundTrip(saved), repo = repo)
+            assertEquals(message, restored.uiState.value.message)
+            assertEquals(ScannerRecovery.Capture, restored.uiState.value.recovery)
+            assertTrue(restored.uiState.value.cards.isEmpty())
+            assertFalse(restored.uiState.value.canConfirm)
+            restored.confirm(); advanceUntilIdle()
+            assertTrue(repo.submittedScans.isEmpty())
+            assertSafeSavedValue(saved.savedStateProvider().saveState())
+            restored.retry()
+            assertEquals(ScannerPhase.Capture, restored.uiState.value.phase)
+        }
+    }
+
+    @Test fun oversizedImageGetsSpecificRecoveryWithoutRunningInference() = runTest {
+        val engine = FakeEngine()
+        val vm = ScannerViewModel(request, SavedStateHandle(), engine, FakeMatchRepository(),
+            { throw RecognitionImageException.SizeLimitExceeded() }, StandardTestDispatcher(testScheduler))
+        vm.onPhotoSelected(uri); advanceUntilIdle()
+        assertEquals(ScannerMessage.ImageTooLarge, vm.uiState.value.message)
+        assertEquals(ScannerRecovery.Capture, vm.uiState.value.recovery)
+        assertEquals(0, engine.calls)
+        assertFalse(vm.uiState.value.canConfirm)
     }
 
     @Test fun imageDecodeFailureNeverRunsInference() = runTest {
@@ -229,6 +298,7 @@ class ScannerViewModelTest {
         assertEquals(0, engine.calls)
         assertTrue(repo.submittedScans.isEmpty())
         assertEquals(ScannerPhase.Error, vm.uiState.value.phase)
+        assertEquals(ScannerMessage.Unavailable, vm.uiState.value.message)
         assertFalse(vm.uiState.value.canConfirm)
     }
 
@@ -349,6 +419,25 @@ class ScannerViewModelTest {
         assertTrue(restored.uiState.value.saved)
     }
 
+    @Test fun legacySaveFailureRestoresTypedMessageAndFrozenPayload() = runTest {
+        val saved = SavedStateHandle()
+        val repo = FakeMatchRepository(submitScanBlock = { throw java.io.IOException() })
+        val original = vm(saved, repo = repo)
+        original.onPhotoSelected(uri); advanceUntilIdle()
+        original.confirm(); advanceUntilIdle()
+        saved.get<Bundle>("scanner_snapshot")!!.apply {
+            putInt("version", 1)
+            putString("message", "Não foi possível confirmar a gravação. Tente salvar novamente.")
+        }
+        val retryRepo = FakeMatchRepository()
+        val restored = vm(roundTrip(saved), repo = retryRepo)
+        assertEquals(ScannerMessage.SaveFailed, restored.uiState.value.message)
+        assertEquals(original.uiState.value.cards, restored.uiState.value.cards)
+        assertTrue(retryRepo.submittedScans.isEmpty())
+        restored.retry(); advanceUntilIdle()
+        assertEquals(repo.submittedScans.single(), retryRepo.submittedScans.single())
+    }
+
     @Test fun correctionUsesAtomicUpdateAndRetainsCorrectionId() = runTest {
         val saved = SavedStateHandle()
         val repo = FakeMatchRepository()
@@ -398,7 +487,7 @@ class ScannerViewModelTest {
         assertTrue(repo.submittedScans.isEmpty())
         assertTrue(repo.updatedScans.isEmpty())
         assertEquals(ScannerPhase.Capture, restored.uiState.value.phase)
-        assertFalse(restored.uiState.value.message.isNullOrBlank())
+        assertEquals(ScannerMessage.ImageExpired, restored.uiState.value.message)
     }
 
     @Test fun missingRestoredRequestDoesNotSubmitCardsUsingAnotherParticipant() = runTest {
@@ -464,7 +553,7 @@ class ScannerViewModelTest {
         assertSafeSavedValue(saved.savedStateProvider().saveState())
         val restored = vm(roundTrip(saved))
         assertEquals(ScannerPhase.Capture, restored.uiState.value.phase)
-        assertFalse(restored.uiState.value.message.isNullOrBlank())
+        assertEquals(ScannerMessage.ImageExpired, restored.uiState.value.message)
         assertTrue(restored.uiState.value.cards.isEmpty())
         assertFalse(restored.uiState.value.canConfirm)
         vm.cancel(); advanceUntilIdle()
@@ -476,7 +565,7 @@ class ScannerViewModelTest {
         vm.beginCapture(ScanImageSource.Camera)
         val restored = vm(roundTrip(saved))
         assertEquals(ScannerPhase.Capture, restored.uiState.value.phase)
-        assertFalse(restored.uiState.value.message.isNullOrBlank())
+        assertEquals(ScannerMessage.ImageExpired, restored.uiState.value.message)
         assertFalse(restored.uiState.value.awaitingInput)
     }
 
@@ -490,6 +579,7 @@ class ScannerViewModelTest {
         val retryRepo = FakeMatchRepository()
         val restored = vm(roundTrip(saved), repo = retryRepo)
         assertEquals(ScannerRecovery.Save, restored.uiState.value.recovery)
+        assertEquals(ScannerMessage.SaveInterrupted, restored.uiState.value.message)
         assertTrue(retryRepo.submittedScans.isEmpty())
         restored.retry(); advanceUntilIdle()
         assertEquals(originalRepo.submittedScans.single(), retryRepo.submittedScans.single())
@@ -558,7 +648,7 @@ class ScannerViewModelTest {
 
     @Suppress("DEPRECATION") // Recursively inspect all values regardless of their saved-state type.
     private fun assertSafeSavedValue(value: Any?) {
-        assertFalse(value is Bitmap || value is Uri)
+        assertFalse(value is Bitmap || value is Uri || value is ByteArray)
         assertFalse(value is String && value.contains("private-image"))
         when (value) {
             is Bundle -> value.keySet().forEach { assertSafeSavedValue(value.get(it)) }

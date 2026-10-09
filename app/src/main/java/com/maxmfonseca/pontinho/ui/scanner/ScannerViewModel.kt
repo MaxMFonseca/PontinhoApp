@@ -9,6 +9,7 @@ import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.rules.CardValueCalculator
+import com.maxmfonseca.pontinho.recognition.RecognitionImageException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -92,6 +93,9 @@ class ScannerViewModel(
                 val result = engine.recognize(bitmap)
                 ensureActive()
                 if (attempt != generation || closed) return@launch
+                // Enforce capture limits at this boundary too, including alternate engines.
+                if (result.candidates.isEmpty()) throw CardRecognitionFailure.NoCards()
+                if (result.candidates.size > 10) throw CardRecognitionFailure.TooManyCards(result.candidates.size)
                 val cards = result.candidates.map {
                     ReviewCard(UUID.randomUUID().toString(), it.card, it.confidence, it.bounds,
                         it.warnings.toSet(), correctedByUser = false)
@@ -99,15 +103,20 @@ class ScannerViewModel(
                 transition(ScannerUiState(
                     phase = ScannerPhase.Review, source = source, cards = cards,
                     total = total(cards), modelVersion = result.modelVersion,
-                    message = if (cards.isEmpty()) "Nenhuma carta encontrada. Adicione as cartas ou cancele." else null,
                 ))
             } catch (cancelled: CancellationException) {
                 if (attempt == generation && !closed) transition(ScannerUiState())
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 if (attempt == generation && !closed) transition(ScannerUiState(
                     phase = ScannerPhase.Error, recovery = ScannerRecovery.Capture,
-                    message = "Não foi possível reconhecer a imagem. Tente outra foto.",
+                    message = when (failure) {
+                        is CardRecognitionFailure.NoCards -> ScannerMessage.NoCards
+                        is CardRecognitionFailure.TooManyCards -> ScannerMessage.TooManyCards
+                        is CardRecognitionFailure.IncompleteCards -> ScannerMessage.IncompleteCards
+                        is RecognitionImageException.SizeLimitExceeded -> ScannerMessage.ImageTooLarge
+                        else -> ScannerMessage.RecognitionFailed
+                    },
                 ))
             } finally {
                 bitmap?.let { if (!it.isRecycled) it.recycle() }
@@ -123,7 +132,7 @@ class ScannerViewModel(
         if (engine.availability is RecognitionAvailability.Available) return true
         transition(ScannerUiState(
             phase = ScannerPhase.Error, recovery = ScannerRecovery.Capture,
-            message = "O reconhecimento de cartas está indisponível. Use a pontuação manual.",
+            message = ScannerMessage.Unavailable,
         ))
         return false
     }
@@ -181,7 +190,7 @@ class ScannerViewModel(
 
     private fun saveFailed() = transition(uiState.value.copy(
         phase = ScannerPhase.Error, recovery = ScannerRecovery.Save,
-        message = "Não foi possível confirmar a gravação. Tente salvar novamente.",
+        message = ScannerMessage.SaveFailed,
     ))
 
     fun retry() {
@@ -226,7 +235,8 @@ class ScannerViewModel(
         // Never pair old cards with a fallback navigation request or guess missing correction metadata.
         if (restoredRequest?.isFailure == true) return captureRecovery()
         return runCatching {
-            require(saved.getInt("version") == 1)
+            val version = saved.getInt("version")
+            require(version in 1..2)
             val phase = ScannerPhase.valueOf(saved.requiredString("phase"))
             val awaiting = saved.requiredBoolean("awaiting")
             if (phase == ScannerPhase.Processing || awaiting) return@runCatching captureRecovery()
@@ -236,7 +246,14 @@ class ScannerViewModel(
                 phase = phase,
                 source = saved.getString("source")?.let(ScanImageSource::valueOf),
                 cards = cards, total = total(cards), modelVersion = saved.getString("model"),
-                message = saved.getString("message"),
+                message = if (version == 2) saved.getString("message")?.let(ScannerMessage::valueOf)
+                    else when {
+                        saved.getString("message") == null -> null
+                        saved.getString("recovery") == ScannerRecovery.Save.name -> ScannerMessage.SaveFailed
+                        phase == ScannerPhase.Error -> ScannerMessage.RecognitionFailed
+                        phase == ScannerPhase.Capture -> ScannerMessage.ImageExpired
+                        else -> null
+                    },
                 recovery = saved.getString("recovery")?.let(ScannerRecovery::valueOf),
                 submissionStarted = saved.requiredBoolean("started"), saved = saved.requiredBoolean("saved"),
             )
@@ -249,22 +266,22 @@ class ScannerViewModel(
             }
             if (phase == ScannerPhase.Saving) state.copy(
                 phase = ScannerPhase.Error, recovery = ScannerRecovery.Save,
-                message = "A gravação foi interrompida. Confirme novamente para concluir.",
+                message = ScannerMessage.SaveInterrupted,
             ) else state
         }.getOrElse { captureRecovery() }
     }
 
     private fun captureRecovery() = ScannerUiState(
-        message = "A imagem não está mais disponível. Tire ou selecione outra foto.",
+        message = ScannerMessage.ImageExpired,
     )
 
     private fun encodeState(state: ScannerUiState) = Bundle().apply {
-        putInt("version", 1)
+        putInt("version", 2)
         putBundle("request", encodeRequest(request))
         putString("phase", state.phase.name)
         putString("source", state.source?.name)
         putString("model", state.modelVersion)
-        putString("message", state.message)
+        putString("message", state.message?.name)
         putString("recovery", state.recovery?.name)
         putBoolean("awaiting", state.awaitingInput)
         putBoolean("started", state.submissionStarted)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import errno
 import hashlib
 import io
 import json
@@ -27,6 +28,8 @@ import yaml
 from PIL import Image
 
 from pontinho_cards.labels import CARD_LABELS
+from pontinho_cards.model_resize import RESIZE_POLICY, resize_rgb
+from pontinho_cards.native_nms import NMS_POLICY
 from pontinho_cards.secure_io import (
     SecureReadError,
     _open_absolute_directory,
@@ -108,6 +111,8 @@ def snapshot_detector_inputs(
 ) -> dict[str, tuple[DetectorRecord, ...]]:
     """Verify both partitions fully before writing any immutable source snapshot."""
     snapshots = []
+    if inputs.evidence_mode not in {"DECK_DISJOINT", "EXPERIMENTAL_ONE_DECK"}:
+        raise TrainingConfigError("unknown evidence mode")
     identities: dict[str, set[str]] = {}
     for partition in _PARTITIONS:
         records = inputs.detector_partitions.get(partition)
@@ -125,10 +130,11 @@ def snapshot_detector_inputs(
             seen.add(record.image_id)
             keys = {
                 f"id:{record.image_id}",
-                f"deck:{record.deck_group_id}",
                 f"split:{record.split_group_id}",
                 f"hash:{record.source_image_sha256}",
             }
+            if inputs.evidence_mode != "EXPERIMENTAL_ONE_DECK":
+                keys.add(f"deck:{record.deck_group_id}")
             identities.setdefault(partition, set()).update(keys)
             if any(type(v) is not int or v <= 0 for v in (record.width, record.height)):
                 raise TrainingConfigError("detector dimensions must be positive integers")
@@ -427,7 +433,6 @@ def _fit_detector(partitions, config, staging, one_batch_smoke):
 
 
 def _infer_detector(path, inspection, records):
-    import numpy as np
     import tensorflow as tf
 
     from pontinho_cards.evaluate import prepare_model_input
@@ -439,9 +444,9 @@ def _infer_detector(path, inspection, records):
     result = {}
     for record in records:
         with Image.open(io.BytesIO(secure_read_bytes(record.path))) as image:
-            pixels = np.asarray(image.convert("RGB").resize((320, 320), Image.Resampling.BILINEAR))
+            pixels = resize_rgb(image, (320, 320))
         prepared = prepare_model_input(pixels, input_detail, inspection)
-        interpreter.set_tensor(int(input_detail["index"]), np.expand_dims(prepared, 0))
+        interpreter.set_tensor(int(input_detail["index"]), prepared[None, ...])
         interpreter.invoke()
         outputs = {
             d["semantic"]: interpreter.get_tensor(int(output_by_name[d["tensorName"]]["index"]))[0]
@@ -464,7 +469,14 @@ def _infer_detector(path, inspection, records):
     return result
 
 
-def _publish_candidate(staging: Path, root: Path, run_id: str, filenames: Sequence[str]) -> Path:
+def _publish_candidate(
+    staging: Path,
+    root: Path,
+    run_id: str,
+    filenames: Sequence[str],
+    *,
+    allow_portable_fallback: bool = False,
+) -> Path:
     """Copy into a held parent then atomically rename without replacing any run."""
     parent, descriptors = _open_absolute_directory(root, create=True)
     temporary = f".detector-{uuid.uuid4().hex}"
@@ -480,7 +492,12 @@ def _publish_candidate(staging: Path, root: Path, run_id: str, filenames: Sequen
                 name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=target
             )
             with os.fdopen(descriptor, "wb") as handle:
-                handle.write(payload)
+                # DrvFS rejects some large single writes with EINVAL. Bounded
+                # chunks preserve the exact bytes and work on both native Linux
+                # and the Windows-backed experimental workspace.
+                view = memoryview(payload)
+                for offset in range(0, len(view), 1024 * 1024):
+                    handle.write(view[offset : offset + 1024 * 1024])
                 handle.flush()
                 os.fsync(handle.fileno())
         os.fsync(target)
@@ -488,7 +505,29 @@ def _publish_candidate(staging: Path, root: Path, run_id: str, filenames: Sequen
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.renameat2(parent, temporary.encode(), parent, run_id.encode(), 1) != 0:
             error = ctypes.get_errno()
-            raise OSError(error, os.strerror(error))
+            if not allow_portable_fallback or error not in {errno.EINVAL, errno.ENOSYS}:
+                raise OSError(error, os.strerror(error))
+            # DrvFS does not implement renameat2(RENAME_NOREPLACE). Experimental
+            # candidates may use a process-coordinated fallback, while production
+            # publication remains restricted to the atomic primitive above.
+            lock_name = f".{run_id}.publication-lock"
+            lock = os.open(
+                lock_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent,
+            )
+            os.close(lock)
+            try:
+                try:
+                    os.stat(run_id, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise FileExistsError(run_id)
+                os.rename(temporary, run_id, src_dir_fd=parent, dst_dir_fd=parent)
+            finally:
+                os.unlink(lock_name, dir_fd=parent)
         created = False
         os.fsync(parent)
     finally:
@@ -571,6 +610,9 @@ def train_detector(
         contract = {
             "schemaVersion": 1,
             "kind": "ONE_CLASS_DETECTOR_CANDIDATE",
+            "evidenceMode": inputs.evidence_mode,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "runId": run_id,
             "labels": ["card"],
             "inputSize": [320, 320],
@@ -601,8 +643,11 @@ def train_detector(
         )
         metrics = {
             "schemaVersion": 1,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "status": status,
             "partition": "validation",
+            "evidenceMode": inputs.evidence_mode,
             "history": history,
             "variants": measured,
         }
@@ -632,6 +677,7 @@ def train_detector(
             else project / "artifacts/detector-candidates",
             run_id,
             filenames,
+            allow_portable_fallback=inputs.evidence_mode == "EXPERIMENTAL_ONE_DECK",
         )
     return DetectorCandidate(
         output / "card_detector.float16.tflite",

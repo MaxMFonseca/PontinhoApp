@@ -22,6 +22,8 @@ from PIL import Image
 
 from pontinho_cards.classifier_scores import normalize_classifier_output
 from pontinho_cards.labels import CARD_LABELS
+from pontinho_cards.model_resize import RESIZE_POLICY, resize_rgb
+from pontinho_cards.native_nms import NMS_POLICY
 from pontinho_cards.secure_io import safe_name, secure_read_bytes, secure_write_bytes
 from pontinho_cards.train import TrainingConfigError, _git_commit, _save_selected_weights
 from pontinho_cards.train_detector import _fit_and_restore_best, _publish_candidate
@@ -132,6 +134,8 @@ def load_classifier_config(path: Path) -> ClassifierTrainingConfig:
 def snapshot_classifier_inputs(inputs: TwoStageInputManifest, staging: Path):
     """Validate Stage 2 content-addressed crops before writing any source snapshot."""
     pending, identities = [], {}
+    if inputs.evidence_mode not in {"DECK_DISJOINT", "EXPERIMENTAL_ONE_DECK"}:
+        raise TrainingConfigError("unknown evidence mode")
     for partition in _PARTITIONS:
         records = inputs.classifier_partitions.get(partition)
         if not isinstance(records, tuple) or not records:
@@ -168,11 +172,12 @@ def snapshot_classifier_inputs(inputs: TwoStageInputManifest, staging: Path):
             labels.add(record.label)
             identities[partition].update(
                 (
-                    f"deck:{record.deck_group_id}",
                     f"source:{record.source_image_sha256}",
                     f"crop:{match[4]}",
                 )
             )
+            if inputs.evidence_mode != "EXPERIMENTAL_ONE_DECK":
+                identities[partition].add(f"deck:{record.deck_group_id}")
             bounds = record.source_bounds
             if (
                 len(bounds) != 4
@@ -311,12 +316,7 @@ def measure_classifier_predictions(records, probabilities):
 
 def _pixels(record):
     with Image.open(io.BytesIO(secure_read_bytes(record.path))) as image:
-        return (
-            np.asarray(
-                image.convert("RGB").resize((224, 224), Image.Resampling.BILINEAR), dtype=np.float32
-            )
-            / 255.0
-        )
+        return resize_rgb(image, (224, 224)).astype(np.float32) / 255.0
 
 
 def _fit_classifier(partitions, config, staging, one_batch_smoke):
@@ -439,9 +439,7 @@ def _infer_classifier(path, records):
         interpreter.invoke()
         rows.append(interpreter.get_tensor(output_detail["index"])[0])
     quantization = (
-        output_detail["quantization"]
-        if np.issubdtype(output_detail["dtype"], np.integer)
-        else None
+        output_detail["quantization"] if np.issubdtype(output_detail["dtype"], np.integer) else None
     )
     scores = normalize_classifier_output(rows, quantization=quantization)
     return _probabilities(scores, len(records))
@@ -500,7 +498,10 @@ def train_classifier(
             }
         metrics = {
             "schemaVersion": 1,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "partition": "validation",
+            "evidenceMode": inputs.evidence_mode,
             "history": history,
             "variants": measured,
             "status": "SMOKE_ONLY"
@@ -518,6 +519,9 @@ def train_classifier(
         contract = {
             "schemaVersion": 1,
             "kind": "CARD_CLASSIFIER_CANDIDATE",
+            "evidenceMode": inputs.evidence_mode,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "runId": run_id,
             "labels": list(CARD_LABELS),
             "inputSize": [224, 224],
@@ -555,6 +559,7 @@ def train_classifier(
             else project / "artifacts/classifier-candidates",
             run_id,
             filenames,
+            allow_portable_fallback=inputs.evidence_mode == "EXPERIMENTAL_ONE_DECK",
         )
     return ClassifierCandidate(
         output / "card_classifier.float16.tflite",

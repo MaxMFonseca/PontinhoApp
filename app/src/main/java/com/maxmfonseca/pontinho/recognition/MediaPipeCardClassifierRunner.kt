@@ -13,8 +13,10 @@ import java.nio.ByteBuffer
 internal class MediaPipeCardClassifierRunner private constructor(
     private val classifier: ImageClassifier,
     private val modelBuffer: ByteBuffer,
+    private val inputWidth: Int,
+    private val inputHeight: Int,
 ) : CardClassifierRunner {
-    override fun classify(bitmap: Bitmap): RawCardClassification = withOwnedMediaPipeImage(bitmap) { image ->
+    override fun classify(bitmap: Bitmap): RawCardClassification = withOwnedMediaPipeImage(bitmap, inputWidth, inputHeight) { image ->
         val categories = classifier.classify(image).classificationResult().classifications().single().categories()
         canonicalClassification(categories)
     }
@@ -24,7 +26,8 @@ internal class MediaPipeCardClassifierRunner private constructor(
         fun create(context: Context, model: ByteArray, metadata: RecognitionModelBundleMetadata): MediaPipeCardClassifierRunner {
             require(metadata.classifier.labels == CardClassIndex.labels)
             val setup = MediaPipeCardClassifierSetup(directModelBuffer(model))
-            return MediaPipeCardClassifierRunner(ImageClassifier.createFromOptions(context, setup.buildOptions()), setup.modelBuffer)
+            return MediaPipeCardClassifierRunner(ImageClassifier.createFromOptions(context, setup.buildOptions()), setup.modelBuffer,
+                metadata.classifier.inputWidth, metadata.classifier.inputHeight)
         }
     }
 }

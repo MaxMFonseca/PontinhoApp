@@ -348,6 +348,10 @@ def test_published_candidate_binds_exact_models_metrics_and_training_inputs(tmp_
     )
     contract = json.loads(candidate.contract_path.read_text())
     metrics = json.loads(candidate.validation_metrics_path.read_text())
+    assert contract["resizePolicy"] == metrics["resizePolicy"]
+    assert contract["nmsPolicy"] == metrics["nmsPolicy"]
+    assert contract["nmsPolicy"]["thresholdRepresentation"] == "binary64-to-binary32-exact-rational"
+    assert contract["resizePolicy"]["algorithm"] == "point-bilinear"
     assert (
         contract["validationMetricsSha256"]
         == hashlib.sha256(candidate.validation_metrics_path.read_bytes()).hexdigest()

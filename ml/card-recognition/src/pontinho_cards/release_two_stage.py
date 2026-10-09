@@ -22,6 +22,9 @@ from pontinho_cards.evaluate_two_stage import (
     validate_selection,
 )
 from pontinho_cards.labels import CARD_LABELS
+from pontinho_cards.mediapipe_contract import NATIVE_BOX_POLICY
+from pontinho_cards.model_resize import RESIZE_POLICY, require_resize_policy
+from pontinho_cards.native_nms import NMS_POLICY, require_nms_policy
 from pontinho_cards.secure_io import safe_name, secure_read_bytes, secure_write_bytes
 from pontinho_cards.train_classifier import ClassifierCandidate
 from pontinho_cards.train_detector import DetectorCandidate, _publish_candidate
@@ -243,6 +246,8 @@ def promote_two_stage_release(inputs, destination):
     report_hash = digest(report_payload)
     if report_hash != inputs.evaluation.sha256:
         raise ValueError("report hash mismatch")
+    require_resize_policy(report.get("resizePolicy"))
+    require_nms_policy(report.get("nmsPolicy"))
     with tempfile.TemporaryDirectory(prefix="pontinho-release-check-") as directory:
         snapshots = _snapshots(inputs.detector, inputs.classifier, Path(directory))
         selection, validation = validate_selection(
@@ -253,6 +258,9 @@ def promote_two_stage_release(inputs, destination):
         )
         identity = holdout_photo_identity(holdout)
         claim = {
+            "boxPolicy": NATIVE_BOX_POLICY,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "holdoutPartitionSha256": holdout["testPartitionSha256"],
             "holdoutIdentity": identity,
             "holdoutManifestSha256": holdout_hash,

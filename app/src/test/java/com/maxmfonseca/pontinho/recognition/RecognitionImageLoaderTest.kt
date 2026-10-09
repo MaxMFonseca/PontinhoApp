@@ -21,11 +21,11 @@ class RecognitionImageLoaderTest {
     private val uri = Uri.parse("content://fixture/image")
 
     @Test
-    fun `bounds are decoded before pixels and sample is orientation aware`() {
+    fun `bounds are decoded before original pixels and limits are orientation aware`() {
         val events = mutableListOf<String>()
         val opener = TrackingOpener(events)
         val decoder = FakeDecoder(
-            bounds = ImageBounds(8_000, 4_000),
+            bounds = ImageBounds(500, 250),
             decoded = coloredBitmap(500, 250),
             events = events,
         )
@@ -38,8 +38,8 @@ class RecognitionImageLoaderTest {
 
         val result = loader.load(uri)
 
-        assertEquals(listOf("open", "bounds", "close", "open", "orientation", "close", "open", "decode:16", "close"), events)
-        assertEquals(16, decoder.sampleSize)
+        assertEquals(listOf("open", "bounds", "close", "open", "orientation", "close", "open", "decode:1", "close"), events)
+        assertEquals(1, decoder.sampleSize)
         assertEquals(250, result.width)
         assertEquals(500, result.height)
         assertEquals(Bitmap.Config.ARGB_8888, result.config)
@@ -267,7 +267,7 @@ class RecognitionImageLoaderTest {
         var recycleCalls = 0
         val loader = RecognitionImageLoader(
             opener = TrackingOpener(mutableListOf()),
-            decoder = FakeDecoder(ImageBounds(16, 16), oversized, mutableListOf()),
+            decoder = FakeDecoder(ImageBounds(4, 4), oversized, mutableListOf()),
             orientationReader = { _, _ -> ExifTransform.NORMAL },
             limits = ImageDecodeLimits(maxWidth = 4, maxHeight = 4, maxPixels = 16),
             bitmapRecycler = {
@@ -302,11 +302,14 @@ class RecognitionImageLoaderTest {
     }
 
     @Test
-    fun `real generated fixtures exercise BitmapFactory sampling and EXIF rotate and mirror`() {
+    fun `real generated fixtures retain original dimensions or reject size and apply EXIF rotate and mirror`() {
         val png = fixtureBytes("recognition/generated-128x64.png.b64")
-        val sampled = realLoader(png, ImageDecodeLimits(maxWidth = 16, maxHeight = 16, maxPixels = 128)).load(uri)
-        assertEquals(16, sampled.width)
-        assertEquals(8, sampled.height)
+        assertThrows(RecognitionImageException.SizeLimitExceeded::class.java) {
+            realLoader(png, ImageDecodeLimits(maxWidth = 16, maxHeight = 16, maxPixels = 128)).load(uri)
+        }
+        val sampled = realLoader(png).load(uri)
+        assertEquals(128, sampled.width)
+        assertEquals(64, sampled.height)
         assertEquals(Bitmap.Config.ARGB_8888, sampled.config)
         sampled.recycle()
 

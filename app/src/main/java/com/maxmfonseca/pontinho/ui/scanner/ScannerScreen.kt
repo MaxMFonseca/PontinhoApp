@@ -38,6 +38,7 @@ fun ScannerScreen(
     cameraError: Boolean = false,
     captureEnabled: Boolean = true,
     actions: ScannerActions = ScannerActions(),
+    recognitionExperimental: Boolean = false,
     cameraPreview: @Composable () -> Unit = {},
 ) {
     var editing by remember { mutableStateOf<ReviewCard?>(null) }
@@ -50,12 +51,13 @@ fun ScannerScreen(
         if (!recognitionAvailable) {
             Notice(R.string.scanner_unavailable, "scanner_unavailable")
         } else {
+            if (recognitionExperimental) Notice(R.string.scanner_experimental, "scanner_experimental")
             when (state.phase) {
                 ScannerPhase.Capture -> {
-                    Text(stringResource(R.string.scanner_capture_help))
+                    Notice(ScannerMessage.CaptureGuidance.stringResourceId(), "scanner_capture_help")
                     if (cameraPermissionDenied) Notice(R.string.scanner_permission_denied, "scanner_permission_denied")
                     if (cameraError) Notice(R.string.scanner_camera_error, "scanner_camera_error")
-                    if (state.message != null) Notice(R.string.scanner_image_expired, "scanner_image_expired")
+                    state.message?.let { Notice(it.stringResourceId(), "scanner_image_expired") }
                     cameraPreview()
                     Action(R.string.scanner_capture, "scanner_capture", captureEnabled && !state.awaitingInput, actions.onCapture)
                     Action(R.string.scanner_import, "scanner_import", !state.awaitingInput, actions.onImport)
@@ -66,8 +68,9 @@ fun ScannerScreen(
                 }
                 else -> {
                     if (state.phase == ScannerPhase.Error) {
-                        Notice(if (state.recovery == ScannerRecovery.Save) R.string.scanner_save_error else
-                            R.string.scanner_recognition_error, "scanner_error")
+                        val message = state.message ?: if (state.recovery == ScannerRecovery.Save)
+                            ScannerMessage.SaveFailed else ScannerMessage.RecognitionFailed
+                        Notice(message.stringResourceId(), "scanner_error")
                         Action(R.string.scanner_retry, "scanner_retry", true, actions.onRetry)
                     }
                     if (state.phase != ScannerPhase.Error || state.recovery == ScannerRecovery.Save) {
@@ -104,6 +107,19 @@ fun ScannerScreen(
             adding = false; editing = null
         })
     }
+}
+
+internal fun ScannerMessage.stringResourceId(): Int = when (this) {
+    ScannerMessage.CaptureGuidance -> R.string.scanner_capture_help
+    ScannerMessage.NoCards -> R.string.scanner_no_cards
+    ScannerMessage.TooManyCards -> R.string.scanner_too_many_cards
+    ScannerMessage.IncompleteCards -> R.string.scanner_incomplete_cards
+    ScannerMessage.ImageTooLarge -> R.string.scanner_image_too_large
+    ScannerMessage.Unavailable -> R.string.scanner_unavailable
+    ScannerMessage.RecognitionFailed -> R.string.scanner_recognition_error
+    ScannerMessage.SaveFailed -> R.string.scanner_save_error
+    ScannerMessage.SaveInterrupted -> R.string.scanner_save_interrupted
+    ScannerMessage.ImageExpired -> R.string.scanner_image_expired
 }
 
 @Composable

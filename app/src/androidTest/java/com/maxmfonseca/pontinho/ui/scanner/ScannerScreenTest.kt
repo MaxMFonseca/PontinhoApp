@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.Density
@@ -23,6 +25,8 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import android.content.res.Configuration
+import java.util.Locale
 
 class ScannerScreenTest {
     @get:Rule val compose = createComposeRule()
@@ -31,6 +35,64 @@ class ScannerScreenTest {
         if (low) setOf(RecognitionWarning.LOW_CONFIDENCE) else emptySet(), false)
     private fun review() = ScannerUiState(phase = ScannerPhase.Review,
         cards = listOf(card("first", true), card("second")), total = 20, modelVersion = "fake")
+
+    @Test fun experimentalWarningRemainsVisibleFromCaptureThroughReview() {
+        var state by mutableStateOf(ScannerUiState())
+        var experimental by mutableStateOf(true)
+        compose.setContent { ScannerScreen(state, recognitionExperimental = experimental) }
+        compose.onNodeWithTag("scanner_experimental").assertExists()
+        compose.runOnIdle { state = review() }
+        compose.onNodeWithTag("scanner_experimental").assertExists()
+        compose.runOnIdle { experimental = false }
+        compose.onNodeWithTag("scanner_experimental").assertDoesNotExist()
+    }
+
+    @Test fun portugueseCaptureLimitsAndRecoveryAreLocalized() = localizedRecovery(
+        "pt-BR", listOf("no máximo 10", "separadas", "inteiras", "reflexos", "duas fotos"),
+        listOf("Nenhuma carta", "Mais de 10 cartas", "cortadas", "resolução menor"),
+        "baixa confiança", "indisponível",
+    )
+
+    @Test fun englishCaptureLimitsAndRecoveryAreLocalized() = localizedRecovery(
+        "en-US", listOf("at most 10", "separated", "fully inside", "glare", "two photos"),
+        listOf("No cards", "More than 10 cards", "cut off", "lower resolution"),
+        "low confidence", "unavailable",
+    )
+
+    private fun localizedRecovery(locale: String, guidance: List<String>, errors: List<String>, warning: String, unavailable: String) {
+        var state by mutableStateOf(ScannerUiState())
+        var available by mutableStateOf(true)
+        var manual = 0
+        var retries = 0
+        compose.setContent {
+            val base = LocalContext.current
+            val configuration = Configuration(base.resources.configuration).apply { setLocale(Locale.forLanguageTag(locale)) }
+            val localized = base.createConfigurationContext(configuration)
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides configuration) {
+                ScannerScreen(state, recognitionAvailable = available, actions = ScannerActions(
+                    onRetry = { retries++; state = ScannerUiState() }, onManual = { manual++ }))
+            }
+        }
+        guidance.forEach { compose.onNodeWithTag("scanner_capture_help").assertTextContains(it, substring = true) }
+        listOf(ScannerMessage.NoCards, ScannerMessage.TooManyCards, ScannerMessage.IncompleteCards,
+            ScannerMessage.ImageTooLarge).zip(errors).forEach { (message, text) ->
+            compose.runOnIdle { state = ScannerUiState(phase = ScannerPhase.Error,
+                recovery = ScannerRecovery.Capture, message = message) }
+            compose.onNodeWithTag("scanner_error").assertTextContains(text, substring = true)
+            compose.onNodeWithTag("scanner_confirm").assertDoesNotExist()
+            compose.onNodeWithTag("scanner_retry").performScrollTo().performClick()
+            compose.onNodeWithTag("scanner_capture").performScrollTo().assertIsEnabled()
+        }
+        compose.runOnIdle { assertEquals(4, retries); state = review() }
+        compose.onNodeWithTag("scanner_warning_first").assertTextContains(warning, substring = true)
+        compose.onNodeWithTag("scanner_edit_first").performScrollTo().performClick()
+        compose.onNodeWithTag("scanner_rank_ACE").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("scanner_editor_cancel").performScrollTo().performClick()
+        compose.runOnIdle { state = ScannerUiState(); available = false }
+        compose.onNodeWithTag("scanner_unavailable").assertTextContains(unavailable, substring = true)
+        compose.onNodeWithTag("scanner_manual").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, manual) }
+    }
 
     @Test fun disposingAndRecreatingDeviceScreenDuringDecodePreservesSourceUntilReview() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -148,7 +210,7 @@ class ScannerScreenTest {
         compose.onNodeWithTag("scanner_add").assertDoesNotExist()
     }
 
-    @Test fun emptyRecognitionAllowsAddingButCannotConfirm() {
+    @Test fun removingAllReviewCardsAllowsAddingButCannotConfirm() {
         compose.setContent { ScannerScreen(review().copy(cards = emptyList(), total = 0)) }
         compose.onNodeWithTag("scanner_empty").assertExists()
         compose.onNodeWithTag("scanner_confirm").performScrollTo().assertIsNotEnabled()

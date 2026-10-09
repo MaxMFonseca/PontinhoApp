@@ -1,0 +1,384 @@
+{
+  "bindings": {
+    "classifier": {
+      "contractSha256": "9b57d9c88719b230199615897d43427e2e4ed16380be7d955a4196269d2bb298",
+      "modelHashes": {
+        "float16": "d59ea7b2b3b5d496becc74a9d3936e10a9f21efcb9a3873fd881879a175b1a2f",
+        "int8": "5dc1a3ff3de5eed3c9c184240ca51477148b231fa251d056e23d89729dd78731"
+      }
+    },
+    "detector": {
+      "contractSha256": "d3406b71928d51a08af1e12734c2e9848d91edebacf6c9242de204f8ecc049f5",
+      "modelHashes": {
+        "float16": "d79c3eadfb91c28e5a16064f1617145ee1840a7cb14f65ff4cbbdbacb44a0e2f",
+        "int8": "50726f92bcd4339d0f9adaf50fb8657ba988bd9996dcc56f0c5103325da97582"
+      }
+    }
+  },
+  "boxPolicy": "mediapipe-integer-interior-1px-v1",
+  "classifier": {
+    "calibration": {
+      "evaluation": "in-sample-validation-not-holdout-quality",
+      "method": "temperature-scaling",
+      "nllAfter": 0.5841582187501526,
+      "nllBefore": 0.6165919121208443,
+      "partition": "validation",
+      "sampleCount": 838,
+      "scoreTransform": "softmax(log(max(raw_probability,1e-12))/temperature)",
+      "temperature": 0.7578582832551991
+    },
+    "customOps": [],
+    "filename": "card_classifier.tflite",
+    "input": {
+      "dtype": "float32",
+      "name": "serving_default_images:0",
+      "quantization": [
+        0.0,
+        0
+      ],
+      "shape": [
+        1,
+        224,
+        224,
+        3
+      ],
+      "shapeSignature": [
+        1,
+        224,
+        224,
+        3
+      ]
+    },
+    "interpreterInvocation": "passed",
+    "labels": [
+      "AC",
+      "2C",
+      "3C",
+      "4C",
+      "5C",
+      "6C",
+      "7C",
+      "8C",
+      "9C",
+      "10C",
+      "JC",
+      "QC",
+      "KC",
+      "AD",
+      "2D",
+      "3D",
+      "4D",
+      "5D",
+      "6D",
+      "7D",
+      "8D",
+      "9D",
+      "10D",
+      "JD",
+      "QD",
+      "KD",
+      "AH",
+      "2H",
+      "3H",
+      "4H",
+      "5H",
+      "6H",
+      "7H",
+      "8H",
+      "9H",
+      "10H",
+      "JH",
+      "QH",
+      "KH",
+      "AS",
+      "2S",
+      "3S",
+      "4S",
+      "5S",
+      "6S",
+      "7S",
+      "8S",
+      "9S",
+      "10S",
+      "JS",
+      "QS",
+      "KS"
+    ],
+    "modelSha256": "d59ea7b2b3b5d496becc74a9d3936e10a9f21efcb9a3873fd881879a175b1a2f",
+    "modelSizeBytes": 6889898,
+    "normalization": {
+      "mean": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "std": [
+        255.0,
+        255.0,
+        255.0
+      ]
+    },
+    "outputs": [
+      {
+        "dtype": "float32",
+        "name": "StatefulPartitionedCall:0",
+        "quantization": [
+          0.0,
+          0
+        ],
+        "semantic": "class_probabilities",
+        "shape": [
+          1,
+          52
+        ],
+        "shapeSignature": [
+          1,
+          52
+        ]
+      }
+    ],
+    "quantization": {
+      "nonemptyConstantTensorTypes": [
+        "FLOAT16",
+        "INT32"
+      ],
+      "quantizedConstantCount": 0,
+      "variant": "float16"
+    },
+    "variant": "float16"
+  },
+  "confidenceCombination": "min(detector,calibratedClassifier)",
+  "detector": {
+    "customOps": [
+      "TFLite_Detection_PostProcess"
+    ],
+    "filename": "card_detector.tflite",
+    "input": {
+      "dtype": "float32",
+      "name": "serving_default_images:0",
+      "shape": [
+        1,
+        320,
+        320,
+        3
+      ],
+      "shapeSignature": [
+        1,
+        320,
+        320,
+        3
+      ]
+    },
+    "interpreterInvocation": "passed",
+    "labels": [
+      "card"
+    ],
+    "modelSha256": "d79c3eadfb91c28e5a16064f1617145ee1840a7cb14f65ff4cbbdbacb44a0e2f",
+    "modelSizeBytes": 6870775,
+    "normalization": {
+      "mean": [
+        127.0,
+        127.0,
+        127.0
+      ],
+      "std": [
+        128.0,
+        128.0,
+        128.0
+      ]
+    },
+    "outputs": [
+      {
+        "dtype": "float32",
+        "metadataName": "location",
+        "semantic": "boxes",
+        "shape": [
+          1,
+          25,
+          4
+        ],
+        "shapeSignature": [
+          1,
+          25,
+          4
+        ],
+        "tensorName": "StatefulPartitionedCall:3"
+      },
+      {
+        "dtype": "float32",
+        "metadataName": "category",
+        "semantic": "classes",
+        "shape": [
+          1,
+          25
+        ],
+        "shapeSignature": [
+          1,
+          25
+        ],
+        "tensorName": "StatefulPartitionedCall:2"
+      },
+      {
+        "dtype": "float32",
+        "metadataName": "score",
+        "semantic": "scores",
+        "shape": [
+          1,
+          25
+        ],
+        "shapeSignature": [
+          1,
+          25
+        ],
+        "tensorName": "StatefulPartitionedCall:1"
+      },
+      {
+        "dtype": "float32",
+        "metadataName": "number of detections",
+        "semantic": "count",
+        "shape": [
+          1
+        ],
+        "shapeSignature": [
+          1
+        ],
+        "tensorName": "StatefulPartitionedCall:0"
+      }
+    ],
+    "quantization": {
+      "input": null,
+      "nonemptyConstantTensorTypes": [
+        "FLOAT16",
+        "INT32"
+      ],
+      "quantizedConstantCount": 0,
+      "variant": "float16"
+    },
+    "variant": "float16"
+  },
+  "evidence": {
+    "deckDisjoint": false,
+    "experimentalTestSceneCount": 128,
+    "productionHoldout": false,
+    "trainSceneCount": 964,
+    "validationSceneCount": 193,
+    "visualDeckCount": 1
+  },
+  "experimentReportSha256": "65b62fc8a6c3d1e76dd7a374bdb0eb7d4187ddbcab47a64dea132d891b38375f",
+  "kind": "EXPERIMENTAL_ONE_DECK",
+  "labels": [
+    "AC",
+    "2C",
+    "3C",
+    "4C",
+    "5C",
+    "6C",
+    "7C",
+    "8C",
+    "9C",
+    "10C",
+    "JC",
+    "QC",
+    "KC",
+    "AD",
+    "2D",
+    "3D",
+    "4D",
+    "5D",
+    "6D",
+    "7D",
+    "8D",
+    "9D",
+    "10D",
+    "JD",
+    "QD",
+    "KD",
+    "AH",
+    "2H",
+    "3H",
+    "4H",
+    "5H",
+    "6H",
+    "7H",
+    "8H",
+    "9H",
+    "10H",
+    "JH",
+    "QH",
+    "KH",
+    "AS",
+    "2S",
+    "3S",
+    "4S",
+    "5S",
+    "6S",
+    "7S",
+    "8S",
+    "9S",
+    "10S",
+    "JS",
+    "QS",
+    "KS"
+  ],
+  "maximumCardCount": 10,
+  "metrics": {
+    "experimentalTest": {
+      "classifierTop1Accuracy": 0.8162162162162162,
+      "detectorFalsePositiveShare": 0.011037527593818985,
+      "detectorRecall": 0.8072072072072072,
+      "exactCardMultisetAccuracy": 0.375,
+      "exactHandTotalAccuracy": 0.421875,
+      "sceneCount": 128
+    },
+    "validation": {
+      "classifierTop1Accuracy": 0.8078758949880668,
+      "detectorFalsePositiveShare": 0.008064516129032258,
+      "detectorRecall": 0.733890214797136,
+      "exactCardMultisetAccuracy": 0.35751295336787564,
+      "exactHandTotalAccuracy": 0.37305699481865284,
+      "sceneCount": 193
+    }
+  },
+  "nmsPolicy": {
+    "comparison": "strict-greater",
+    "grid": [
+      320,
+      320
+    ],
+    "invalidBox": "reject",
+    "priority": "score-desc-left-top-right-bottom-index",
+    "scoreRepresentation": "binary32",
+    "spatialOrder": "top-left-bottom-right-index",
+    "thresholdRepresentation": "binary64-to-binary32-exact-rational",
+    "version": 1
+  },
+  "releaseApproved": false,
+  "resizePolicy": {
+    "algorithm": "point-bilinear",
+    "alpha": "opaque-only",
+    "antialias": false,
+    "channels": "RGB8",
+    "classifierSize": [
+      224,
+      224
+    ],
+    "coordinateTransform": "half-pixel",
+    "detectorSize": [
+      320,
+      320
+    ],
+    "edgeMode": "clamp",
+    "rounding": "half-up-once",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "sourceManifestSha256": "0f664f6957035e0e095e3472ba53c05e0341748f6ef2e24cfc0b669221b36fff",
+  "spatialOrder": "top-left-bottom-right",
+  "thresholds": {
+    "combined_score": 0.25,
+    "crop_margin": 0.1,
+    "detector_score": 0.55,
+    "iou": 0.5
+  },
+  "upstreamSplitSha256": "0b06c032f38c45600461a4450716946571f67bb91b9c9e662e30325c87172088"
+}

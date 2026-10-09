@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 1,
+  "description": "Native 320 integer bounds; expected retained original indices in spatial order. Strict IoU > binary32-exact-rational threshold. Numerical tests, not quality evidence.",
+  "cases": [
+    {
+      "id": "equal-score-identical-bounds-index-tie",
+      "threshold": 0.5,
+      "boxes": [
+        { "score": 0.9, "bounds": [30, 30, 96, 200] },
+        { "score": 0.9, "bounds": [30, 30, 96, 200] }
+      ],
+      "expected": [0]
+    },
+    {
+      "id": "reviewer-exact-half",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            52,
+            30,
+            118,
+            200
+          ]
+        }
+      ],
+      "rawNormalized": [
+        [
+          0.09375,
+          0.09375,
+          0.3,
+          0.625
+        ],
+        [
+          0.1625,
+          0.09375,
+          0.36875,
+          0.625
+        ]
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "threshold-next-below-half",
+      "threshold": 0.4999999701976776,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            52,
+            30,
+            118,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "id": "threshold-next-above-half",
+      "threshold": 0.5000000596046448,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            52,
+            30,
+            118,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "one-grid-pixel-less-overlap",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            53,
+            30,
+            119,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "one-grid-pixel-more-overlap",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            51,
+            30,
+            117,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "id": "equal-score-coordinate-tie-preserves-distinct-card",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            51,
+            30,
+            117,
+            200
+          ]
+        },
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.9,
+          "bounds": [
+            200,
+            30,
+            260,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "spatial-order-after-priority-order",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            100,
+            40,
+            160,
+            80
+          ]
+        },
+        {
+          "score": 0.9,
+          "bounds": [
+            20,
+            200,
+            60,
+            250
+          ]
+        },
+        {
+          "score": 0.9,
+          "bounds": [
+            200,
+            20,
+            250,
+            70
+          ]
+        }
+      ],
+      "expected": [
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "exact-one-is-not-greater",
+      "threshold": 1,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "large-cross-product",
+      "threshold": 1e-12,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            2,
+            2,
+            318,
+            318
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            2,
+            2,
+            3,
+            3
+          ]
+        }
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "id": "smallest-binary32-cross-product",
+      "threshold": 1.401298464324817e-45,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            96,
+            200
+          ]
+        },
+        {
+          "score": 0.8,
+          "bounds": [
+            52,
+            30,
+            118,
+            200
+          ]
+        }
+      ],
+      "expected": [
+        0
+      ],
+      "helperOnly": true
+    },
+    {
+      "id": "binary32-score-tie",
+      "threshold": 0.5,
+      "boxes": [
+        { "score": 0.900000001, "bounds": [51, 30, 117, 200] },
+        { "score": 0.9, "bounds": [30, 30, 96, 200] }
+      ],
+      "expected": [1]
+    },
+    {
+      "id": "zero-area-rejected",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            30,
+            30,
+            30,
+            200
+          ]
+        }
+      ],
+      "invalid": true
+    },
+    {
+      "id": "out-of-grid-rejected",
+      "threshold": 0.5,
+      "boxes": [
+        {
+          "score": 0.9,
+          "bounds": [
+            -1,
+            30,
+            30,
+            200
+          ]
+        }
+      ],
+      "invalid": true
+    }
+  ]
+}

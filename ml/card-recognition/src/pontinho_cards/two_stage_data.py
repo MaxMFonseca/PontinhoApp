@@ -63,6 +63,7 @@ class TwoStageInputManifest:
     detector_partitions: Mapping[str, tuple[DetectorRecord, ...]]
     classifier_partitions: Mapping[str, tuple[ClassifierCrop, ...]]
     output_root: Path
+    evidence_mode: str = "DECK_DISJOINT"
 
 
 @dataclass(frozen=True)
@@ -183,7 +184,8 @@ def _box_index(box: Mapping[str, Any], canonical_index: int) -> int:
 
 
 def build_two_stage_inputs(
-    split_document: Mapping[str, object], output_root: Path
+    split_document: Mapping[str, object], output_root: Path, *,
+    evidence_mode: str = "DECK_DISJOINT", include_experimental_test: bool = False,
 ) -> TwoStageInputManifest:
     """Build immutable train/validation projections without opening final holdout bytes.
 
@@ -193,21 +195,26 @@ def build_two_stage_inputs(
 
     root = Path(os.path.abspath(output_root))
     try:
-        partitions = validate_split_document(split_document)
+        partitions = validate_split_document(split_document, evidence_mode=evidence_mode)
     except SplitError as error:
         raise TwoStageDataError(str(error)) from error
     _validate_training_contract(partitions)
+    if include_experimental_test and evidence_mode != "EXPERIMENTAL_ONE_DECK":
+        raise TwoStageDataError("only experimental test may be materialized")
+    selected_partitions = (
+        (*_TRAINING_PARTITIONS, "test") if include_experimental_test else _TRAINING_PARTITIONS
+    )
 
     audited = tuple(
         _read_audited_scene(root, partition, record)
-        for partition in _TRAINING_PARTITIONS
+        for partition in selected_partitions
         for record in partitions[partition]
     )
     detector_partitions: dict[str, list[DetectorRecord]] = {
-        partition: [] for partition in _TRAINING_PARTITIONS
+        partition: [] for partition in selected_partitions
     }
     classifier_partitions: dict[str, list[ClassifierCrop]] = {
-        partition: [] for partition in _TRAINING_PARTITIONS
+        partition: [] for partition in selected_partitions
     }
 
     for scene in audited:
@@ -264,16 +271,17 @@ def build_two_stage_inputs(
             )
 
     detector = MappingProxyType(
-        {partition: tuple(detector_partitions[partition]) for partition in _TRAINING_PARTITIONS}
+        {partition: tuple(detector_partitions[partition]) for partition in selected_partitions}
     )
     classifier = MappingProxyType(
         {
             partition: tuple(classifier_partitions[partition])
-            for partition in _TRAINING_PARTITIONS
+            for partition in selected_partitions
         }
     )
     return TwoStageInputManifest(
         detector_partitions=detector,
         classifier_partitions=classifier,
         output_root=root,
+        evidence_mode=evidence_mode,
     )

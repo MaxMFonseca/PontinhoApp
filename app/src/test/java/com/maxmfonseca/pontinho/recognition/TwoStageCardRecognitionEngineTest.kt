@@ -1,6 +1,7 @@
 package com.maxmfonseca.pontinho.recognition
 
 import android.graphics.Bitmap
+import android.graphics.RectF
 import com.maxmfonseca.pontinho.domain.recognition.*
 import kotlinx.coroutines.*
 import org.junit.Assert.*
@@ -66,7 +67,7 @@ class TwoStageCardRecognitionEngineTest {
         val probabilities = FloatArray(52).apply { this[0] = .8f; this[1] = .2f }
         val classifier = Classifier(probabilities)
         val metadata = metadata().let { it.copy(classifier = it.classifier.copy(calibrationTemperature = 2f)) }
-        val result = engine(Detector(listOf(box(0f, .9f))), classifier, metadata).recognize(bitmap())
+        val result = engine(Detector(listOf(box(.02f, .9f))), classifier, metadata).recognize(bitmap())
         assertEquals(2f / 3f, result.candidates.single().confidence, .0001f)
         assertEquals(setOf(RecognitionWarning.LOW_CONFIDENCE, RecognitionWarning.NEAR_IMAGE_EDGE), result.candidates.single().warnings)
         val capped = engine(Detector(listOf(box(.1f, .55f))), Classifier()).recognize(bitmap())
@@ -75,9 +76,9 @@ class TwoStageCardRecognitionEngineTest {
 
     @Test fun `ten differently oriented edge boxes classify original resolution crops without truncation`() = runBlocking {
         val boxes = (0..9).map { i ->
-            val x = (i % 5) * .2f
-            val y = (i / 5) * .5f
-            RawCardBox(.9f, x, y, x + .1f, y + if (i % 2 == 0) .3f else .15f)
+            val x = (6 + (i % 5) * 64).toFloat()
+            val y = (6 + (i / 5) * 160).toFloat()
+            nativeCardBox(.9f, RectF(x, y, x + 32, y + if (i % 2 == 0) 96 else 48), 320, 320)
         }
         val classifier = Classifier()
         val result = engine(Detector(boxes.reversed()), classifier).recognize(bitmap())
@@ -92,7 +93,7 @@ class TwoStageCardRecognitionEngineTest {
         assertThrows(CardRecognitionFailure.NoCards::class.java) {
             runBlocking { engine(Detector(emptyList()), classifier).recognize(bitmap()) }
         }
-        val boxes = (0..10).map { RawCardBox(.9f, it / 12f, .1f, (it + .5f) / 12f, .4f) }
+        val boxes = (0..10).map { nativeCardBox(.9f, RectF(6f + it * 24, 32f, 18f + it * 24, 128f), 320, 320) }
         val error = assertThrows(CardRecognitionFailure.TooManyCards::class.java) {
             runBlocking { engine(Detector(boxes), classifier).recognize(bitmap()) }
         }
@@ -100,11 +101,23 @@ class TwoStageCardRecognitionEngineTest {
         assertTrue(classifier.crops.isEmpty())
     }
 
-    @Test fun `incomplete and subthreshold boxes never become partial confident hand`() = runBlocking {
-        val boxes = listOf(box(.1f), RawCardBox(.9f, -.1f, .1f, .2f, .4f), box(.6f, .45f))
-        val result = engine(Detector(boxes), Classifier()).recognize(bitmap())
-        assertEquals(1, result.candidates.size)
-        assertTrue(result.candidates.single().warnings.contains(RecognitionWarning.LOW_CONFIDENCE))
+    @Test fun `possibly truncated native boxes abort entire capture before classifier even with valid cards`() {
+        val boundaryBoxes = listOf(
+            RawCardBox(.9f, 0f, .1f, .3f, .4f), // native clamp of (-.1,.1,.2,.4)
+            RawCardBox(.9f, .1f, 0f, .3f, .4f),
+            RawCardBox(.9f, .1f, .1f, 1f, .4f),
+            RawCardBox(.9f, .1f, .1f, .3f, 1f),
+            RawCardBox(.9f, .1f, .1f, 319f / 320, .4f), // two truncated terms can hide right=1
+            RawCardBox(.9f, 1f / 320, .1f, .3f, .4f),
+            RawCardBox(.45f, 0f, .1f, .3f, .4f), // visible native uncertainty band
+        )
+        for (boundary in boundaryBoxes) {
+            val classifier = Classifier()
+            assertThrows(CardRecognitionFailure.IncompleteCards::class.java) {
+                runBlocking { engine(Detector(listOf(box(.6f), boundary)), classifier).recognize(bitmap()) }
+            }
+            assertTrue(classifier.crops.isEmpty())
+        }
     }
 
     @Test fun `malformed classifier output fails privately and recycles crop`() {
@@ -149,7 +162,10 @@ class TwoStageCardRecognitionEngineTest {
         .metadata.let { it as RecognitionModelBundleMetadata }.copy(classifierThreshold = .7f)
 
     private fun bitmap() = Bitmap.createBitmap(2000, 1000, Bitmap.Config.ARGB_8888)
-    private fun box(left: Float, score: Float = .9f) = RawCardBox(score, left, .1f, left + .15f, .4f)
+    private fun box(left: Float, score: Float = .9f): RawCardBox {
+        val x = (left * 320).toInt().toFloat()
+        return nativeCardBox(score, RectF(x, 32f, x + 48, 128f), 320, 320)
+    }
 
     private class Detector(private val boxes: List<RawCardBox>) : CardDetectorRunner {
         var closed = 0

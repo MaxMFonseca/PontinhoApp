@@ -30,6 +30,11 @@ data class ScanRequest(
 enum class ScannerPhase { Capture, Processing, Review, Saving, Error }
 enum class ScanImageSource { Camera, Photo }
 enum class ScannerRecovery { Capture, Save }
+/** Saved as a stable code; translated only when rendered in the current locale. */
+enum class ScannerMessage {
+    CaptureGuidance, NoCards, TooManyCards, IncompleteCards, ImageTooLarge,
+    Unavailable, RecognitionFailed, SaveFailed, SaveInterrupted, ImageExpired,
+}
 
 data class ReviewCard(
     /** Physical observation identity; duplicate rank/suit values remain separate cards. */
@@ -47,7 +52,7 @@ data class ScannerUiState(
     val cards: List<ReviewCard> = emptyList(),
     val total: Int = 0,
     val modelVersion: String? = null,
-    val message: String? = null,
+    val message: ScannerMessage? = null,
     val recovery: ScannerRecovery? = null,
     val awaitingInput: Boolean = false,
     val submissionStarted: Boolean = false,

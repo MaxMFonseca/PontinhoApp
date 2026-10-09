@@ -5,6 +5,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MediaPipeRunnerContractTest {
+    @Test fun `classifier native options preserve every score in CPU image mode`() {
+        val actual = MediaPipeCardClassifierSetup(directModelBuffer(byteArrayOf(1, 2, 3))).buildOptions()
+        // Package-private native option getters: inspect the actual options without JNI conversion.
+        fun option(name: String): Any? = com.google.mediapipe.tasks.vision.imageclassifier.ImageClassifier.ImageClassifierOptions::class.java
+            .getDeclaredMethod(name).apply { isAccessible = true }.invoke(actual)
+        assertEquals(java.util.Optional.of(52), option("maxResults"))
+        assertEquals(java.util.Optional.of(0f), option("scoreThreshold"))
+        assertEquals(emptyList<String>(), option("categoryAllowlist"))
+        assertEquals(emptyList<String>(), option("categoryDenylist"))
+        assertEquals(com.google.mediapipe.tasks.vision.core.RunningMode.IMAGE, option("runningMode"))
+        val delegate = com.google.mediapipe.tasks.core.BaseOptions::class.java.getDeclaredMethod("delegate")
+            .apply { isAccessible = true }.invoke(option("baseOptions"))
+        assertEquals(com.google.mediapipe.tasks.core.Delegate.CPU, delegate)
+    }
     @Test fun `native score ranking maps back to canonical zero based indices`() {
         val categories = (0..51).reversed().map { Category.create(if (it == 13) .9f else .1f / 51, it, "", "") }
         val scores = canonicalClassification(categories).probabilities

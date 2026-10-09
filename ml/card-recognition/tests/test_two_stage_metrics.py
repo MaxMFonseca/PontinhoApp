@@ -11,6 +11,8 @@ from PIL import Image
 from pontinho_cards import evaluate_two_stage as joint
 from pontinho_cards.evaluate import Detection
 from pontinho_cards.labels import CARD_LABELS
+from pontinho_cards.model_resize import RESIZE_POLICY
+from pontinho_cards.native_nms import NMS_POLICY
 
 
 def probabilities(label="AC", confidence=0.99):
@@ -93,7 +95,8 @@ def test_original_resolution_crops_spatial_nms_and_duplicate_labels():
     )
     assert [d.label for d in result["predictions"]] == ["AC", "AC"]
     assert [d.box[0] for d in result["predictions"]] == [100, 600]
-    assert seen == [(240, 240), (240, 240)]
+    # Float32 (.8-.6)*320 truncates to 63 native pixels, not 64; Android agrees.
+    assert seen == [(240, 240), (237, 240)]
     assert result["predictions"][1].confidence == pytest.approx(0.97)
 
 
@@ -109,7 +112,7 @@ def test_variant_temperature_changes_abstention_without_changing_identity():
 
 
 def test_more_than_ten_is_split_failure_without_truncation():
-    boxes = [(0.99, (i / 12, 0.1, (i + 0.5) / 12, 0.9)) for i in range(11)]
+    boxes = [(0.99, (0.02 + i / 12, 0.1, 0.02 + (i + 0.5) / 12, 0.9)) for i in range(11)]
     result = joint.recognize_scene(
         Image.new("RGB", (1200, 100)),
         boxes,
@@ -135,11 +138,104 @@ def test_incomplete_boxes_abstain(box):
     assert result["predictions"] == ()
 
 
+@pytest.mark.parametrize(
+    "box",
+    [
+        (-0.1, 0.1, 0.2, 0.4),
+        (0, 0.1, 0.3, 0.4),
+        (0.1, 0, 0.3, 0.4),
+        (0.1, 0.1, 1, 0.4),
+        (0.1, 0.1, 0.3, 1),
+        (0.101, 0.1, 1.0001, 0.4),
+        (1 / 320, 0.1, 0.3, 0.4),
+    ],
+)
+@pytest.mark.parametrize("score", [0.99, 0.45])
+def test_border_or_clamped_card_abstains_whole_scene_before_classifying(box, score):
+    def classify(crop):
+        pytest.fail("Partial hand must not reach classifier")
+
+    result = joint.recognize_scene(
+        Image.new("RGB", (3000, 2000)),
+        [(0.99, (0.5, 0.1, 0.7, 0.4)), (score, box)],
+        classify,
+        joint.Thresholds(0.5, 0.5, 0.5, 0.1),
+        1,
+    )
+    assert result["predictions"] == ()
+    assert result["flags"] == ("incomplete_card",)
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
     path.write_bytes(payload)
     return hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "box, expected, complete",
+    [
+        ((-0.1, 0.1, 0.2, 0.4), (0, 32, 96, 128), False),
+        ((0, 0.1, 0.3, 0.4), (0, 32, 96, 128), False),
+        ((0.101, 0.1, 1.0001, 0.4), (32, 32, 319, 128), False),
+        ((2 / 320, 0.1, 318 / 320, 0.4), (2, 32, 318, 128), True),
+    ],
+)
+def test_native_float32_integer_conversion_and_guard(box, expected, complete):
+    from pontinho_cards.mediapipe_contract import complete_native_box, native_detector_box
+
+    native = native_detector_box(box)
+    assert tuple(float(np.float32(v) * np.float32(320)) for v in native) == expected
+    assert complete_native_box(native) == complete
+    if complete:
+        assert tuple(
+            float(np.float32(v) * np.float32(n)) for v, n in zip(native, (3000, 2000, 3000, 2000))
+        ) == (18.75, 200, 2981.25, 800)
+
+
+@pytest.mark.parametrize("policy", [None, "allow-clipped-v0"])
+def test_old_border_selection_rejected_before_holdout_is_consumed(tmp_path, monkeypatch, policy):
+    detector, classifier, selection, validation, holdout = evaluation_fixture(tmp_path, monkeypatch)
+    document = json.loads(selection.path.read_bytes())
+    document["boxPolicy"] = policy
+    selection = joint.ThresholdSelection(selection.path, write_json(selection.path, document))
+    with pytest.raises(ValueError, match="box policy"):
+        joint.evaluate_two_stage(
+            detector, classifier, selection, validation, holdout, tmp_path / "result.json"
+        )
+    assert not (holdout.parent / ".two-stage-evaluation-receipts").exists()
+
+
+@pytest.mark.parametrize("policy", [None, {"algorithm": "pillow-bilinear"}])
+def test_old_resize_selection_rejected_before_holdout_consumption(tmp_path, monkeypatch, policy):
+    detector, classifier, selection, validation, holdout = evaluation_fixture(tmp_path, monkeypatch)
+    document = json.loads(selection.path.read_bytes())
+    document["resizePolicy"] = policy
+    selection = joint.ThresholdSelection(selection.path, write_json(selection.path, document))
+    with pytest.raises(ValueError, match="resize policy"):
+        joint.evaluate_two_stage(
+            detector, classifier, selection, validation, holdout, tmp_path / "result.json"
+        )
+    assert not (holdout.parent / ".two-stage-evaluation-receipts").exists()
+
+
+@pytest.mark.parametrize("kind", ["detector", "classifier"])
+@pytest.mark.parametrize("source", ["contract", "metrics"])
+def test_candidate_validation_and_calibration_require_current_resize_policy(
+    tmp_path, monkeypatch, kind, source
+):
+    candidate = candidate_fixture(tmp_path, kind, [record_fixture(tmp_path, 1)], monkeypatch)
+    contract = json.loads(candidate.contract_path.read_bytes())
+    if source == "contract":
+        contract.pop("resizePolicy", None)
+    else:
+        metrics = json.loads(candidate.validation_metrics_path.read_bytes())
+        metrics.pop("resizePolicy", None)
+        contract["validationMetricsSha256"] = write_json(candidate.validation_metrics_path, metrics)
+    write_json(candidate.contract_path, contract)
+    with pytest.raises(ValueError, match="resize policy"):
+        joint.snapshot_candidate(candidate, kind, tmp_path / "snapshot")
 
 
 def candidate_fixture(tmp_path, kind, records, monkeypatch, *, include_size=False):
@@ -154,6 +250,13 @@ def candidate_fixture(tmp_path, kind, records, monkeypatch, *, include_size=Fals
         variants[variant] = {
             "filename": filename,
             "modelSha256": hashlib.sha256(payload).hexdigest(),
+            "input": {
+                "dtype": "float32" if variant == "float16" else "uint8",
+                "quantization": [1 / 255, 0],
+            },
+            "outputs": [{"dtype": "float32" if variant == "float16" else "uint8"}],
+            "normalization": {"mean": [0.0] * 3, "std": [255.0] * 3},
+            "quantization": {"input": {"scales": [1 / 255], "zeroPoints": [0]}},
         }
         if include_size:
             variants[variant]["modelSizeBytes"] = len(payload)
@@ -179,6 +282,8 @@ def candidate_fixture(tmp_path, kind, records, monkeypatch, *, include_size=Fals
     }
     metrics = {
         "partition": "validation",
+        "resizePolicy": RESIZE_POLICY,
+        "nmsPolicy": NMS_POLICY,
         "status": "MEASURED",
         "variants": {
             v: {
@@ -190,6 +295,8 @@ def candidate_fixture(tmp_path, kind, records, monkeypatch, *, include_size=Fals
     }
     contract = {
         "schemaVersion": 1,
+        "resizePolicy": RESIZE_POLICY,
+        "nmsPolicy": NMS_POLICY,
         "kind": "ONE_CLASS_DETECTOR_CANDIDATE"
         if kind == "detector"
         else "CARD_CLASSIFIER_CANDIDATE",
@@ -282,6 +389,29 @@ def test_validation_selection_binds_variants_and_never_opens_holdout(tmp_path, m
             [joint.Thresholds(0.5, 0.5, 0.5, 0.1)],
             tmp_path / "bad.json",
         )
+
+
+def test_selection_excludes_nonidentity_native_input_before_running_it(tmp_path, monkeypatch):
+    detector, classifier, _, validation, _ = evaluation_fixture(tmp_path, monkeypatch)
+    document = json.loads(detector.contract_path.read_bytes())
+    document["variants"]["int8"]["quantization"]["input"] = {"scales": [0.5], "zeroPoints": [128]}
+    write_json(detector.contract_path, document)
+    invoked = []
+
+    def inference(snapshots, records, dv, cv, thresholds):
+        invoked.append((dv, cv))
+        return [scene(i) for i in range(1, 11)]
+
+    monkeypatch.setattr(joint, "_run_joint", inference)
+    selection = joint.select_two_stage_thresholds(
+        detector,
+        classifier,
+        validation,
+        [joint.Thresholds(0.5, 0.5, 0.5, 0.1)],
+        tmp_path / "compatible.json",
+    )
+    assert invoked == [("float16", "float16"), ("float16", "int8")]
+    assert len(json.loads(selection.path.read_bytes())["sweep"]) == 2
 
 
 def test_candidate_model_and_validation_hash_tampering_fails_closed(tmp_path, monkeypatch):

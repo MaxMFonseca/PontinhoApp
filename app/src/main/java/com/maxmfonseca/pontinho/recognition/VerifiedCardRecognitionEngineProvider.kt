@@ -1,6 +1,7 @@
 package com.maxmfonseca.pontinho.recognition
 
 import android.graphics.Bitmap
+import com.maxmfonseca.pontinho.BuildConfig
 import com.maxmfonseca.pontinho.domain.recognition.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,7 +29,8 @@ class VerifiedCardRecognitionEngineProvider internal constructor(
         // Own immutable snapshots through verification and native construction.
         val detector = detectorSource?.copyOf()
         val classifier = classifierSource?.copyOf()
-        val result = RecognitionAssetVerifier().verify(detector, classifier, releaseSource?.copyOf())
+        val result = RecognitionAssetVerifier(allowExperimental = BuildConfig.DEBUG)
+            .verify(detector, classifier, releaseSource?.copyOf())
         state.value = if (result is RecognitionAvailability.Available && factory == null)
             unavailable() else result
         Triple(detector, classifier, state.value)

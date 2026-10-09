@@ -10,9 +10,11 @@ import java.io.InputStream
 import java.util.concurrent.CancellationException
 
 data class ImageDecodeLimits(
-    val maxWidth: Int = 1_920,
-    val maxHeight: Int = 1_920,
-    val maxPixels: Int = 3_686_400,
+    val maxWidth: Int = 8_192,
+    val maxHeight: Int = 8_192,
+    // At most two original ARGB buffers coexist (orientation or one crop).
+    // Reserve at least half the heap for models/UI; native analysis is model-sized.
+    val maxPixels: Int = minOf(16_777_216L, Runtime.getRuntime().maxMemory() / 16).coerceAtLeast(1).toInt(),
 ) {
     init {
         require(maxWidth > 0)
@@ -93,19 +95,19 @@ class RecognitionImageLoader internal constructor(
         }
 
         val transform = withStream(uri) { orientationReader.read(uri, it) }
-        val sampleSize = calculateSampleSize(bounds, transform, limits)
+        ensureWithinLimits(bounds.width, bounds.height, transform)
         val decoded = try {
             withStream(
                 uri = uri,
                 discard = { bitmap -> bitmap?.let(::recycleOwned) },
-            ) { decoder.decode(it, sampleSize) }
+            ) { decoder.decode(it, 1) }
                 ?: throw RecognitionImageException.DecodeFailed()
         } catch (error: OutOfMemoryError) {
             throw RecognitionImageException.SizeLimitExceeded(error)
         }
 
         try {
-            ensureWithinLimits(decoded, transform)
+            ensureWithinLimits(decoded.width, decoded.height, transform)
             return applyTransformAndConfig(decoded, transform)
         } catch (error: OutOfMemoryError) {
             recycleOwned(decoded)
@@ -161,9 +163,9 @@ class RecognitionImageLoader internal constructor(
         if (!bitmap.isRecycled) bitmapRecycler(bitmap)
     }
 
-    private fun ensureWithinLimits(bitmap: Bitmap, transform: ExifTransform) {
-        val width = if (transform.swapsDimensions) bitmap.height else bitmap.width
-        val height = if (transform.swapsDimensions) bitmap.width else bitmap.height
+    private fun ensureWithinLimits(sourceWidth: Int, sourceHeight: Int, transform: ExifTransform) {
+        val width = if (transform.swapsDimensions) sourceHeight else sourceWidth
+        val height = if (transform.swapsDimensions) sourceWidth else sourceHeight
         if (
             width > limits.maxWidth ||
             height > limits.maxHeight ||
@@ -247,30 +249,6 @@ class RecognitionImageLoader internal constructor(
         }
     }
 
-    private companion object {
-        fun calculateSampleSize(
-            bounds: ImageBounds,
-            transform: ExifTransform,
-            limits: ImageDecodeLimits,
-        ): Int {
-            val orientedWidth = if (transform.swapsDimensions) bounds.height else bounds.width
-            val orientedHeight = if (transform.swapsDimensions) bounds.width else bounds.height
-            var sample = 1
-            while (
-                ceilDiv(orientedWidth, sample) > limits.maxWidth ||
-                ceilDiv(orientedHeight, sample) > limits.maxHeight ||
-                ceilDiv(orientedWidth, sample).toLong() * ceilDiv(orientedHeight, sample) > limits.maxPixels
-            ) {
-                if (sample > 1 shl 29) throw RecognitionImageException.SizeLimitExceeded()
-                sample *= 2
-            }
-            return sample
-        }
-
-        fun ceilDiv(value: Int, divisor: Int): Int = (value.toLong() + divisor - 1L)
-            .div(divisor)
-            .toInt()
-    }
 }
 
 internal object BitmapFactoryImageDecoder : ImageDecoder {

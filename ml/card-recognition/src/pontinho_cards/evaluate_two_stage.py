@@ -26,7 +26,6 @@ from pontinho_cards.evaluate import (
     JOKER_CONTEXTS,
     Detection,
     EvaluationError,
-    _iou,
     _match,
     _validate_detection,
     _validate_holdout_record,
@@ -34,6 +33,15 @@ from pontinho_cards.evaluate import (
     pontinho_total,
 )
 from pontinho_cards.labels import CARD_LABELS
+from pontinho_cards.mediapipe_contract import (
+    NATIVE_BOX_POLICY,
+    complete_native_box,
+    mediapipe_compatible,
+    native_detector_box,
+    require_mediapipe_input,
+)
+from pontinho_cards.model_resize import RESIZE_POLICY, require_resize_policy
+from pontinho_cards.native_nms import NMS_POLICY, native_nms, require_nms_policy
 from pontinho_cards.secure_io import (
     _open_absolute_directory,
     safe_name,
@@ -104,32 +112,45 @@ def recognize_scene(image, raw_boxes, classify, thresholds, temperature):
             raise EvaluationError("invalid detector output")
         if not all(math.isfinite(v) for v in box):
             raise EvaluationError("non-finite detector box")
-        if score < thresholds.detector_score:
-            if score >= thresholds.detector_score * 0.8:
-                flags.add("low_confidence")
+        # Native sees the 80%-of-floor band too: a border detection in that band
+        # must not merely warn while presenting the other cards as a whole hand.
+        floor = np.float32(thresholds.detector_score)
+        if np.float32(score) < floor * np.float32(0.8):
             continue
-        x0, y0, x1, y1 = box
-        if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
-            flags.add("incomplete_card")
+        box = native_detector_box(box)
+        if not complete_native_box(box):
+            return {"detector": (), "predictions": (), "flags": ("incomplete_card",)}
+        if np.float32(score) < floor:
+            flags.add("low_confidence")
             continue
         candidates.append(
+            (float(np.float32(score)), tuple(round(np.float32(v) * np.float32(320)) for v in box))
+        )
+    # NMS happens BEFORE mapping to original pixels: image size cannot change IoU.
+    indices = native_nms(candidates, thresholds.iou)
+    kept = []
+    for index in indices:
+        score, pixels = candidates[index]
+        box = [np.float32(v) / np.float32(320) for v in pixels]
+        # Match Android Float mapping only after exact native-grid suppression.
+        x0, y0, x1, y1 = (
+            float(np.float32(v) * np.float32(size))
+            for v, size in zip(box, (image.width, image.height, image.width, image.height))
+        )
+        kept.append(
             Detection(
                 "AC",
-                (x0 * image.width, y0 * image.height, x1 * image.width, y1 * image.height),
+                (x0, y0, x1, y1),
                 score,
             )
         )
-    kept = []
-    for candidate in sorted(candidates, key=lambda d: (-d.confidence, *d.box)):
-        if all(_iou(candidate, other) <= thresholds.iou for other in kept):
-            kept.append(candidate)
-    kept.sort(key=lambda d: (d.box[1], d.box[0], d.box[3], d.box[2]))
     if len(kept) > 10:
         return {"detector": tuple(kept), "predictions": (), "flags": ("split_capture",)}
     predictions = []
     for detection in kept:
-        x0, y0, x1, y1 = detection.box
-        mx, my = (x1 - x0) * thresholds.crop_margin, (y1 - y0) * thresholds.crop_margin
+        x0, y0, x1, y1 = np.asarray(detection.box, dtype=np.float32)
+        margin = np.float32(thresholds.crop_margin)
+        mx, my = (x1 - x0) * margin, (y1 - y0) * margin
         bounds = (
             max(0, math.floor(x0 - mx)),
             max(0, math.floor(y0 - my)),
@@ -251,11 +272,17 @@ def _inspect(path, variant, kind):
     return inspect_classifier_tflite(path, expected_quantization=variant)
 
 
-def snapshot_candidate(candidate, kind, staging):
+def snapshot_candidate(candidate, kind, staging, *, evidence_mode="DECK_DISJOINT"):
     """Bind actual models, inspection, calibration and original training evidence."""
     contract, payload = read_document(candidate.contract_path)
+    if evidence_mode not in {"DECK_DISJOINT", "EXPERIMENTAL_ONE_DECK"}:
+        raise EvaluationError("unknown evidence mode")
+    if contract.get("evidenceMode", "DECK_DISJOINT") != evidence_mode:
+        raise EvaluationError("experimental candidate requires matching explicit admission")
     expected = "ONE_CLASS_DETECTOR_CANDIDATE" if kind == "detector" else "CARD_CLASSIFIER_CANDIDATE"
     labels = ["card"] if kind == "detector" else list(CARD_LABELS)
+    require_resize_policy(contract.get("resizePolicy"))
+    require_nms_policy(contract.get("nmsPolicy"))
     if (
         contract.get("schemaVersion") != 1
         or contract.get("kind") != expected
@@ -278,6 +305,10 @@ def snapshot_candidate(candidate, kind, staging):
     if digest(metrics_payload) != contract.get("validationMetricsSha256"):
         raise EvaluationError("validation metrics hash mismatch")
     metrics = json.loads(metrics_payload)
+    if metrics.get("evidenceMode", "DECK_DISJOINT") != evidence_mode:
+        raise EvaluationError("candidate metrics evidence mode mismatch")
+    require_resize_policy(metrics.get("resizePolicy"))
+    require_nms_policy(metrics.get("nmsPolicy"))
     if metrics.get("partition") != "validation" or metrics.get("status") == "SMOKE_ONLY":
         raise EvaluationError("candidate requires non-smoke validation evidence")
     if set(contract.get("variants", {})) != {"float16", "int8"}:
@@ -316,6 +347,8 @@ def snapshot_candidate(candidate, kind, staging):
     if set(inputs) != {"train", "validation"} or not all(inputs.values()):
         raise EvaluationError("candidate train/validation provenance missing")
     for field in ("source_image_sha256", "deck_group_id"):
+        if evidence_mode == "EXPERIMENTAL_ONE_DECK" and field == "deck_group_id":
+            continue
         train = {r.get(field) for r in inputs["train"]}
         validation = {r.get(field) for r in inputs["validation"]}
         if None in train | validation or train & validation:
@@ -325,6 +358,7 @@ def snapshot_candidate(candidate, kind, staging):
         "contractSha256": digest(payload),
         "paths": paths,
         "inputs": inputs,
+        "metrics": metrics,
     }
 
 
@@ -511,6 +545,11 @@ def select_two_stage_thresholds(detector, classifier, validation_manifest, thres
         records = snapshot_scenes(records, validation_manifest.parent, staging / "scenes")
         sweep = []
         for dv, cv, threshold in product(("float16", "int8"), ("float16", "int8"), thresholds):
+            if not all(
+                mediapipe_compatible(snapshots[kind]["contract"]["variants"][variant], kind)
+                for kind, variant in (("detector", dv), ("classifier", cv))
+            ):
+                continue
             metrics = measure_two_stage(_run_joint(snapshots, records, dv, cv, threshold))
             sweep.append(
                 {
@@ -520,11 +559,16 @@ def select_two_stage_thresholds(detector, classifier, validation_manifest, thres
                     "metrics": metrics,
                 }
             )
+        if not sweep:
+            raise EvaluationError("BLOCKED_MEDIAPIPE_CONTRACT: no runtime-compatible pair")
         # Stable iteration order breaks equal-quality ties without reading holdout.
         best = max(range(len(sweep)), key=lambda i: (*selection_key(sweep[i]["metrics"]), -i))
         document = {
             "schemaVersion": 1,
             "kind": "TWO_STAGE_THRESHOLD_SELECTION",
+            "boxPolicy": NATIVE_BOX_POLICY,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "partition": "validation",
             "status": "VALIDATION_SELECTED_NOT_RELEASE_APPROVED"
             if selection_key(sweep[best]["metrics"])[0]
@@ -573,6 +617,10 @@ def validate_selection(selection, validation_manifest, snapshots):
     document, payload = read_document(selection.path)
     if digest(payload) != selection.sha256:
         raise EvaluationError("selection hash mismatch")
+    if document.get("boxPolicy") != NATIVE_BOX_POLICY:
+        raise EvaluationError("selection box policy differs from runtime")
+    require_resize_policy(document.get("resizePolicy"))
+    require_nms_policy(document.get("nmsPolicy"))
     validation, validation_payload = read_document(validation_manifest)
     if (
         document.get("kind") != "TWO_STAGE_THRESHOLD_SELECTION"
@@ -590,6 +638,13 @@ def validate_selection(selection, validation_manifest, snapshots):
     ):
         raise EvaluationError("selection is absent from validation sweep")
     Thresholds(**selected["thresholds"])
+    # Rechecked before holdout consumption and again by release promotion; a saved
+    # selection from a different runtime contract cannot bypass eligibility.
+    for row in document["sweep"]:
+        for kind in ("detector", "classifier"):
+            require_mediapipe_input(
+                snapshots[kind]["contract"]["variants"][row[f"{kind}Variant"]], kind
+            )
     best = max(document["sweep"], key=lambda row: selection_key(row["metrics"]))
     if selected != {k: v for k, v in best.items() if k != "metrics"}:
         raise EvaluationError("selection differs from validation-selected optimum")
@@ -652,6 +707,9 @@ def evaluate_two_stage(
         bindings = _bindings(snapshots)
         identity = holdout_photo_identity(holdout)
         claim = {
+            "boxPolicy": NATIVE_BOX_POLICY,
+            "resizePolicy": RESIZE_POLICY,
+            "nmsPolicy": NMS_POLICY,
             "holdoutPartitionSha256": holdout["testPartitionSha256"],
             "holdoutIdentity": identity,
             "holdoutManifestSha256": holdout_hash,

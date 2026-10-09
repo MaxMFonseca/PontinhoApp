@@ -204,11 +204,22 @@ def create_splits(
     return result
 
 
-def validate_split_document(document: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def validate_split_document(
+    document: Mapping[str, Any], *, evidence_mode: str = "DECK_DISJOINT"
+) -> dict[str, list[dict[str, Any]]]:
     """Validate a serialized split boundary without opening any image bytes."""
 
     if not isinstance(document, Mapping) or document.get("schemaVersion") != 1:
         raise SplitError("split document must use schemaVersion 1")
+    if evidence_mode not in {"DECK_DISJOINT", "EXPERIMENTAL_ONE_DECK"}:
+        raise SplitError("unknown evidence mode")
+    experimental = evidence_mode == "EXPERIMENTAL_ONE_DECK"
+    if document.get("evidenceMode", "DECK_DISJOINT") != evidence_mode:
+        raise SplitError("experimental split requires explicit experimental admission")
+    if experimental and (
+        document.get("deckDisjoint") is not False or document.get("productionHoldout") is not False
+    ):
+        raise SplitError("experimental split cannot claim deck separation or production holdout")
     seed = document.get("seed")
     if type(seed) is not int:
         raise SplitError("split document seed must be an integer")
@@ -239,16 +250,25 @@ def validate_split_document(document: Mapping[str, Any]) -> dict[str, list[dict[
                     f"augmentation parent {parent!r} for {image_id!r} is outside {partition}"
                 )
             roles = set(record.get("taskRoles", []))
+            if experimental and "FINAL_SCENE_HOLDOUT" in roles:
+                raise SplitError("experimental split cannot consume FINAL_SCENE_HOLDOUT")
             if partition in {"train", "validation"} and "FINAL_SCENE_HOLDOUT" in roles:
                 raise SplitError(
                     f"FINAL_SCENE_HOLDOUT record cannot appear in {partition}: {image_id}"
                 )
-            if partition == "test" and roles and "FINAL_SCENE_HOLDOUT" not in roles:
+            if (
+                not experimental
+                and partition == "test"
+                and roles
+                and "FINAL_SCENE_HOLDOUT" not in roles
+            ):
                 raise SplitError(
                     f"test record with taskRoles must declare FINAL_SCENE_HOLDOUT: {image_id}"
                 )
 
     for key in _LEAKAGE_KEYS[:-1]:
+        if experimental and key == "deckGroupId":
+            continue
         owners: dict[str, str] = {}
         for partition in _PARTITIONS:
             for record in partitions[partition]:

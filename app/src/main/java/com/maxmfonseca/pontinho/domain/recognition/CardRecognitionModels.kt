@@ -120,6 +120,7 @@ data class RecognitionModelBundleMetadata(
     val iouThreshold: Float,
     val cropMargin: Float,
     val maxCards: Int,
+    val experimental: Boolean = false,
 ) : RecognitionMetadata {
     override val modelVersion get() = version
 }

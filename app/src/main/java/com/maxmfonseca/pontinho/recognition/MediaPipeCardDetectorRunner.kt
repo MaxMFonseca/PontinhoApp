@@ -13,8 +13,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** BitmapImageContainer.close recycles its bitmap in MediaPipe 1.1.0. Always hand it owned pixels. */
-internal fun <T> withOwnedMediaPipeImage(source: Bitmap, action: (MPImage) -> T): T {
-    val owned = requireNotNull(source.copy(Bitmap.Config.ARGB_8888, false))
+internal fun <T> withOwnedMediaPipeImage(source: Bitmap, width: Int = source.width, height: Int = source.height, action: (MPImage) -> T): T {
+    // Bound temporary native pixels to the model input; never duplicate a full capture.
+    val owned = ModelImageResizer.resize(source, width, height)
     return try { BitmapImageBuilder(owned).build().use(action) }
     finally { if (!owned.isRecycled) owned.recycle() }
 }
@@ -26,14 +27,15 @@ internal class MediaPipeCardDetectorRunner private constructor(
     private val detector: ObjectDetector,
     // Retain direct bytes for the entire native task lifetime.
     private val modelBuffer: ByteBuffer,
+    private val inputWidth: Int,
+    private val inputHeight: Int,
 ) : CardDetectorRunner {
-    override fun detect(bitmap: Bitmap): List<RawCardBox> = withOwnedMediaPipeImage(bitmap) { image ->
+    override fun detect(bitmap: Bitmap): List<RawCardBox> = withOwnedMediaPipeImage(bitmap, inputWidth, inputHeight) { image ->
         detector.detect(image).detections().map { detection ->
             val category = detection.categories().single()
             require(category.index() == 0)
             val bounds = detection.boundingBox()
-            RawCardBox(category.score(), bounds.left / bitmap.width, bounds.top / bitmap.height,
-                bounds.right / bitmap.width, bounds.bottom / bitmap.height)
+            nativeCardBox(category.score(), bounds, image.width, image.height)
         }
     }
     override fun close() = detector.close()
@@ -41,7 +43,8 @@ internal class MediaPipeCardDetectorRunner private constructor(
     companion object {
         fun create(context: Context, model: ByteArray, metadata: RecognitionModelBundleMetadata): MediaPipeCardDetectorRunner {
             val setup = MediaPipeCardDetectorSetup(directModelBuffer(model), metadata.detectorThreshold)
-            return MediaPipeCardDetectorRunner(ObjectDetector.createFromOptions(context, setup.buildOptions()), setup.modelBuffer)
+            return MediaPipeCardDetectorRunner(ObjectDetector.createFromOptions(context, setup.buildOptions()), setup.modelBuffer,
+                metadata.detector.inputWidth, metadata.detector.inputHeight)
         }
     }
 }

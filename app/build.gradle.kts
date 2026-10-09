@@ -36,8 +36,8 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
-        buildConfig = false
     }
 
     testOptions {

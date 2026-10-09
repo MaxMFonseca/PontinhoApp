@@ -11,8 +11,20 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class CardCropperTest {
+    @Test fun `native analysis image is bounded while borrowed capture remains original size`() {
+        val source = Bitmap.createBitmap(3000, 2000, Bitmap.Config.ARGB_8888)
+        source.eraseColor(Color.WHITE)
+        withOwnedMediaPipeImage(source, 320, 320) { image ->
+            assertEquals(320, image.width)
+            assertEquals(320, image.height)
+        }
+        assertEquals(3000, source.width)
+        assertFalse(source.isRecycled)
+        source.recycle()
+    }
     @Test fun `closing MediaPipe image never recycles borrowed bitmap even on failure`() {
         val source = Bitmap.createBitmap(12, 12, Bitmap.Config.ARGB_8888)
+        source.eraseColor(Color.WHITE)
         var owned: Bitmap? = null
         assertThrows(IllegalStateException::class.java) {
             withOwnedMediaPipeImage(source) { image ->

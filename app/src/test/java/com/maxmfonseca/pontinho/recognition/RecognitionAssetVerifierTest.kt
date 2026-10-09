@@ -10,6 +10,56 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class RecognitionAssetVerifierTest {
+    @Test fun `release requires exact integer NMS and threshold representation`() {
+        reject(BundleFixture.json().apply { remove("nmsPolicy") })
+        for ((field, value) in listOf("version" to 2, "comparison" to "greater-or-equal", "thresholdRepresentation" to "float-iou", "scoreRepresentation" to "binary64")) {
+            reject(BundleFixture.json().apply { getJSONObject("nmsPolicy").put(field, value) })
+        }
+        reject(BundleFixture.json().apply { getJSONObject("nmsPolicy").put("grid", JSONArray(listOf(1000, 500))) })
+        reject(BundleFixture.json().apply { getJSONObject("nmsPolicy").put("extra", 1) })
+    }
+    @Test fun `release without exact resize algorithm and parameters never becomes available`() {
+        reject(BundleFixture.json().apply { remove("resizePolicy") })
+        for ((field, value) in listOf("version" to 2, "coordinateTransform" to "align-corners", "rounding" to "floor", "antialias" to true, "alpha" to "ignore")) {
+            reject(BundleFixture.json().apply { getJSONObject("resizePolicy").put(field, value) })
+        }
+        reject(BundleFixture.json().apply { getJSONObject("resizePolicy").put("classifierSize", JSONArray(listOf(320, 320))) })
+        reject(BundleFixture.json().apply { getJSONObject("resizePolicy").put("unknownParameter", 1) })
+    }
+    @Test fun `release requires current native border policy evidence`() {
+        assertEquals("mediapipe-integer-interior-1px-v1", BundleFixture.json().getString("boxPolicy"))
+        reject(BundleFixture.json().apply { remove("boxPolicy") })
+        reject(BundleFixture.json().apply { put("boxPolicy", "allow-clipped-v0") })
+    }
+    @Test fun `actual Model Maker unsigned contract remains executable with nonzero zero point`() {
+        val release = int8().apply {
+            val detector = getJSONObject("detector")
+            detector.getJSONObject("normalization").put("mean", JSONArray(listOf(127, 127, 127)))
+                .put("std", JSONArray(listOf(128, 128, 128)))
+            detector.getJSONObject("quantization").getJSONObject("input")
+                .put("scales", JSONArray(listOf(1.0 / 128))).put("zeroPoints", JSONArray(listOf(127)))
+        }
+        assertTrue(verify(release) is RecognitionAvailability.Available)
+    }
+    @Test fun `MediaPipe rejects signed or non equivalent input quantization before availability`() {
+        for (kind in listOf("detector", "classifier")) {
+            reject(int8().apply {
+                getJSONObject(kind).getJSONObject("input").put("dtype", "int8")
+            })
+            for ((scale, zero) in listOf(.5 to 128, (1.0 / 128) to 0, (1.0 / 255) to 1)) {
+                reject(int8().apply {
+                    val model = getJSONObject(kind)
+                    if (kind == "classifier") model.getJSONObject("input").put("quantization", JSONArray(listOf(scale, zero)))
+                    else model.getJSONObject("quantization").getJSONObject("input")
+                        .put("scales", JSONArray(listOf(scale))).put("zeroPoints", JSONArray(listOf(zero)))
+                })
+            }
+        }
+        reject(int8().apply { getJSONObject("classifier").getJSONArray("outputs").getJSONObject(0).put("dtype", "int8") })
+        reject(BundleFixture.json().apply {
+            getJSONObject("detector").getJSONObject("normalization").put("mean", JSONArray(listOf(0, 1, 0)))
+        })
+    }
     @Test fun `runtime receives exact classifier output quantization step`() {
         val metadata = (verify(int8()) as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
         assertEquals(1.0 / 256, metadata.classifier.outputQuantizationScale, 0.0)
@@ -124,10 +174,10 @@ class RecognitionAssetVerifierTest {
                     .put("nonemptyConstantTensorTypes", JSONArray(listOf("INT32", "INT8")))
                     .put("quantizedConstantCount", 2)
                 model.getJSONObject("input").put("dtype", "uint8")
-                if (kind == "detector") q.put("input", JSONObject().put("scales", JSONArray(listOf(.5)))
-                    .put("zeroPoints", JSONArray(listOf(128))).put("quantizedDimension", 0))
+                if (kind == "detector") q.put("input", JSONObject().put("scales", JSONArray(listOf(1.0 / 255)))
+                    .put("zeroPoints", JSONArray(listOf(0))).put("quantizedDimension", 0))
                 else {
-                    model.getJSONObject("input").put("quantization", JSONArray(listOf(.5, 128)))
+                    model.getJSONObject("input").put("quantization", JSONArray(listOf(1.0 / 255, 0)))
                     model.getJSONArray("outputs").getJSONObject(0).put("dtype", "uint8").put("quantization", JSONArray(listOf(.00390625, 0)))
                 }
                 getJSONObject("bindings").getJSONObject(kind).getJSONObject("modelHashes")

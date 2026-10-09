@@ -31,6 +31,8 @@ import com.maxmfonseca.pontinho.ui.navigation.PontinhoNavHost
 import com.maxmfonseca.pontinho.ui.scanner.ScannerViewModel
 import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
 import com.maxmfonseca.pontinho.ui.scanner.ScannerScreen
+import com.maxmfonseca.pontinho.ui.scanner.ScannerPhase
+import com.maxmfonseca.pontinho.ui.scanner.ScannerMessage
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -70,6 +72,54 @@ class CardScannerJourneyTest {
             .create(byteArrayOf(1, 2, 3), byteArrayOf(4, 5, 6), "{malformed".toByteArray())
         assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.INVALID_ASSETS), engine.availability)
         unavailableJourney(engine)
+    }
+
+    @Test fun noCardsRetriesCaptureAndManualScoreStillCommits() = runBlocking<Unit> {
+        failedCaptureJourney(CardRecognitionFailure.NoCards(), ScannerMessage.NoCards)
+    }
+
+    @Test fun tooManyCardsNeverSavesPartialHandAndManualScoreStillCommits() = runBlocking<Unit> {
+        failedCaptureJourney(CardRecognitionFailure.TooManyCards(11), ScannerMessage.TooManyCards)
+    }
+
+    @Test fun incompleteCardsNeverSavesPartialHandAndManualScoreStillCommits() = runBlocking<Unit> {
+        failedCaptureJourney(CardRecognitionFailure.IncompleteCards(), ScannerMessage.IncompleteCards)
+    }
+
+    private suspend fun failedCaptureJourney(failure: CardRecognitionFailure, expected: ScannerMessage) {
+        val id = createMatch()
+        showMatch(id, DebugRecognitionEngine(failure))
+        openScore()
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("scanner_root")
+        val image = File.createTempFile("failed-capture-", ".png", context.cacheDir)
+        Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).let { bitmap ->
+            image.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+        try {
+            lateinit var scanner: ScannerViewModel
+            compose.runOnIdle {
+                scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
+                scanner.onPhotoSelected(Uri.fromFile(image))
+            }
+            compose.waitUntil(5_000) { scanner.uiState.value.phase == ScannerPhase.Error }
+            assertEquals(expected, scanner.uiState.value.message)
+            compose.onNodeWithTag("scanner_confirm").assertDoesNotExist()
+            assertTrue(repository.observeMatch(id).first()!!.rounds.isEmpty())
+            assertTrue(database.roundDao().allCardObservations().isEmpty())
+            compose.onNodeWithTag("scanner_retry").performScrollTo().performClick()
+            compose.onNodeWithTag("scanner_capture").performScrollTo().assertIsEnabled()
+            compose.onNodeWithTag("scanner_manual").performScrollTo().performClick()
+            awaitTag("score_input")
+            compose.onNodeWithTag("score_input").performTextInput("17")
+            compose.runOnIdle { match.confirmScore() }
+            compose.waitUntil(5_000) { match.uiState.value.scoreDialog == null }
+            val round = repository.observeMatch(id).first()!!.rounds.single()
+            assertEquals(17, round.draft.entries.values.single().points)
+            assertEquals("MANUAL", database.roundDao().scores(round.id.value).single().origin)
+            assertTrue(database.roundDao().allCardObservations().isEmpty())
+        } finally { assertTrue(image.delete() || !image.exists()) }
     }
 
     private suspend fun unavailableJourney(engine: CardRecognitionEngine) {
@@ -250,13 +300,16 @@ class CardScannerJourneyTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    private class DebugRecognitionEngine : CardRecognitionEngine {
+    private class DebugRecognitionEngine(private val failure: CardRecognitionFailure? = null) : CardRecognitionEngine {
         override val availability = RecognitionAvailability.Available(
             RecognitionModelMetadata("journey-debug-only", "0".repeat(64), (0..51).map { "card-$it" }, 320, 320, .25f, .45f))
-        override suspend fun recognize(bitmap: Bitmap) = CardRecognitionResult(listOf(
+        override suspend fun recognize(bitmap: Bitmap): CardRecognitionResult {
+            failure?.let { throw it }
+            return CardRecognitionResult(listOf(
             RecognizedCard(Card.Suited(Rank.TWO, Suit.HEARTS), NormalizedRect(.1f, .1f, .3f, .5f), .9f, emptySet()),
             RecognizedCard(Card.Suited(Rank.TWO, Suit.HEARTS), NormalizedRect(.6f, .1f, .8f, .5f), .9f, emptySet()),
-        ), 1, "journey-debug-only")
+            ), 1, "journey-debug-only")
+        }
         override fun close() = Unit
     }
 }

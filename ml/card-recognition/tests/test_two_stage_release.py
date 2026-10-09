@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 from test_two_stage_metrics import candidate_fixture, evaluation_fixture, record_fixture, write_json
@@ -59,6 +60,55 @@ def promotion_fixture(tmp_path, monkeypatch, *, include_size=False):
     )
 
 
+def test_runtime_incompatible_selected_model_never_publishes_bundle(tmp_path, monkeypatch):
+    inputs = promotion_fixture(tmp_path, monkeypatch)
+    original = release._snapshots
+
+    def incompatible(*args):
+        snapshots = original(*args)
+        snapshots["classifier"]["contract"]["variants"]["float16"]["input"]["dtype"] = "int8"
+        return snapshots
+
+    monkeypatch.setattr(release, "_snapshots", incompatible)
+    with pytest.raises(ValueError, match="MediaPipe"):
+        release.promote_two_stage_release(inputs, tmp_path / "unexecutable")
+    assert not (tmp_path / "unexecutable").exists()
+
+
+@pytest.mark.parametrize("policy", [None, "allow-clipped-v0"])
+def test_release_rejects_report_with_different_geometry_policy(tmp_path, monkeypatch, policy):
+    inputs = promotion_fixture(tmp_path, monkeypatch)
+    document = json.loads(inputs.evaluation.path.read_bytes())
+    document["boxPolicy"] = policy
+    inputs = replace(
+        inputs,
+        evaluation=replace(inputs.evaluation, sha256=write_json(inputs.evaluation.path, document)),
+    )
+    with pytest.raises(ValueError, match="report candidate/holdout/selection bindings"):
+        release.promote_two_stage_release(inputs, tmp_path / "wrong-policy")
+    assert not (tmp_path / "wrong-policy").exists()
+
+
+@pytest.mark.parametrize("policy", [None, {"version": 0}])
+def test_release_rejects_report_with_different_resize_policy(tmp_path, monkeypatch, policy):
+    inputs = promotion_fixture(tmp_path, monkeypatch)
+    document = json.loads(inputs.evaluation.path.read_bytes())
+    document["resizePolicy"] = policy
+    inputs = replace(
+        inputs,
+        evaluation=replace(inputs.evaluation, sha256=write_json(inputs.evaluation.path, document)),
+    )
+    receipt = json.loads(inputs.evaluation.receipt_path.read_bytes())
+    receipt["reportSha256"] = inputs.evaluation.sha256
+    write_json(inputs.evaluation.receipt_path, receipt)
+    benchmark = json.loads(inputs.benchmark.read_bytes())
+    benchmark["reportSha256"] = inputs.evaluation.sha256
+    write_json(inputs.benchmark, benchmark)
+    with pytest.raises(ValueError, match="resize policy"):
+        release.promote_two_stage_release(inputs, tmp_path / "wrong-resize")
+    assert not (tmp_path / "wrong-resize").exists()
+
+
 def test_promote_complete_verified_evidence_and_no_second_holdout_inference(tmp_path, monkeypatch):
     inputs = promotion_fixture(tmp_path, monkeypatch)
 
@@ -70,6 +120,11 @@ def test_promote_complete_verified_evidence_and_no_second_holdout_inference(tmp_
     bundle = json.loads((receipt.bundle_path / "card_recognition.release.json").read_bytes())
     assert bundle["releaseApproved"] is True
     assert bundle["maximumCardCount"] == 10
+    assert bundle["boxPolicy"] == "mediapipe-integer-interior-1px-v1"
+    assert bundle["resizePolicy"]["algorithm"] == "point-bilinear"
+    assert bundle["resizePolicy"]["version"] == 1
+    assert bundle["nmsPolicy"]["comparison"] == "strict-greater"
+    assert bundle["nmsPolicy"]["thresholdRepresentation"] == "binary64-to-binary32-exact-rational"
     assert bundle["classifier"]["calibration"]["temperature"] == 1
     assert bundle["benchmark"]["medianEndToEndMs"] == 1200
 

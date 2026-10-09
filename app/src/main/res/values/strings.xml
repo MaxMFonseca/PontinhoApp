@@ -149,7 +149,12 @@
     <string name="learn_example_king_spades_description">Rei de espadas, carta preta, vale 10 pontos</string>
     <string name="learn_example_chosen_wildcard_description">Dama de paus, carta padrão preta, vale 20 pontos quando dama preta é o coringa escolhido</string>
     <string name="scanner_title">Conferir cartas</string>
-    <string name="scanner_capture_help">Deixe todas as cartas visíveis, sem sobreposição e com boa luz. A foto será processada neste aparelho.</string>
+    <string name="scanner_capture_help">Coloque no máximo 10 cartas separadas, sem sobreposição e inteiras dentro da imagem. Evite reflexos e sombras fortes. Para mais de 10 cartas, divida em duas fotos. A foto será processada neste aparelho.</string>
+    <string name="scanner_no_cards">Nenhuma carta encontrada. Separe as cartas, deixe todas inteiras dentro da imagem e evite reflexos. Tente outra foto ou digite os pontos.</string>
+    <string name="scanner_too_many_cards">Mais de 10 cartas encontradas. Divida as cartas em duas fotos, com no máximo 10 em cada. Para pontuar o grupo inteiro, some os totais conferidos e digite o resultado manualmente.</string>
+    <string name="scanner_incomplete_cards">Há cartas possivelmente cortadas nas bordas. Afaste um pouco a câmera e deixe todas as cartas inteiras dentro da imagem. Tente outra foto.</string>
+    <string name="scanner_image_too_large">A resolução da foto é grande demais para este aparelho. Tire outra foto com resolução menor ou escolha uma imagem menor, mantendo as cartas legíveis e inteiras. Você também pode digitar os pontos.</string>
+    <string name="scanner_save_interrupted">A gravação foi interrompida. Confirme novamente para concluir.</string>
     <string name="scanner_capture">Fotografar cartas</string>
     <string name="scanner_import">Escolher foto</string>
     <string name="scanner_permission_denied">A câmera está sem permissão. Você pode permitir o acesso ao fotografar, escolher uma foto ou digitar os pontos.</string>
@@ -187,4 +192,5 @@
     <string name="scanner_card_description">Carta %1$d: %2$s</string>
     <string name="scanner_edit_description">Alterar carta %1$d: %2$s</string>
     <string name="scanner_remove_description">Remover carta %1$d: %2$s</string>
+    <string name="scanner_experimental">Reconhecimento experimental, treinado com um único modelo de baralho. Pode errar cartas e totais. Confira e corrija todas as cartas antes de confirmar.</string>
 </resources>

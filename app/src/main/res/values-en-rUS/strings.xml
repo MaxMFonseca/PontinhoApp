@@ -148,7 +148,12 @@
     <string name="learn_example_king_spades_description">King of spades, black card, worth 10 points</string>
     <string name="learn_example_chosen_wildcard_description">Queen of clubs, a standard black card, worth 20 points when black Queen is the chosen wildcard</string>
     <string name="scanner_title">Review cards</string>
-    <string name="scanner_capture_help">Keep every card visible, without overlap and in good light. The photo will be processed on this device.</string>
+    <string name="scanner_capture_help">Place at most 10 cards separated, without overlap and fully inside the frame. Avoid glare and harsh shadows. For more than 10 cards, split them into two photos. The photo will be processed on this device.</string>
+    <string name="scanner_no_cards">No cards found. Separate the cards, keep every card fully inside the frame and avoid glare. Try another photo or enter points manually.</string>
+    <string name="scanner_too_many_cards">More than 10 cards found. Split the cards into two photos, with at most 10 in each. To score the whole group, add the reviewed totals and enter the result manually.</string>
+    <string name="scanner_incomplete_cards">Some cards may be cut off at the edges. Move the camera back a little and keep every card fully inside the frame. Try another photo.</string>
+    <string name="scanner_image_too_large">The photo resolution is too large for this device. Take another photo at a lower resolution or choose a smaller image, keeping the cards readable and complete. You can also enter points manually.</string>
+    <string name="scanner_save_interrupted">Saving was interrupted. Confirm again to finish.</string>
     <string name="scanner_capture">Photograph cards</string>
     <string name="scanner_import">Choose photo</string>
     <string name="scanner_permission_denied">Camera permission is off. You can allow access when taking a photo, choose a photo or enter points manually.</string>
@@ -186,4 +191,5 @@
     <string name="scanner_card_description">Card %1$d: %2$s</string>
     <string name="scanner_edit_description">Change card %1$d: %2$s</string>
     <string name="scanner_remove_description">Remove card %1$d: %2$s</string>
+    <string name="scanner_experimental">Experimental recognition, trained on one deck design. Cards and totals may be wrong. Check and correct every card before confirming.</string>
 </resources>

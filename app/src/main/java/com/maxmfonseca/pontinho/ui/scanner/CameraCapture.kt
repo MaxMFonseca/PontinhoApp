@@ -109,15 +109,15 @@ internal class ScanCaptureFiles(private val cacheDir: File) : AutoCloseable {
  * its Saved/Cancelled events. Navigation and score-dialog wiring intentionally belong to that caller.
  */
 @Composable
-fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Boolean) {
+fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Boolean, recognitionExperimental: Boolean = false) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val files = remember(context.cacheDir, owner) { ScanCaptureFiles(context.cacheDir) }
-    ScannerScreen(viewModel, recognitionAvailable, files)
+    ScannerScreen(viewModel, recognitionAvailable, files, recognitionExperimental)
 }
 
 @Composable
-internal fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Boolean, files: ScanCaptureFiles) {
+internal fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Boolean, files: ScanCaptureFiles, recognitionExperimental: Boolean = false) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -153,6 +153,7 @@ internal fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Bo
     val cancel: () -> Unit = { if (state.phase != ScannerPhase.Saving && !state.saved) { files.clear(); viewModel.cancel() } }
     BackHandler { cancel() }
     ScannerScreen(state, recognitionAvailable, permissionDenied, cameraError,
+        recognitionExperimental = recognitionExperimental,
         captureEnabled = cameraError || !permission || capture != null,
         actions = ScannerActions(
             onCapture = {

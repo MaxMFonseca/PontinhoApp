@@ -68,20 +68,20 @@ internal class TwoStageCardRecognitionEngine(
                     val valid = raw.mapNotNull { box ->
                         require(box.confidence.isFinite() && box.confidence in 0f..1f)
                         require(listOf(box.left, box.top, box.right, box.bottom).all(Float::isFinite))
-                        if (box.confidence < metadata.detectorThreshold) {
-                            if (box.confidence >= metadata.detectorThreshold * .8f) uncertainScene = true
+                        if (box.confidence < metadata.detectorThreshold * .8f) {
                             null
-                        } else if (box.left < 0f || box.top < 0f || box.right > 1f || box.bottom > 1f || box.left >= box.right || box.top >= box.bottom) {
+                        } else if (!isCompleteNativeCard(box, metadata.detector.inputWidth, metadata.detector.inputHeight)) {
+                            // Never return the other cards as a partially recognized hand.
+                            throw CardRecognitionFailure.IncompleteCards()
+                        } else if (box.confidence < metadata.detectorThreshold) {
                             uncertainScene = true
                             null
                         } else box
                     }
-                    val kept = mutableListOf<RawCardBox>()
-                    valid.sortedWith(compareByDescending<RawCardBox> { it.confidence }.thenBy { it.left }.thenBy { it.top }.thenBy { it.right }.thenBy { it.bottom })
-                        .forEach { candidate -> if (kept.none { iou(it, candidate) > metadata.iouThreshold }) kept += candidate }
+                    val kept = nativeNms(valid.map(::nativeNmsBox), metadata.iouThreshold).map(valid::get)
                     if (kept.isEmpty()) throw CardRecognitionFailure.NoCards()
                     if (kept.size > metadata.maxCards) throw CardRecognitionFailure.TooManyCards(kept.size)
-                    val cards = kept.sortedWith(compareBy<RawCardBox> { it.top }.thenBy { it.left }.thenBy { it.bottom }.thenBy { it.right }).map { box ->
+                    val cards = kept.map { box ->
                         context.ensureActive()
                         val bounds = NormalizedRect(box.left, box.top, box.right, box.bottom)
                         val crop = CardCropper.crop(bitmap, bounds, metadata.cropMargin)
@@ -134,12 +134,6 @@ internal class TwoStageCardRecognitionEngine(
             closeCompletion.completeExceptionally(failure)
             throw failure
         }
-    }
-
-    private fun iou(a: RawCardBox, b: RawCardBox): Float {
-        val overlap = (minOf(a.right, b.right) - maxOf(a.left, b.left)).coerceAtLeast(0f) *
-            (minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)).coerceAtLeast(0f)
-        return overlap / ((a.right - a.left) * (a.bottom - a.top) + (b.right - b.left) * (b.bottom - b.top) - overlap)
     }
 
     private fun calibratedScores(raw: FloatArray, stage: RecognitionStageMetadata): DoubleArray {
