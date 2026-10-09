@@ -67,7 +67,7 @@ class CardScannerJourneyTest {
 
     @Test fun malformedReleasePairFailsClosedAndManualScoreStillCommits() = runBlocking<Unit> {
         val engine = AssetGatedCardRecognitionEngineFactory(RecognitionAssetVerifier(), null)
-            .create(byteArrayOf(1, 2, 3), "{malformed".toByteArray())
+            .create(byteArrayOf(1, 2, 3), byteArrayOf(4, 5, 6), "{malformed".toByteArray())
         assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.INVALID_ASSETS), engine.availability)
         unavailableJourney(engine)
     }

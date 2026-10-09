@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
-import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.local.MIGRATION_1_2
 import com.maxmfonseca.pontinho.data.repository.RoomMatchRepository
@@ -13,9 +12,9 @@ import com.maxmfonseca.pontinho.domain.repository.MatchRepository
 import com.maxmfonseca.pontinho.domain.repository.PlayerRepository
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineProvider
-import com.maxmfonseca.pontinho.recognition.MediaPipeCardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.recognition.UnavailableCardRecognitionEngineProvider
 import com.maxmfonseca.pontinho.recognition.VerifiedCardRecognitionEngineProvider
+import com.maxmfonseca.pontinho.recognition.TwoStageCardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.settings.DataStorePreferencesRepository
 import com.maxmfonseca.pontinho.settings.PreferencesRepository
 import java.io.IOException
@@ -30,7 +29,7 @@ interface AppContainer {
 
 class DefaultAppContainer internal constructor(
     applicationContext: Context,
-    recognitionEngineFactory: CardRecognitionEngineFactory? = MediaPipeCardRecognitionEngineFactory(applicationContext),
+    recognitionEngineFactory: CardRecognitionEngineFactory? = TwoStageCardRecognitionEngineFactory(applicationContext),
 ) : AppContainer {
     private val database = Room.databaseBuilder(
         applicationContext,
@@ -49,17 +48,18 @@ class DefaultAppContainer internal constructor(
 
     override val cardRecognitionEngineProvider: CardRecognitionEngineProvider =
         VerifiedCardRecognitionEngineProvider(
-            readAssets = { applicationContext.readOptionalAsset(MODEL_ASSET) to
-                applicationContext.readOptionalAsset(RELEASE_ASSET) },
+            readAssets = { Triple(
+                applicationContext.readOptionalAsset(DETECTOR_ASSET),
+                applicationContext.readOptionalAsset(CLASSIFIER_ASSET),
+                applicationContext.readOptionalAsset(RELEASE_ASSET),
+            ) },
             factory = recognitionEngineFactory,
-            allowExperimental = applicationContext.resources.getBoolean(
-                R.bool.allow_experimental_card_model,
-            ),
         )
 
     private companion object {
-        const val MODEL_ASSET = "card_detector.tflite"
-        const val RELEASE_ASSET = "card_detector.release.json"
+        const val DETECTOR_ASSET = "card_detector.tflite"
+        const val CLASSIFIER_ASSET = "card_classifier.tflite"
+        const val RELEASE_ASSET = "card_recognition.release.json"
     }
 }
 

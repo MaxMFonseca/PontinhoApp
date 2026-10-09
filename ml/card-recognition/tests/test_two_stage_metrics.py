@@ -142,7 +142,7 @@ def write_json(path, value):
     return hashlib.sha256(payload).hexdigest()
 
 
-def candidate_fixture(tmp_path, kind, records, monkeypatch):
+def candidate_fixture(tmp_path, kind, records, monkeypatch, *, include_size=False):
     root = tmp_path / kind
     root.mkdir()
     stem = "card_detector" if kind == "detector" else "card_classifier"
@@ -154,8 +154,9 @@ def candidate_fixture(tmp_path, kind, records, monkeypatch):
         variants[variant] = {
             "filename": filename,
             "modelSha256": hashlib.sha256(payload).hexdigest(),
-            "modelSizeBytes": len(payload),
         }
+        if include_size:
+            variants[variant]["modelSizeBytes"] = len(payload)
         if kind == "classifier":
             variants[variant]["calibration"] = {
                 "partition": "validation",
@@ -210,7 +211,6 @@ def candidate_fixture(tmp_path, kind, records, monkeypatch):
         "_inspect",
         lambda path, variant, kind: {
             "modelSha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "modelSizeBytes": path.stat().st_size,
         },
     )
     return SimpleNamespace(
@@ -298,10 +298,14 @@ def test_holdout_claim_is_global_to_partition_and_never_retried_after_failure(tm
         joint.claim_holdout(tmp_path, "b" * 64, {"candidate": "two"})
 
 
-def evaluation_fixture(tmp_path, monkeypatch):
+def evaluation_fixture(tmp_path, monkeypatch, *, include_size=False):
     validation = [record_fixture(tmp_path, i, i) for i in range(1, 11)]
-    detector = candidate_fixture(tmp_path, "detector", validation, monkeypatch)
-    classifier = candidate_fixture(tmp_path, "classifier", validation, monkeypatch)
+    detector = candidate_fixture(
+        tmp_path, "detector", validation, monkeypatch, include_size=include_size
+    )
+    classifier = candidate_fixture(
+        tmp_path, "classifier", validation, monkeypatch, include_size=include_size
+    )
     validation_path = tmp_path / "validation.json"
     write_json(
         validation_path, {"schemaVersion": 1, "partition": "validation", "records": validation}

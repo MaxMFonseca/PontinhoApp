@@ -55,15 +55,20 @@ data class ConfirmedCard(
     }
 }
 
+sealed interface RecognitionMetadata {
+    val modelVersion: String
+}
+
+/** Compatibility value for existing injected UI fixtures; never produced by the asset verifier. */
 data class RecognitionModelMetadata(
-    val modelVersion: String,
+    override val modelVersion: String,
     val modelSha256: String,
     val labels: List<String>,
     val inputWidth: Int,
     val inputHeight: Int,
     val confidenceThreshold: Float,
     val iouThreshold: Float,
-) {
+) : RecognitionMetadata {
     init {
         require(modelVersion.isNotBlank())
         require(modelSha256.matches(Regex("[0-9a-f]{64}")))
@@ -87,7 +92,34 @@ enum class RecognitionUnavailableReason {
 sealed interface RecognitionAvailability {
     data object Checking : RecognitionAvailability
 
-    data class Available(val metadata: RecognitionModelMetadata) : RecognitionAvailability
+    data class Available(val metadata: RecognitionMetadata) : RecognitionAvailability
 
     data class Unavailable(val reason: RecognitionUnavailableReason) : RecognitionAvailability
+}
+
+data class RecognitionStageMetadata(
+    val modelSha256: String,
+    val modelSizeBytes: Long,
+    val labels: List<String>,
+    val inputWidth: Int,
+    val inputHeight: Int,
+    val quantizationVariant: String,
+    val calibrationTemperature: Float = 1f,
+    /** Native MediaPipe scores are dequantized; retain the verified step for rounding bounds. */
+    val outputQuantizationScale: Double = 0.0,
+)
+
+data class RecognitionModelBundleMetadata(
+    val version: String,
+    val detector: RecognitionStageMetadata,
+    val classifier: RecognitionStageMetadata,
+    val labels: List<String>,
+    val detectorThreshold: Float,
+    /** The selected combined-score floor: min(detector, calibrated classifier). */
+    val classifierThreshold: Float,
+    val iouThreshold: Float,
+    val cropMargin: Float,
+    val maxCards: Int,
+) : RecognitionMetadata {
+    override val modelVersion get() = version
 }

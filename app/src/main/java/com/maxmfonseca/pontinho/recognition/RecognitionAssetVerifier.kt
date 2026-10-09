@@ -3,157 +3,242 @@ package com.maxmfonseca.pontinho.recognition
 import android.graphics.Bitmap
 import android.util.JsonReader
 import android.util.JsonToken
-import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngine
-import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineFactory
-import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineProvider
-import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionResult
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason
+import com.maxmfonseca.pontinho.domain.recognition.*
 import java.io.ByteArrayInputStream
 import java.io.InputStreamReader
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
+import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
-import java.time.Instant
 
-class RecognitionAssetVerifier(
-    private val allowExperimental: Boolean = false,
-) {
-    fun verify(model: ByteArray?, releaseJson: ByteArray?): RecognitionAvailability {
-        if (model == null || releaseJson == null || model.isEmpty() || releaseJson.isEmpty()) {
+/** Consumes only the atomic Stage 5 release; no single-model or experimental fallback. */
+class RecognitionAssetVerifier {
+    fun verify(detector: ByteArray?, classifier: ByteArray?, releaseJson: ByteArray?): RecognitionAvailability {
+        if (detector == null || classifier == null || releaseJson == null ||
+            detector.isEmpty() || classifier.isEmpty() || releaseJson.isEmpty()) {
             return RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS)
         }
         if (releaseJson.size > MAX_RELEASE_JSON_BYTES) return invalid()
-
         return try {
             val root = parseStrictJson(releaseJson).objectValue()
-            if (root.int("schemaVersion") != RELEASE_SCHEMA_VERSION) return invalid()
-            val status = root.string("status")
-            when (status) {
-                APPROVED_STATUS -> if (root.keys != RELEASE_FIELDS) return invalid()
-                EXPERIMENTAL_STATUS -> {
-                    if (!allowExperimental || root.keys != EXPERIMENTAL_FIELDS) return invalid()
-                }
-                else -> return invalid()
+            root.exact(RELEASE_FIELDS)
+            require(root.int("schemaVersion") == 1)
+            require(root.string("kind") == "TWO_STAGE_CARD_RECOGNITION_RELEASE")
+            require((root.getValue("releaseApproved") as? JsonBoolean)?.value == true)
+            require(root.strings("labels") == CardClassIndex.labels)
+            require(root.int("maximumCardCount") == 10)
+            require(root.string("confidenceCombination") == "min(detector,calibratedClassifier)")
+            require(root.string("spatialOrder") == "top-left-bottom-right")
+            HASH_FIELDS.forEach { root.hash(it) }
+            val thresholds = root.objectField("thresholds")
+            thresholds.exact(setOf("detector_score", "combined_score", "iou", "crop_margin"))
+            val detectorThreshold = thresholds.range("detector_score", "0.000000000001", "1").toFloat()
+            val classifierThreshold = thresholds.range("combined_score", "0.000000000001", "1").toFloat()
+            val iou = thresholds.range("iou", "0.000000000001", "1").toFloat()
+            val margin = thresholds.range("crop_margin", "0", "0.25").toFloat()
+            val detectorMetadata = stage(root.objectField("detector"), detector, classifier = false)
+            val classifierMetadata = stage(root.objectField("classifier"), classifier, classifier = true)
+            val bindings = root.objectField("bindings")
+            bindings.exact(setOf("detector", "classifier"))
+            for ((name, metadata) in listOf("detector" to detectorMetadata, "classifier" to classifierMetadata)) {
+                val binding = bindings.objectField(name)
+                binding.exact(setOf("contractSha256", "modelHashes"))
+                binding.hash("contractSha256")
+                val hashes = binding.objectField("modelHashes")
+                hashes.exact(setOf("float16", "int8"))
+                hashes.keys.forEach { hashes.hash(it) }
+                require(hashes.string(metadata.quantizationVariant) == metadata.modelSha256)
             }
-
-            val modelVersion = root.string("modelVersion")
-            if (!MODEL_VERSION.matches(modelVersion)) return invalid()
-            val modelHash = root.string("modelSha256")
-            if (!SHA256.matches(modelHash) || sha256(model) != modelHash) {
-                return invalid()
-            }
-            if (root.long("modelSizeBytes") != model.size.toLong()) {
-                return invalid()
-            }
-
-            val labels = root.array("labels").map { it.stringValue() }
-            if (labels != CardClassIndex.labels) return invalid()
-            val width = root.int("inputWidth")
-            val height = root.int("inputHeight")
-            if (width != INPUT_WIDTH || height != INPUT_HEIGHT) {
-                return invalid()
-            }
-            if (!validQuantization(root.objectField("quantization"))) {
-                return invalid()
-            }
-
-            val confidence = root.unitFloat("confidenceThreshold")
-            val iou = root.unitFloat("iouThreshold")
-            if (status == APPROVED_STATUS && !validReleaseEvidence(root)) return invalid()
-            if (status == EXPERIMENTAL_STATUS && !validExperimentalEvidence(root)) return invalid()
-
-            RecognitionAvailability.Available(
-                RecognitionModelMetadata(
-                    modelVersion = modelVersion,
-                    modelSha256 = modelHash,
-                    labels = labels,
-                    inputWidth = width,
-                    inputHeight = height,
-                    confidenceThreshold = confidence,
-                    iouThreshold = iou,
-                ),
-            )
-        } catch (_: Exception) {
-            invalid()
-        }
+            metrics(root.objectField("metrics"))
+            benchmark(root.objectField("benchmark"))
+            RecognitionAvailability.Available(RecognitionModelBundleMetadata(
+                version = root.string("sourceReportSha256"),
+                detector = detectorMetadata, classifier = classifierMetadata,
+                labels = CardClassIndex.labels.toList(), detectorThreshold = detectorThreshold,
+                classifierThreshold = classifierThreshold, iouThreshold = iou, cropMargin = margin, maxCards = 10,
+            ))
+        } catch (_: Exception) { invalid() }
     }
 
     private fun invalid() = RecognitionAvailability.Unavailable(RecognitionUnavailableReason.INVALID_ASSETS)
 
-    private fun validQuantization(value: Map<String, JsonValue>): Boolean {
-        if (value.keys != QUANTIZATION_FIELDS) return false
-        return when (value.string("variant")) {
-            "float16" -> validFloat16Quantization(value)
-            "int8" -> validInt8Quantization(value)
-            else -> false
+    private fun stage(value: Map<String, JsonValue>, bytes: ByteArray, classifier: Boolean): RecognitionStageMetadata {
+        value.exact(MODEL_FIELDS + if (classifier) setOf("calibration") else emptySet())
+        val kind = if (classifier) "classifier" else "detector"
+        require(value.string("filename") == "card_$kind.tflite")
+        val hash = value.hash("modelSha256")
+        require(hash == sha256(bytes) && value.long("modelSizeBytes") == bytes.size.toLong())
+        val variant = value.string("variant")
+        require(variant in setOf("float16", "int8"))
+        val labels = value.strings("labels")
+        require(labels == if (classifier) CardClassIndex.labels else listOf("card"))
+        require(value.string("interpreterInvocation") == "passed")
+        require(value.strings("customOps") == if (classifier) emptyList<String>() else listOf("TFLite_Detection_PostProcess"))
+        val size = if (classifier) 224 else 320
+        val input = value.objectField("input")
+        tensor(input, listOf(1, size, size, 3), variant, classifier)
+        val outputs = value.array("outputs").map { it.objectValue() }
+        if (classifier) {
+            require(outputs.size == 1)
+            val output = outputs.single()
+            tensor(output, listOf(1, 52), variant, true, setOf("semantic"))
+            require(output.string("semantic") == "class_probabilities")
+        } else {
+            require(outputs.size == 4)
+            val max = outputs.first().ints("shape").getOrNull(1) ?: error("Missing box count")
+            require(max > 0)
+            val semantics = listOf("boxes", "classes", "scores", "count")
+            val names = listOf("location", "category", "score", "number of detections")
+            require(outputs.map { it.string("tensorName") }.distinct().size == 4)
+            outputs.forEachIndexed { index, output ->
+                output.exact(setOf("semantic", "tensorName", "metadataName", "shape", "shapeSignature", "dtype"))
+                require(output.string("semantic") == semantics[index] && output.string("metadataName") == names[index])
+                require(output.string("tensorName").isNotBlank() && output.string("dtype") == "float32")
+                val shape = when (index) { 0 -> listOf(1, max, 4); 3 -> listOf(1); else -> listOf(1, max) }
+                require(output.ints("shape") == shape && output.ints("shapeSignature") == shape)
+            }
+        }
+        val normalization = value.objectField("normalization")
+        normalization.exact(setOf("mean", "std"))
+        val mean = normalization.array("mean").map { it.numberValue().also { n -> require(n.toDouble().isFinite()) } }
+        val std = normalization.array("std").map { it.numberValue().also { n -> require(n.toDouble().isFinite() && n > BigDecimal.ZERO) } }
+        require(mean.size == 3 && std.size == 3)
+        if (classifier) require(mean.all { it.compareTo(BigDecimal.ZERO) == 0 } && std.all { it.compareTo(BigDecimal(255)) == 0 })
+        quantization(value.objectField("quantization"), variant, classifier, input.string("dtype"), input.ints("shape").size)
+        var temperature = 1f
+        if (classifier) {
+            val calibration = value.objectField("calibration")
+            calibration.exact(setOf("method", "partition", "temperature", "nllBefore", "nllAfter", "sampleCount", "scoreTransform", "evaluation"))
+            require(calibration.string("method") == "temperature-scaling" && calibration.string("partition") == "validation")
+            require(calibration.string("scoreTransform") == "softmax(log(max(raw_probability,1e-12))/temperature)")
+            require(calibration.string("evaluation") == "in-sample-validation-not-holdout-quality")
+            temperature = calibration.range("temperature", "0.25", "4").toFloat()
+            require(calibration.nonnegative("nllAfter") <= calibration.nonnegative("nllBefore"))
+            require(calibration.int("sampleCount") > 0)
+        }
+        val outputScale = if (classifier && variant == "int8") outputs.single().array("quantization")[0].numberValue().toDouble() else 0.0
+        return RecognitionStageMetadata(hash, bytes.size.toLong(), labels, size, size, variant, temperature, outputScale)
+    }
+
+    private fun tensor(value: Map<String, JsonValue>, shape: List<Int>, variant: String, quantized: Boolean, extra: Set<String> = emptySet()) {
+        value.exact(setOf("name", "shape", "shapeSignature", "dtype") + extra + if (quantized) setOf("quantization") else emptySet())
+        require(value.string("name").isNotBlank() && value.ints("shape") == shape && value.ints("shapeSignature") == shape)
+        val dtype = value.string("dtype")
+        require(if (variant == "float16") dtype == "float32" else dtype in setOf("int8", "uint8"))
+        if (quantized) {
+            val pair = value.array("quantization")
+            require(pair.size == 2)
+            val scale = pair[0].numberValue()
+            val zero = pair[1].numberValue().intValueExact()
+            require(scale.toDouble().isFinite())
+            if (variant == "float16") require(scale.compareTo(BigDecimal.ZERO) == 0 && zero == 0)
+            else require(scale > BigDecimal.ZERO && zero in if (dtype == "int8") -128..127 else 0..255)
         }
     }
 
-    private fun validFloat16Quantization(value: Map<String, JsonValue>): Boolean {
-        val tensorTypes = value.array("nonemptyConstantTensorTypes").map { it.stringValue() }
-        return value.getValue("input") is JsonNull &&
-            tensorTypes == tensorTypes.distinct().sorted() &&
-            "FLOAT16" in tensorTypes &&
-            tensorTypes.all { it in ALLOWED_FLOAT16_TENSOR_TYPES } &&
-            value.int("quantizedConstantCount") == 0
+    private fun quantization(value: Map<String, JsonValue>, variant: String, classifier: Boolean, dtype: String, inputRank: Int) {
+        value.exact(setOf("variant", "nonemptyConstantTensorTypes", "quantizedConstantCount") + if (classifier) emptySet() else setOf("input"))
+        require(value.string("variant") == variant)
+        val types = value.strings("nonemptyConstantTensorTypes")
+        require(types == types.distinct().sorted())
+        if (variant == "float16") {
+            require("FLOAT16" in types && types.all { it in if (classifier) setOf("FLOAT16", "INT32") else setOf("FLOAT16", "FLOAT32", "INT32") })
+            require(value.int("quantizedConstantCount") == 0)
+            if (!classifier) require(value.getValue("input") is JsonNull)
+        } else {
+            require(types.any { it in setOf("INT8", "UINT8") } && types.all { it in if (classifier) setOf("INT8", "UINT8", "INT32") else setOf("INT8", "UINT8", "INT32", "FLOAT32") })
+            require(value.int("quantizedConstantCount") > 0)
+            if (!classifier) {
+                val input = value.objectField("input")
+                input.exact(setOf("scales", "zeroPoints", "quantizedDimension"))
+                val scales = input.array("scales")
+                val zeroPoints = input.array("zeroPoints")
+                require(scales.size == 1 && zeroPoints.size == 1)
+                require(scales.single().numberValue().let { it.toDouble().isFinite() && it > BigDecimal.ZERO })
+                require(zeroPoints.single().numberValue().intValueExact() in if (dtype == "int8") -128..127 else 0..255)
+                require(input.int("quantizedDimension") in 0 until inputRank)
+            }
+        }
     }
 
-    private fun validInt8Quantization(value: Map<String, JsonValue>): Boolean {
-        val input = value.getValue("input")
-        if (input !is JsonObject || input.fields.keys != INPUT_QUANTIZATION_FIELDS) return false
-        val scales = input.fields.array("scales").map { it.numberValue() }
-        val zeroPoints = input.fields.array("zeroPoints").map { it.numberValue() }
-        if (scales.size != 1 || !scales.single().toDouble().isFinite() || scales.single() <= BigDecimal.ZERO) {
-            return false
+    private fun metrics(value: Map<String, JsonValue>) {
+        value.exact(METRIC_FIELDS + setOf("uniquePhotoCount", "unseenDeckCount", "byCardCount", "byDeck"))
+        metricRow(value, gate = true)
+        require(value.int("sceneCount") >= 200 && value.int("uniquePhotoCount") in 200..value.int("sceneCount"))
+        require(value.int("unseenDeckCount") >= 10)
+        val buckets = value.objectField("byCardCount")
+        require(buckets.keys.containsAll((1..10).map(Int::toString)))
+        buckets.forEach { (key, rowValue) ->
+            require(key.matches(Regex("0|[1-9][0-9]*")) && key.toInt() >= 0)
+            val row = rowValue.objectValue()
+            row.exact(METRIC_FIELDS)
+            metricRow(row, key.toInt() in 1..10)
+            require(row.int("supportedSceneCount") == if (key.toInt() in 1..10) row.int("sceneCount") else 0)
         }
-        if (zeroPoints.size != 1) return false
-        val zeroPoint = runCatching { zeroPoints.single().intValueExact() }.getOrNull() ?: return false
-        if (zeroPoint !in MIN_INPUT_ZERO_POINT..MAX_INPUT_ZERO_POINT) return false
-        if (input.fields.int("quantizedDimension") != 0) return false
-        val tensorTypes = value.array("nonemptyConstantTensorTypes").map { it.stringValue() }
-        if (
-            tensorTypes != tensorTypes.distinct().sorted() ||
-            tensorTypes.none { it in QUANTIZED_BYTE_TENSOR_TYPES } ||
-            tensorTypes.any { it !in ALLOWED_INT8_TENSOR_TYPES }
-        ) {
-            return false
+        val decks = value.objectField("byDeck")
+        require(decks.size == value.int("unseenDeckCount") && decks.keys.none(String::isBlank))
+        decks.values.forEach { it.objectValue().also { row -> row.exact(METRIC_FIELDS); metricRow(row, false) } }
+        for (group in listOf(buckets, decks)) {
+            for (field in COUNT_FIELDS) {
+                require(group.values.sumOf { it.objectValue().long(field) } == value.long(field))
+            }
         }
-        return value.int("quantizedConstantCount") > 0
     }
 
-    private fun validReleaseEvidence(root: Map<String, JsonValue>): Boolean {
-        if (root.string("sourceReportPath").isBlank()) return false
-        HASH_FIELDS.forEach { field ->
-            if (!SHA256.matches(root.string(field))) return false
+    private fun metricRow(value: Map<String, JsonValue>, gate: Boolean) {
+        COUNT_FIELDS.forEach { require(value.long(it) >= 0) }
+        require(value.long("sceneCount") > 0 && value.long("supportedSceneCount") <= value.long("sceneCount"))
+        RATE_FIELDS.forEach { value.range(it, "0", "1") }
+        if (gate) {
+            value.range("detectorRecall", "0.97", "1")
+            value.range("detectorFalsePositiveShare", "0", "0.01")
+            value.range("exactCardMultisetAccuracy", "0.90", "1")
+            value.range("exactHandTotalAccuracy", "0.95", "1")
         }
-        OPTIONAL_HASH_FIELDS.forEach { field ->
-            val value = root.getValue(field)
-            if (value !is JsonNull && (value !is JsonString || !SHA256.matches(value.value))) return false
+        val tp = value.number("detectorTp")
+        val fp = value.number("detectorFp")
+        val fn = value.number("detectorFn")
+        fun ratio(field: String, numerator: BigDecimal, denominator: BigDecimal) {
+            val expected = if (denominator == BigDecimal.ZERO) BigDecimal.ZERO else numerator.divide(denominator, java.math.MathContext.DECIMAL64)
+            require(value.number(field).subtract(expected).abs() <= BigDecimal("0.000000000001"))
         }
-        if (root.unitFloat("exactTotalAccuracy") < MIN_EXACT_TOTAL_ACCURACY) return false
-        root.unitFloat("exactCardMultisetAccuracy")
-        root.unitFloat("abstentionRate")
-        if (root.int("heldOutPhotoCount") < MIN_HELD_OUT_PHOTOS) return false
-        if (root.int("heldOutDeckCount") < MIN_HELD_OUT_DECKS) return false
-        val exportedAt = root.string("exportedAt")
-        if (!RFC3339_UTC.matches(exportedAt)) return false
-        return runCatching { Instant.parse(exportedAt) }.isSuccess
+        ratio("detectorRecall", tp, tp + fn)
+        ratio("detectorPrecision", tp, tp + fp)
+        ratio("detectorFalsePositiveShare", fp, tp + fp)
     }
 
-    private fun validExperimentalEvidence(root: Map<String, JsonValue>): Boolean {
-        if (root.int("trainingPhotoCount") <= 0 || root.int("validationPhotoCount") <= 0) return false
-        if (root.unitFloat("validationMap50") < MIN_EXPERIMENTAL_MAP50) return false
-        if (root.string("sourceLicense") !in APPROVED_EXPERIMENTAL_LICENSES) return false
-        val exportedAt = root.string("exportedAt")
-        if (!RFC3339_UTC.matches(exportedAt)) return false
-        return runCatching { Instant.parse(exportedAt) }.isSuccess
+    private fun benchmark(value: Map<String, JsonValue>) {
+        value.exact(setOf("sha256", "device", "androidVersion", "coldStartMs", "peakMemoryBytes", "medianEndToEndMs", "p95EndToEndMs", "byCardCount"))
+        value.hash("sha256")
+        require(value.string("device").isNotBlank() && value.string("androidVersion").isNotBlank())
+        require(value.nonnegative("coldStartMs") > BigDecimal.ZERO && value.nonnegative("peakMemoryBytes") > BigDecimal.ZERO)
+        fun timing(row: Map<String, JsonValue>, median: String, p95: String) {
+            val duration = row.range(median, "0", "2000")
+            require(duration > BigDecimal.ZERO && row.nonnegative(p95) >= duration)
+        }
+        timing(value, "medianEndToEndMs", "p95EndToEndMs")
+        val counts = value.objectField("byCardCount")
+        counts.exact((1..10).map(Int::toString).toSet())
+        counts.values.forEach { it.objectValue().also { row ->
+            row.exact(setOf("medianMs", "p95Ms")); timing(row, "medianMs", "p95Ms")
+        } }
     }
 
+    private fun Map<String, JsonValue>.exact(fields: Set<String>) { require(keys == fields) }
+    private fun Map<String, JsonValue>.hash(name: String): String = string(name).also { require(SHA256.matches(it)) }
+    private fun Map<String, JsonValue>.strings(name: String) = array(name).map { it.stringValue() }
+    private fun Map<String, JsonValue>.ints(name: String) = array(name).map { it.integer().intValueExact() }
+    private fun JsonValue.integer(): BigDecimal {
+        require(this is JsonNumber && value.matches(Regex("-?(0|[1-9][0-9]*)")))
+        return numberValue()
+    }
+    private fun Map<String, JsonValue>.range(name: String, minimum: String, maximum: String): BigDecimal =
+        number(name).also { require(it >= BigDecimal(minimum) && it <= BigDecimal(maximum)) }
+    private fun Map<String, JsonValue>.nonnegative(name: String): BigDecimal =
+        number(name).also { require(it.toDouble().isFinite() && it >= BigDecimal.ZERO) }
     private fun parseStrictJson(bytes: ByteArray): JsonValue {
         val reader = JsonReader(
-            InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8),
+            InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)),
         ).apply { isLenient = false }
         reader.use {
             val value = readValue(reader, depth = 0)
@@ -212,15 +297,9 @@ class RecognitionAssetVerifier(
     private fun Map<String, JsonValue>.number(name: String): BigDecimal =
         (getValue(name) as? JsonNumber)?.value?.toBigDecimalOrNull() ?: error("Expected number")
 
-    private fun Map<String, JsonValue>.int(name: String): Int = number(name).intValueExact()
+    private fun Map<String, JsonValue>.int(name: String): Int = getValue(name).integer().intValueExact()
 
-    private fun Map<String, JsonValue>.long(name: String): Long = number(name).longValueExact()
-
-    private fun Map<String, JsonValue>.unitFloat(name: String): Float {
-        val number = number(name)
-        require(number >= BigDecimal.ZERO && number <= BigDecimal.ONE) { "Expected unit value" }
-        return number.toFloat()
-    }
+    private fun Map<String, JsonValue>.long(name: String): Long = getValue(name).integer().longValueExact()
 
     private fun Map<String, JsonValue>.array(name: String): List<JsonValue> =
         (getValue(name) as? JsonArray)?.values ?: error("Expected array")
@@ -236,62 +315,24 @@ class RecognitionAssetVerifier(
     private data class JsonBoolean(val value: Boolean) : JsonValue
     private data object JsonNull : JsonValue
 
+
     private companion object {
         const val MAX_RELEASE_JSON_BYTES = 128 * 1024
         const val MAX_JSON_DEPTH = 16
-        const val RELEASE_SCHEMA_VERSION = 1
-        const val APPROVED_STATUS = "APPROVED"
-        const val EXPERIMENTAL_STATUS = "EXPERIMENTAL"
-        const val INPUT_WIDTH = 320
-        const val INPUT_HEIGHT = 320
-        const val MIN_HELD_OUT_PHOTOS = 200
-        const val MIN_HELD_OUT_DECKS = 10
-        const val MIN_EXACT_TOTAL_ACCURACY = 0.95f
-        const val MIN_EXPERIMENTAL_MAP50 = 0.50f
-        const val MIN_INPUT_ZERO_POINT = -128
-        const val MAX_INPUT_ZERO_POINT = 255
-
-        val MODEL_VERSION = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-        val RFC3339_UTC = Regex(
-            "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z",
-        )
         val SHA256 = Regex("[0-9a-f]{64}")
-        val RELEASE_FIELDS = setOf(
-            "schemaVersion", "status", "modelVersion", "modelSha256", "modelSizeBytes",
-            "labels", "inputWidth", "inputHeight", "quantization", "confidenceThreshold",
-            "iouThreshold", "sourceReportPath", "sourceReportSha256", "modelContractSha256",
-            "candidateContractSha256", "comparisonSha256", "validationManifestSha256",
-            "thresholdSelectionSha256", "validationReceiptSha256", "sourceAuditReceiptSha256",
-            "sourceManifestSha256", "splitManifestSha256", "trainingInputSha256",
-            "syntheticManifestSha256", "syntheticReviewSha256",
-            "syntheticGenerationConfigSha256", "testManifestSha256", "exactTotalAccuracy",
-            "exactCardMultisetAccuracy", "abstentionRate", "heldOutPhotoCount",
-            "heldOutDeckCount", "exportedAt",
-        )
-        val EXPERIMENTAL_FIELDS = setOf(
-            "schemaVersion", "status", "modelVersion", "modelSha256", "modelSizeBytes",
-            "labels", "inputWidth", "inputHeight", "quantization", "confidenceThreshold",
-            "iouThreshold", "trainingPhotoCount", "validationPhotoCount", "sourceLicense",
-            "validationMap50", "exportedAt",
-        )
-        val APPROVED_EXPERIMENTAL_LICENSES = setOf("CC-BY-4.0", "CC0-1.0", "PUBLIC-DOMAIN")
-        val HASH_FIELDS = setOf(
-            "sourceReportSha256", "modelContractSha256", "candidateContractSha256",
-            "comparisonSha256", "validationManifestSha256", "thresholdSelectionSha256",
-            "validationReceiptSha256", "sourceAuditReceiptSha256", "sourceManifestSha256",
-            "splitManifestSha256", "trainingInputSha256", "testManifestSha256",
-        )
-        val OPTIONAL_HASH_FIELDS = setOf(
-            "syntheticManifestSha256", "syntheticReviewSha256",
-            "syntheticGenerationConfigSha256",
-        )
-        val QUANTIZATION_FIELDS = setOf(
-            "variant", "input", "nonemptyConstantTensorTypes", "quantizedConstantCount",
-        )
-        val INPUT_QUANTIZATION_FIELDS = setOf("scales", "zeroPoints", "quantizedDimension")
-        val ALLOWED_FLOAT16_TENSOR_TYPES = setOf("FLOAT16", "FLOAT32", "INT32")
-        val QUANTIZED_BYTE_TENSOR_TYPES = setOf("INT8", "UINT8")
-        val ALLOWED_INT8_TENSOR_TYPES = setOf("FLOAT32", "INT8", "UINT8", "INT32")
+        val HASH_FIELDS = setOf("holdoutPartitionSha256", "holdoutIdentity", "holdoutManifestSha256",
+            "selectionSha256", "sourceManifestSha256", "sourceAuditReceiptSha256",
+            "normalizedDatasetSha256", "sourceReportSha256", "evaluationReceiptSha256")
+        val RELEASE_FIELDS = HASH_FIELDS + setOf("schemaVersion", "kind", "releaseApproved", "labels",
+            "maximumCardCount", "confidenceCombination", "spatialOrder", "thresholds", "detector", "classifier",
+            "bindings", "benchmark", "metrics")
+        val MODEL_FIELDS = setOf("modelSha256", "modelSizeBytes", "filename", "variant", "input",
+            "outputs", "customOps", "labels", "normalization", "quantization", "interpreterInvocation")
+        val COUNT_FIELDS = setOf("sceneCount", "supportedSceneCount", "detectorTp", "detectorFp", "detectorFn",
+            "falsePositives", "falseNegatives")
+        val RATE_FIELDS = setOf("detectorRecall", "detectorPrecision", "detectorFalsePositiveShare",
+            "perCardRecall", "perCardPrecision", "exactCardMultisetAccuracy", "exactHandTotalAccuracy", "abstentionRate")
+        val METRIC_FIELDS = COUNT_FIELDS + RATE_FIELDS
     }
 }
 
@@ -322,16 +363,18 @@ class AssetGatedCardRecognitionEngineFactory internal constructor(
     private val verifier: RecognitionAssetVerifier,
     private val delegate: CardRecognitionEngineFactory?,
 ) {
-    fun create(model: ByteArray?, releaseJson: ByteArray?): CardRecognitionEngine {
-        val availability = verifier.verify(model, releaseJson)
-        if (availability !is RecognitionAvailability.Available || model == null) {
+    fun create(detectorModel: ByteArray?, classifierModel: ByteArray?, releaseJson: ByteArray?): CardRecognitionEngine {
+        val detector = detectorModel?.copyOf()
+        val classifier = classifierModel?.copyOf()
+        val availability = verifier.verify(detector, classifier, releaseJson?.copyOf())
+        if (availability !is RecognitionAvailability.Available || detector == null || classifier == null) {
             return UnavailableCardRecognitionEngine(availability)
         }
         val factory = delegate ?: return UnavailableCardRecognitionEngine(
             RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
         )
         return try {
-            factory.create(model, availability.metadata)
+            factory.create(detector, classifier, availability.metadata as RecognitionModelBundleMetadata)
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
         } catch (_: LinkageError) {

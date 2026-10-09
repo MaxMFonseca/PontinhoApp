@@ -11,10 +11,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * await/inference, not the reusable detector. Closing the provider also disposes a late native result.
  */
 class VerifiedCardRecognitionEngineProvider internal constructor(
-    private val readAssets: suspend () -> Pair<ByteArray?, ByteArray?>,
+    private val readAssets: suspend () -> Triple<ByteArray?, ByteArray?, ByteArray?>,
     private val factory: CardRecognitionEngineFactory?,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
-    allowExperimental: Boolean = false,
 ) : CardRecognitionEngineProvider {
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -23,20 +22,23 @@ class VerifiedCardRecognitionEngineProvider internal constructor(
     private val state = MutableStateFlow<RecognitionAvailability>(RecognitionAvailability.Checking)
     override val availability = state.asStateFlow()
     private val verified = scope.async {
-        val (model, release) = try { readAssets() }
+        val (detectorSource, classifierSource, releaseSource) = try { readAssets() }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { null to null }
-        val result = RecognitionAssetVerifier(allowExperimental).verify(model, release)
+        catch (_: Exception) { Triple(null, null, null) }
+        // Own immutable snapshots through verification and native construction.
+        val detector = detectorSource?.copyOf()
+        val classifier = classifierSource?.copyOf()
+        val result = RecognitionAssetVerifier().verify(detector, classifier, releaseSource?.copyOf())
         state.value = if (result is RecognitionAvailability.Available && factory == null)
             unavailable() else result
-        model to state.value
+        Triple(detector, classifier, state.value)
     }
     private val initialized = scope.async(start = CoroutineStart.LAZY) {
-        val (model, result) = verified.await()
-        check(result is RecognitionAvailability.Available && model != null && factory != null) {
+        val (detector, classifier, result) = verified.await()
+        check(result is RecognitionAvailability.Available && detector != null && classifier != null && factory != null) {
             "Card recognition is unavailable"
         }
-        val created = try { factory.create(model, result.metadata) }
+        val created = try { factory.create(detector, classifier, result.metadata as RecognitionModelBundleMetadata) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: LinkageError) { state.value = unavailable(); throw CardRecognitionException.InferenceFailed() }
         catch (_: Exception) { state.value = unavailable(); throw CardRecognitionException.InferenceFailed() }

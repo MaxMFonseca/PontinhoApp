@@ -12,28 +12,29 @@ import org.robolectric.RobolectricTestRunner
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class VerifiedCardRecognitionEngineProviderTest {
-    private fun assets() = "abc".toByteArray() to checkNotNull(javaClass.classLoader!!
-        .getResourceAsStream("card_detector.int8.release.json")).use { it.readBytes() }
+    private fun assets() = Triple(BundleFixture.detector.copyOf(), BundleFixture.classifier.copyOf(), BundleFixture.bytes())
 
     @Test fun `production dispatcher verifies assets and constructs native detector off main`() = runBlocking {
         val main = android.os.Looper.getMainLooper().thread
         val provider = VerifiedCardRecognitionEngineProvider({
             assertNotEquals(main, Thread.currentThread()); assets()
-        }, { _, metadata ->
+        }, { detector, classifier, metadata ->
+            assertArrayEquals(BundleFixture.detector, detector); assertArrayEquals(BundleFixture.classifier, classifier)
             assertNotEquals(main, Thread.currentThread())
             Engine(metadata).also { it.inference.complete(Unit) }
         })
         val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         try {
             val result = withTimeout(5_000) { provider.get().recognize(bitmap) }
-            assertEquals("2026.10.15-int8", result.modelVersion)
+            assertEquals("a".repeat(64), result.modelVersion)
         } finally { provider.close(); bitmap.recycle() }
     }
 
     @Test fun `opening and editing manual dialog during verification never creates detector`() = runTest {
         val gate = CompletableDeferred<Unit>()
         var constructions = 0
-        val provider = VerifiedCardRecognitionEngineProvider({ gate.await(); assets() }, { _, metadata ->
+        val provider = VerifiedCardRecognitionEngineProvider({ gate.await(); assets() }, { detector, classifier, metadata ->
+            assertArrayEquals(BundleFixture.detector, detector); assertArrayEquals(BundleFixture.classifier, classifier)
             constructions++; Engine(metadata)
         }, StandardTestDispatcher(testScheduler))
         val snapshot = com.maxmfonseca.pontinho.ui.test.matchSnapshot("manual", java.time.LocalDate.of(2026, 10, 14),
@@ -70,7 +71,9 @@ class VerifiedCardRecognitionEngineProviderTest {
         var constructions = 0
         val provider = VerifiedCardRecognitionEngineProvider(
             readAssets = { gate.await(); assets() },
-            factory = { _, metadata -> constructions++; Engine(metadata) },
+            factory = { detector, classifier, metadata ->
+            assertArrayEquals(BundleFixture.detector, detector); assertArrayEquals(BundleFixture.classifier, classifier)
+            constructions++; Engine(metadata) },
             dispatcher = StandardTestDispatcher(testScheduler),
         )
         val borrowed = provider.get()
@@ -87,7 +90,8 @@ class VerifiedCardRecognitionEngineProviderTest {
     @Test fun `concurrent recognition creates one detector and cancelled waiter does not own it`() = runTest {
         var constructions = 0
         lateinit var native: Engine
-        val provider = VerifiedCardRecognitionEngineProvider({ assets() }, { _, metadata ->
+        val provider = VerifiedCardRecognitionEngineProvider({ assets() }, { detector, classifier, metadata ->
+            assertArrayEquals(BundleFixture.detector, detector); assertArrayEquals(BundleFixture.classifier, classifier)
             constructions++; Engine(metadata).also { native = it }
         }, StandardTestDispatcher(testScheduler))
         advanceUntilIdle()
@@ -96,7 +100,7 @@ class VerifiedCardRecognitionEngineProviderTest {
         val next = async { provider.get().recognize(bitmap) }
         runCurrent()
         cancelled.cancel(); native.inference.complete(Unit); advanceUntilIdle()
-        assertEquals("2026.10.15-int8", next.await().modelVersion)
+        assertEquals("a".repeat(64), next.await().modelVersion)
         assertEquals(1, constructions)
         assertEquals(0, native.closes)
         provider.close(); provider.close()
@@ -107,7 +111,8 @@ class VerifiedCardRecognitionEngineProviderTest {
     @Test fun `closing during native creation disposes result and never admits inference`() = runTest {
         lateinit var provider: VerifiedCardRecognitionEngineProvider
         lateinit var native: Engine
-        provider = VerifiedCardRecognitionEngineProvider({ assets() }, { _, metadata ->
+        provider = VerifiedCardRecognitionEngineProvider({ assets() }, { detector, classifier, metadata ->
+            assertArrayEquals(BundleFixture.detector, detector); assertArrayEquals(BundleFixture.classifier, classifier)
             native = Engine(metadata)
             provider.close()
             native
@@ -125,17 +130,60 @@ class VerifiedCardRecognitionEngineProviderTest {
 
     @Test fun `absent malformed and unapproved assets fail closed without native construction`() = runTest {
         val valid = assets()
-        for (pair in listOf(null to null, valid.first to "bad".toByteArray(),
-            valid.first to valid.second.decodeToString().replace("APPROVED", "NOT_APPROVED").toByteArray())) {
-            val provider = VerifiedCardRecognitionEngineProvider({ pair }, { _, _ -> error("Must not construct") },
+        val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        for (pair in listOf(Triple(null, null, null), Triple(valid.first, null, valid.third), Triple(null, valid.second, valid.third),
+            Triple(valid.first, valid.first, valid.third),
+            Triple(valid.first, valid.second, "bad".toByteArray()), Triple(valid.first, valid.second, BundleFixture.json().put("releaseApproved", false).toString().encodeToByteArray()))) {
+            var constructions = 0
+            val provider = VerifiedCardRecognitionEngineProvider({ pair }, { _, _, metadata -> constructions++; Engine(metadata) },
                 StandardTestDispatcher(testScheduler))
             advanceUntilIdle()
             assertTrue(provider.availability.value is RecognitionAvailability.Unavailable)
+            val attempt = async { runCatching { provider.get().recognize(bitmap) } }
+            advanceUntilIdle()
+            assertTrue(attempt.await().isFailure)
+            assertEquals(0, constructions)
             provider.close()
         }
+        bitmap.recycle()
     }
 
-    private class Engine(metadata: RecognitionModelMetadata) : CardRecognitionEngine {
+    @Test fun `provider owns verified snapshots until lazy native creation`() = runTest {
+        val source = assets()
+        val provider = VerifiedCardRecognitionEngineProvider({ source }, { detector, classifier, metadata ->
+            assertArrayEquals(BundleFixture.detector, detector)
+            assertArrayEquals(BundleFixture.classifier, classifier)
+            Engine(metadata).also { it.inference.complete(Unit) }
+        }, StandardTestDispatcher(testScheduler))
+        advanceUntilIdle()
+        source.first.fill(0); source.second.fill(0); source.third.fill(0)
+        val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        val result = async { provider.get().recognize(bitmap) }
+        advanceUntilIdle()
+        assertEquals("a".repeat(64), result.await().modelVersion)
+        provider.close(); bitmap.recycle()
+    }
+
+    @Test fun `closing while awaiting assets cancels verification without constructing engines`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var cancelled = false
+        val provider = VerifiedCardRecognitionEngineProvider({
+            try { gate.await(); assets() } finally { cancelled = true }
+        }, { _, _, _ -> error("Must not construct") }, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        provider.close(); advanceUntilIdle()
+        assertTrue(cancelled)
+        assertThrows(IllegalStateException::class.java) { provider.get() }
+    }
+
+    @Test fun `verified assets without an installed factory stay unavailable`() = runTest {
+        val provider = VerifiedCardRecognitionEngineProvider({ assets() }, null, StandardTestDispatcher(testScheduler))
+        advanceUntilIdle()
+        assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED), provider.availability.value)
+        provider.close()
+    }
+
+    private class Engine(metadata: RecognitionModelBundleMetadata) : CardRecognitionEngine {
         override val availability = RecognitionAvailability.Available(metadata)
         val inference = CompletableDeferred<Unit>()
         var calls = 0

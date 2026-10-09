@@ -1,457 +1,199 @@
 package com.maxmfonseca.pontinho.recognition
 
-import android.graphics.Bitmap
-import androidx.test.core.app.ApplicationProvider
-import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngine
-import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionResult
-import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
-import com.maxmfonseca.pontinho.domain.recognition.RecognizedCard
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason
-import com.maxmfonseca.pontinho.domain.model.Card
-import com.maxmfonseca.pontinho.domain.model.Rank
-import com.maxmfonseca.pontinho.domain.model.Suit
-import com.google.mediapipe.tasks.core.logging.TasksStatsLoggerFactory
-import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
-import org.junit.Assert.assertThrows
+import com.maxmfonseca.pontinho.domain.recognition.*
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import java.nio.ByteBuffer
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 class RecognitionAssetVerifierTest {
-    private val verifier = RecognitionAssetVerifier()
-    private val model = "abc".encodeToByteArray()
+    @Test fun `runtime receives exact classifier output quantization step`() {
+        val metadata = (verify(int8()) as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
+        assertEquals(1.0 / 256, metadata.classifier.outputQuantizationScale, 0.0)
+        val floating = (verify() as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
+        assertEquals(0.0, floating.classifier.outputQuantizationScale, 0.0)
+    }
+    private fun verify(json: JSONObject = BundleFixture.json()) =
+        RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, json.toString().encodeToByteArray())
+    private fun reject(json: JSONObject) = assertTrue(json.toString(), verify(json) is RecognitionAvailability.Unavailable)
 
-    @Test
-    fun `absent asset pair is unavailable instead of throwing`() {
-        assertEquals(
-            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS),
-            verifier.verify(null, null),
-        )
+    @Test fun `complete release exposes both models and selected thresholds`() {
+        val metadata = (verify() as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
+        assertEquals(BundleFixture.detectorHash, metadata.detector.modelSha256)
+        assertEquals(BundleFixture.classifierHash, metadata.classifier.modelSha256)
+        assertEquals(320, metadata.detector.inputWidth)
+        assertEquals(224, metadata.classifier.inputWidth)
+        assertEquals(BundleFixture.labels, metadata.labels)
+        assertEquals(.5f, metadata.detectorThreshold)
+        assertEquals(.6f, metadata.classifierThreshold)
+        assertEquals(.4f, metadata.iouThreshold)
+        assertEquals(.1f, metadata.cropMargin)
+        assertEquals(10, metadata.maxCards)
+        assertEquals(1f, metadata.classifier.calibrationTemperature)
     }
 
-    @Test
-    fun `either incomplete asset pair is unavailable`() {
-        assertUnavailable(verifier.verify(model, null))
-        assertUnavailable(verifier.verify(null, approvedReleaseJson()))
-    }
-
-    @Test
-    fun `hash mismatch is unavailable`() {
-        assertUnavailable(
-            verifier.verify(model, approvedReleaseJson(modelSha256 = "0".repeat(64))),
-        )
-    }
-
-    @Test
-    fun `wrong label order or count is unavailable`() {
-        val reversed = CANONICAL_LABELS.reversed()
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(labels = reversed)))
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(labels = CANONICAL_LABELS.dropLast(1))))
-    }
-
-    @Test
-    fun `unsupported schema status or model version is unavailable`() {
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(schemaVersion = 2)))
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(status = "NOT_APPROVED")))
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(modelVersion = "unsafe/version")))
-    }
-
-    @Test
-    fun `mismatched input dimensions or quantization contract is unavailable`() {
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(inputWidth = 640)))
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(inputHeight = 640)))
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(quantizationVariant = "fp32")))
-        assertUnavailable(
-            verifier.verify(
-                model,
-                approvedReleaseJson().decodeToString()
-                    .replace(
-                        "\"input\":{\"scales\":[0.5],\"zeroPoints\":[128],\"quantizedDimension\":0}",
-                        "\"input\":null",
-                    )
-                    .encodeToByteArray(),
-            ),
-        )
-    }
-
-    @Test
-    fun `malformed trailing duplicate and unknown metadata fail closed`() {
-        assertUnavailable(verifier.verify(model, "{".encodeToByteArray()))
-        assertUnavailable(verifier.verify(model, approvedReleaseJson() + " true".encodeToByteArray()))
-        assertUnavailable(
-            verifier.verify(
-                model,
-                approvedReleaseJson().decodeToString()
-                    .replace("\"status\":\"APPROVED\"", "\"status\":\"APPROVED\",\"status\":\"APPROVED\"")
-                    .encodeToByteArray(),
-            ),
-        )
-        assertUnavailable(
-            verifier.verify(
-                model,
-                approvedReleaseJson().decodeToString().dropLast(1)
-                    .plus(",\"unexpected\":true}")
-                    .encodeToByteArray(),
-            ),
-        )
-    }
-
-    @Test
-    fun `approved pair exposes verified model metadata`() {
-        val result = verifier.verify(model, approvedReleaseJson())
-
-        assertTrue(result is RecognitionAvailability.Available)
-        result as RecognitionAvailability.Available
-        assertEquals("2026.10.15-int8", result.metadata.modelVersion)
-        assertEquals(320, result.metadata.inputWidth)
-        assertEquals(320, result.metadata.inputHeight)
-        assertEquals(0.5f, result.metadata.confidenceThreshold)
-        assertEquals(0.4f, result.metadata.iouThreshold)
-        assertEquals(CANONICAL_LABELS, result.metadata.labels)
-    }
-
-    @Test
-    fun `experimental assets are rejected by default and accepted only with explicit debug opt in`() {
-        val release = experimentalReleaseJson()
-
-        assertUnavailable(verifier.verify(model, release.encodeToByteArray()))
-        val result = RecognitionAssetVerifier(allowExperimental = true)
-            .verify(model, release.encodeToByteArray())
-
-        assertTrue(result is RecognitionAvailability.Available)
-        result as RecognitionAvailability.Available
-        assertEquals("2026.10.15-beta", result.metadata.modelVersion)
-        assertEquals(CANONICAL_LABELS, result.metadata.labels)
-    }
-
-    @Test
-    fun `debug opt in does not weaken experimental manifest validation`() {
-        val debugVerifier = RecognitionAssetVerifier(allowExperimental = true)
-
-        assertUnavailable(
-            debugVerifier.verify(
-                model,
-                experimentalReleaseJson()
-                    .replace("\"trainingPhotoCount\":964", "\"trainingPhotoCount\":0")
-                    .encodeToByteArray(),
-            ),
-        )
-        assertUnavailable(
-            debugVerifier.verify(
-                model,
-                experimentalReleaseJson(validationMap50 = 0.499).encodeToByteArray(),
-            ),
-        )
-        assertUnavailable(
-            debugVerifier.verify(
-                model,
-                experimentalReleaseJson()
-                    .replace("\"sourceLicense\":\"CC-BY-4.0\"", "\"sourceLicense\":\"unknown\"")
-                    .encodeToByteArray(),
-            ),
-        )
-    }
-
-    @Test
-    fun `float16 release emitted by the model pipeline is available`() {
-        val result = verifier.verify(
-            model,
-            releaseFixture("card_detector.float16.release.json"),
-        )
-
-        assertTrue(result is RecognitionAvailability.Available)
-        result as RecognitionAvailability.Available
-        assertEquals("cards.release_candidate-1", result.metadata.modelVersion)
-    }
-
-    @Test
-    fun `int8 release emitted by the model pipeline is available`() {
-        val result = verifier.verify(
-            model,
-            releaseFixture("card_detector.int8.release.json"),
-        )
-
-        assertTrue(result is RecognitionAvailability.Available)
-        result as RecognitionAvailability.Available
-        assertEquals("2026.10.15-int8", result.metadata.modelVersion)
-    }
-
-    @Test
-    fun `unsafe model version and non UTC timestamp remain unavailable`() {
-        assertUnavailable(verifier.verify(model, approvedReleaseJson(modelVersion = "unsafe/version")))
-        assertUnavailable(
-            verifier.verify(model, approvedReleaseJson(exportedAt = "2026-10-15T09:00:00-03:00")),
-        )
-    }
-
-    @Test
-    fun `real MediaPipe logger factory exercises every event path through the offline transport`() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-
-        val logger = TasksStatsLoggerFactory.create(context, "ObjectDetector", "IMAGE")
-
-        logger.logSessionStart()
-        logger.recordCpuInputArrival(1L)
-        logger.recordInvocationEnd(1L)
-        logger.logInitError()
-        logger.logSessionEnd()
-    }
-
-    @Test
-    fun `real ObjectDetector reaches model validation through the offline logger linkage`() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val invalidModel = ByteBuffer.allocateDirect(8).apply {
-            putLong(0x504f4e54494e484fL)
-            rewind()
+    @Test fun `missing empty or mixed assets never become available`() {
+        for (assets in listOf(Triple(null, BundleFixture.classifier, BundleFixture.bytes()),
+            Triple(BundleFixture.detector, null, BundleFixture.bytes()), Triple(BundleFixture.detector, BundleFixture.classifier, null),
+            Triple(byteArrayOf(), BundleFixture.classifier, BundleFixture.bytes()),
+            Triple(BundleFixture.classifier, BundleFixture.detector, BundleFixture.bytes()))) {
+            assertTrue(RecognitionAssetVerifier().verify(assets.first, assets.second, assets.third) is RecognitionAvailability.Unavailable)
         }
-
-        val error = runCatching {
-            ObjectDetector.createFromBuffer(context, invalidModel)
-        }.exceptionOrNull()
-
-        assertTrue(error != null)
-        assertTrue(generateSequence(error) { it.cause }.none { it is NoClassDefFoundError })
-    }
-
-    @Test
-    fun `provider rejects every get after close`() {
-        val provider = ProcessLifetimeCardRecognitionEngineProvider { FakeEngine() }
-        provider.get()
-        provider.close()
-
-        assertThrows(IllegalStateException::class.java) { provider.get() }
-    }
-
-    @Test
-    fun `provider close is visible to concurrent callers and closes one engine once`() {
-        val fake = FakeEngine()
-        val provider = ProcessLifetimeCardRecognitionEngineProvider { fake }
-        provider.get()
-        val start = CountDownLatch(1)
-        val pool = Executors.newFixedThreadPool(8)
-        val close = pool.submit {
-            start.await()
-            provider.close()
+        for (kind in listOf("detector", "classifier")) {
+            reject(BundleFixture.json().apply { getJSONObject(kind).put("modelSha256", "0".repeat(64)) })
+            reject(BundleFixture.json().apply { getJSONObject(kind).put("modelSizeBytes", 4) })
+            reject(BundleFixture.json().apply { getJSONObject(kind).put("modelSizeBytes", "3") })
+            reject(BundleFixture.json().apply { getJSONObject("bindings").getJSONObject(kind).getJSONObject("modelHashes").put("float16", "0".repeat(64)) })
         }
-        val racingGets = List(24) {
-            pool.submit {
-                start.await()
-                runCatching { provider.get() }
+    }
+
+    @Test fun `every required field and nested field is strict`() {
+        val paths = listOf("", "detector", "classifier", "thresholds", "bindings", "bindings.detector",
+            "bindings.detector.modelHashes", "benchmark", "benchmark.byCardCount.10",
+            "metrics", "metrics.byCardCount.10", "metrics.byDeck.deck-1",
+            "detector.input", "classifier.input", "detector.quantization", "classifier.quantization",
+            "classifier.calibration", "classifier.normalization")
+        fun JSONObject.at(path: String): JSONObject = if (path.isEmpty()) this else path.split('.').fold(this) { obj, field -> obj.getJSONObject(field) }
+        for (path in paths) {
+            val keys = BundleFixture.json().at(path).keys().asSequence().toList()
+            keys.forEach { field -> reject(BundleFixture.json().apply { at(path).remove(field) }) }
+            reject(BundleFixture.json().apply { at(path).put("unexpected", true) })
+        }
+    }
+
+    @Test fun `malformed duplicate trailing coercible and excessive JSON fails closed`() {
+        val valid = BundleFixture.bytes().decodeToString()
+        for (text in listOf("{", "$valid true", valid.replace("\"schemaVersion\":1", "\"schemaVersion\":1,\"schemaVersion\":1"),
+            valid.replace("\"schemaVersion\":1", "\"schemaVersion\":\"1\""),
+            valid.replace("\"releaseApproved\":true", "\"releaseApproved\":\"true\""),
+            valid.replace("\"detector_score\":0.5", "\"detector_score\":NaN"), " ".repeat(128 * 1024) + valid)) {
+            assertTrue(RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, text.encodeToByteArray()) is RecognitionAvailability.Unavailable)
+        }
+    }
+
+    @Test fun `labels dimensions count calibration and threshold bounds are enforced`() {
+        reject(BundleFixture.json().put("schemaVersion", 2))
+        reject(BundleFixture.json().put("kind", "CARD_DETECTOR_RELEASE"))
+        reject(BundleFixture.json().put("confidenceCombination", "max(detector,calibratedClassifier)"))
+        reject(BundleFixture.json().put("spatialOrder", "rank"))
+        reject(BundleFixture.json().put("maximumCardCount", 11))
+        reject(BundleFixture.json().put("releaseApproved", false))
+        reject(BundleFixture.json().put("labels", JSONArray(BundleFixture.labels.reversed())))
+        reject(BundleFixture.json().apply { getJSONObject("detector").put("labels", JSONArray(listOf("AC"))) })
+        reject(BundleFixture.json().apply { getJSONObject("classifier").put("labels", JSONArray(BundleFixture.labels.reversed())) })
+        for (field in listOf("detector_score", "combined_score", "iou", "crop_margin")) {
+            for (bad in listOf(-.01, 1.01, "0.5", true, JSONObject.NULL)) reject(BundleFixture.json().apply { getJSONObject("thresholds").put(field, bad) })
+        }
+        reject(BundleFixture.json().apply { getJSONObject("thresholds").put("crop_margin", .25001) })
+        reject(BundleFixture.json().apply { getJSONObject("thresholds").put("detector_score", 0) })
+        reject(BundleFixture.json().apply { getJSONObject("classifier").getJSONObject("input").put("shape", JSONArray(listOf(1, 320, 320, 3))) })
+        reject(BundleFixture.json().apply { getJSONObject("classifier").getJSONObject("calibration").put("temperature", 0) })
+        reject(BundleFixture.json().apply { getJSONObject("classifier").getJSONObject("calibration").put("partition", "test") })
+    }
+
+    @Test fun `all global and supported count quality floors and benchmark ceilings fail closed`() {
+        val failures = mapOf("detectorRecall" to .969999999, "detectorFalsePositiveShare" to .010000001,
+            "exactCardMultisetAccuracy" to .899999999, "exactHandTotalAccuracy" to .949999999)
+        for ((field, bad) in failures) {
+            reject(BundleFixture.json().apply { getJSONObject("metrics").put(field, bad) })
+            for (count in 1..10) reject(BundleFixture.json().apply { getJSONObject("metrics").getJSONObject("byCardCount").getJSONObject("$count").put(field, bad) })
+        }
+        for ((field, bad) in mapOf("sceneCount" to 199, "uniquePhotoCount" to 199, "unseenDeckCount" to 9)) {
+            reject(BundleFixture.json().apply { getJSONObject("metrics").put(field, bad) })
+        }
+        for (count in 1..10) {
+            reject(BundleFixture.json().apply { getJSONObject("metrics").getJSONObject("byCardCount").remove("$count") })
+            reject(BundleFixture.json().apply { getJSONObject("benchmark").getJSONObject("byCardCount").getJSONObject("$count").put("medianMs", 2000.00001) })
+        }
+        reject(BundleFixture.json().apply { getJSONObject("benchmark").put("medianEndToEndMs", 2000.00001) })
+    }
+
+    @Test fun `legacy single detector never satisfies two model contract`() {
+        val legacy = checkNotNull(javaClass.classLoader!!.getResourceAsStream("card_detector.int8.release.json")).use { it.readBytes() }
+        assertTrue(RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, legacy) is RecognitionAvailability.Unavailable)
+    }
+
+    private fun int8() = BundleFixture.json().apply {
+            for (kind in listOf("detector", "classifier")) {
+                val model = getJSONObject(kind)
+                model.put("variant", "int8")
+                val q = model.getJSONObject("quantization").put("variant", "int8")
+                    .put("nonemptyConstantTensorTypes", JSONArray(listOf("INT32", "INT8")))
+                    .put("quantizedConstantCount", 2)
+                model.getJSONObject("input").put("dtype", "uint8")
+                if (kind == "detector") q.put("input", JSONObject().put("scales", JSONArray(listOf(.5)))
+                    .put("zeroPoints", JSONArray(listOf(128))).put("quantizedDimension", 0))
+                else {
+                    model.getJSONObject("input").put("quantization", JSONArray(listOf(.5, 128)))
+                    model.getJSONArray("outputs").getJSONObject(0).put("dtype", "uint8").put("quantization", JSONArray(listOf(.00390625, 0)))
+                }
+                getJSONObject("bindings").getJSONObject(kind).getJSONObject("modelHashes")
+                    .put("int8", model.getString("modelSha256"))
             }
         }
-
-        start.countDown()
-        close.get(5, TimeUnit.SECONDS)
-        racingGets.forEach { it.get(5, TimeUnit.SECONDS) }
-        repeat(24) {
-            assertThrows(IllegalStateException::class.java) { provider.get() }
-        }
-        provider.close()
-        pool.shutdownNow()
-        assertEquals(1, fake.closeCount.get())
+    @Test fun `integer variants preserve quantization and reject corrupt tensor contracts`() {
+        assertTrue(verify(int8()) is RecognitionAvailability.Available)
+        reject(int8().apply { getJSONObject("detector").getJSONObject("quantization").getJSONObject("input").put("zeroPoints", JSONArray(listOf(-1))) })
+        reject(int8().apply { getJSONObject("classifier").getJSONObject("input").put("quantization", JSONArray(listOf(0, 0))) })
+        reject(int8().apply { getJSONObject("classifier").getJSONArray("outputs").getJSONObject(0).put("quantization", JSONArray(listOf(.1, 256))) })
+        reject(int8().apply { getJSONObject("detector").getJSONArray("outputs").getJSONObject(0).put("semantic", "classes") })
+        reject(int8().apply { getJSONObject("detector").getJSONObject("quantization").put("quantizedConstantCount", 0) })
+        reject(int8().apply { getJSONObject("classifier").getJSONObject("normalization").put("std", JSONArray(listOf(1, 1, 1))) })
     }
 
-    @Test
-    fun `verified assets stay unavailable until a real engine factory is installed`() {
-        val factory = AssetGatedCardRecognitionEngineFactory(
-            verifier = verifier,
-            delegate = null,
-        )
-
-        val engine = factory.create(model, approvedReleaseJson())
-
-        assertEquals(
-            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
-            engine.availability,
-        )
-    }
-
-    @Test
-    fun `verified assets are handed to the installed real engine factory`() {
-        val fake = FakeEngine()
-        val factory = AssetGatedCardRecognitionEngineFactory(
-            verifier = verifier,
-            delegate = { bytes, metadata ->
-                assertEquals("abc", bytes.decodeToString())
-                assertEquals("2026.10.15-int8", metadata.modelVersion)
-                fake
-            },
-        )
-
-        assertSame(fake, factory.create(model, approvedReleaseJson()))
-    }
-
-    @Test
-    fun `recognition value objects reject malformed geometry confidence and metadata`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            NormalizedRect(left = 0.5f, top = 0f, right = 0.5f, bottom = 1f)
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            RecognizedCard(
-                card = Card.Suited(Rank.ACE, Suit.CLUBS),
-                bounds = NormalizedRect(0f, 0f, 1f, 1f),
-                confidence = Float.NaN,
-                warnings = emptySet(),
-            )
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            CardRecognitionResult(emptyList(), durationMillis = -1, modelVersion = "model")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            RecognitionModelMetadata(
-                modelVersion = "model",
-                modelSha256 = "a".repeat(64),
-                labels = CANONICAL_LABELS,
-                inputWidth = 320,
-                inputHeight = 320,
-                confidenceThreshold = 1.1f,
-                iouThreshold = 0.5f,
-            )
-        }
-    }
-
-    @Test
-    fun `provider accepts an injected fake and constructs it once under concurrency`() {
-        val constructions = AtomicInteger()
-        val fake = FakeEngine()
-        val provider = ProcessLifetimeCardRecognitionEngineProvider {
-            constructions.incrementAndGet()
-            fake
-        }
-        val start = CountDownLatch(1)
-        val pool = Executors.newFixedThreadPool(8)
-        val futures = List(32) {
-            pool.submit<CardRecognitionEngine> {
-                start.await()
-                provider.get()
+    @Test fun `detector per tensor quantization accepts every dimension within input rank`() {
+        for (dimension in 0..3) {
+            val release = int8().apply {
+                getJSONObject("detector").getJSONObject("quantization").getJSONObject("input")
+                    .put("quantizedDimension", dimension)
             }
-        }
-
-        start.countDown()
-        futures.forEach { assertSame(fake, it.get(5, TimeUnit.SECONDS)) }
-        pool.shutdownNow()
-        assertEquals(1, constructions.get())
-
-        provider.close()
-        provider.close()
-        assertEquals(1, fake.closeCount.get())
-    }
-
-    private fun assertUnavailable(value: RecognitionAvailability) {
-        assertTrue(value is RecognitionAvailability.Unavailable)
-    }
-
-    private fun releaseFixture(name: String): ByteArray =
-        checkNotNull(javaClass.classLoader?.getResourceAsStream(name)) { "Missing fixture $name" }
-            .use { it.readBytes() }
-
-    private fun approvedReleaseJson(
-        schemaVersion: Int = 1,
-        status: String = "APPROVED",
-        modelVersion: String = "2026.10.15-int8",
-        modelSha256: String = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-        labels: List<String> = CANONICAL_LABELS,
-        inputWidth: Int = 320,
-        inputHeight: Int = 320,
-        quantizationVariant: String = "int8",
-        exportedAt: String = "2026-10-15T12:00:00Z",
-    ): ByteArray {
-        val quotedLabels = labels.joinToString(",") { "\"$it\"" }
-        val quantization = if (quantizationVariant == "float16") {
-            "{\"variant\":\"float16\",\"input\":null,\"nonemptyConstantTensorTypes\":[\"FLOAT16\",\"FLOAT32\"],\"quantizedConstantCount\":0}"
-        } else {
-            "{\"variant\":\"$quantizationVariant\",\"input\":{\"scales\":[0.5],\"zeroPoints\":[128],\"quantizedDimension\":0},\"nonemptyConstantTensorTypes\":[\"FLOAT32\",\"INT32\",\"INT8\"],\"quantizedConstantCount\":2}"
-        }
-        return """
-            {
-              "schemaVersion":$schemaVersion,
-              "status":"$status",
-              "modelVersion":"$modelVersion",
-              "modelSha256":"$modelSha256",
-              "modelSizeBytes":3,
-              "labels":[$quotedLabels],
-              "inputWidth":$inputWidth,
-              "inputHeight":$inputHeight,
-              "quantization":$quantization,
-              "confidenceThreshold":0.5,
-              "iouThreshold":0.4,
-              "sourceReportPath":"reports/release.json",
-              "sourceReportSha256":"${"1".repeat(64)}",
-              "modelContractSha256":"${"2".repeat(64)}",
-              "candidateContractSha256":"${"3".repeat(64)}",
-              "comparisonSha256":"${"4".repeat(64)}",
-              "validationManifestSha256":"${"5".repeat(64)}",
-              "thresholdSelectionSha256":"${"6".repeat(64)}",
-              "validationReceiptSha256":"${"7".repeat(64)}",
-              "sourceAuditReceiptSha256":"${"8".repeat(64)}",
-              "sourceManifestSha256":"${"9".repeat(64)}",
-              "splitManifestSha256":"${"a".repeat(64)}",
-              "trainingInputSha256":"${"b".repeat(64)}",
-              "syntheticManifestSha256":null,
-              "syntheticReviewSha256":null,
-              "syntheticGenerationConfigSha256":null,
-              "testManifestSha256":"${"c".repeat(64)}",
-              "exactTotalAccuracy":0.96,
-              "exactCardMultisetAccuracy":0.95,
-              "abstentionRate":0.05,
-              "heldOutPhotoCount":200,
-              "heldOutDeckCount":10,
-              "exportedAt":"$exportedAt"
-            }
-        """.trimIndent().encodeToByteArray()
-    }
-
-    private fun experimentalReleaseJson(validationMap50: Double = 0.5): String {
-        val quotedLabels = CANONICAL_LABELS.joinToString(",") { "\"$it\"" }
-        return """
-            {
-              "schemaVersion":1,
-              "status":"EXPERIMENTAL",
-              "modelVersion":"2026.10.15-beta",
-              "modelSha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-              "modelSizeBytes":3,
-              "labels":[$quotedLabels],
-              "inputWidth":320,
-              "inputHeight":320,
-              "quantization":{"variant":"float16","input":null,"nonemptyConstantTensorTypes":["FLOAT16","FLOAT32"],"quantizedConstantCount":0},
-              "confidenceThreshold":0.5,
-              "iouThreshold":0.4,
-              "trainingPhotoCount":964,
-              "validationPhotoCount":193,
-              "validationMap50":$validationMap50,
-              "sourceLicense":"CC-BY-4.0",
-              "exportedAt":"2026-10-15T12:00:00Z"
-            }
-        """.trimIndent()
-    }
-
-    private class FakeEngine : CardRecognitionEngine {
-        override val availability =
-            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED)
-        val closeCount = AtomicInteger()
-
-        override suspend fun recognize(bitmap: Bitmap): CardRecognitionResult = error("not used")
-
-        override fun close() {
-            closeCount.incrementAndGet()
+            assertTrue("Valid input dimension $dimension", verify(release) is RecognitionAvailability.Available)
         }
     }
 
-    private companion object {
-        val CANONICAL_LABELS = listOf("C", "D", "H", "S").flatMap { suit ->
-            listOf("A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K")
-                .map { rank -> "$rank$suit" }
+    @Test fun `detector quantized dimension rejects outside rank and non integer types`() {
+        for (dimension in listOf(-1, 4, Int.MAX_VALUE, 1.5, "1", true, JSONObject.NULL)) {
+            reject(int8().apply {
+                getJSONObject("detector").getJSONObject("quantization").getJSONObject("input")
+                    .put("quantizedDimension", dimension)
+            })
         }
+    }
+
+    @Test fun `nonzero detector dimension still requires one scale and one zero point`() {
+        for ((scales, zeros) in listOf(emptyList<Double>() to listOf(128), listOf(.5) to emptyList<Int>(),
+            listOf(.5, .5, .5) to listOf(128, 128, 128), listOf(.5) to listOf(128, 128))) {
+            reject(int8().apply {
+                getJSONObject("detector").getJSONObject("quantization").getJSONObject("input")
+                    .put("quantizedDimension", 3).put("scales", JSONArray(scales)).put("zeroPoints", JSONArray(zeros))
+            })
+        }
+    }
+
+    @Test fun `classifier schema preserves scalar quantization without a dimension field`() {
+        assertTrue(verify(int8()) is RecognitionAvailability.Available)
+        for (tensor in listOf("input", "output")) {
+            reject(int8().apply {
+                val classifier = getJSONObject("classifier")
+                val detail = if (tensor == "input") classifier.getJSONObject("input")
+                    else classifier.getJSONArray("outputs").getJSONObject(0)
+                detail.put("quantizedDimension", 1)
+            })
+        }
+    }
+
+    @Test fun `approved accuracy latency and margin boundaries are inclusive`() {
+        val json = BundleFixture.json()
+        val metrics = json.getJSONObject("metrics")
+        (listOf(metrics) + (1..10).map { metrics.getJSONObject("byCardCount").getJSONObject("$it") }).forEach {
+            it.put("exactCardMultisetAccuracy", .9).put("exactHandTotalAccuracy", .95)
+        }
+        json.getJSONObject("thresholds").put("crop_margin", .25)
+        json.getJSONObject("benchmark").put("medianEndToEndMs", 2000).put("p95EndToEndMs", 2200)
+        (1..10).forEach { json.getJSONObject("benchmark").getJSONObject("byCardCount").getJSONObject("$it").put("medianMs", 2000).put("p95Ms", 2200) }
+        assertTrue(verify(json) is RecognitionAvailability.Available)
     }
 }

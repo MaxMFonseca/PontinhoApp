@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 
 import pytest
-from test_two_stage_metrics import evaluation_fixture, write_json
+from test_two_stage_metrics import candidate_fixture, evaluation_fixture, record_fixture, write_json
 
 from pontinho_cards import evaluate_two_stage as joint
 from pontinho_cards import release_two_stage as release
 
 
-def promotion_fixture(tmp_path, monkeypatch):
-    detector, classifier, selection, validation, holdout = evaluation_fixture(tmp_path, monkeypatch)
+def promotion_fixture(tmp_path, monkeypatch, *, include_size=False):
+    detector, classifier, selection, validation, holdout = evaluation_fixture(
+        tmp_path, monkeypatch, include_size=include_size
+    )
     evaluation = joint.evaluate_two_stage(
         detector, classifier, selection, validation, holdout, tmp_path / "evaluation.json"
     )
@@ -69,6 +72,77 @@ def test_promote_complete_verified_evidence_and_no_second_holdout_inference(tmp_
     assert bundle["maximumCardCount"] == 10
     assert bundle["classifier"]["calibration"]["temperature"] == 1
     assert bundle["benchmark"]["medianEndToEndMs"] == 1200
+
+
+@pytest.mark.parametrize("include_size", [False, True])
+def test_release_sizes_and_hashes_come_from_exact_published_bytes(
+    tmp_path, monkeypatch, include_size
+):
+    inputs = promotion_fixture(tmp_path, monkeypatch, include_size=include_size)
+    receipt = release.promote_two_stage_release(inputs, tmp_path / "bundle")
+    metadata = json.loads((receipt.bundle_path / "card_recognition.release.json").read_bytes())
+    for kind, expected_size in (("detector", 16), ("classifier", 18)):
+        payload = (receipt.bundle_path / f"card_{kind}.tflite").read_bytes()
+        assert metadata[kind]["modelSizeBytes"] == expected_size == len(payload)
+        assert type(metadata[kind]["modelSizeBytes"]) is int
+        assert metadata[kind]["modelSha256"] == hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize("kind", ["detector", "classifier"])
+@pytest.mark.parametrize("size", [0, 999, True, 16.0, "16", None])
+def test_candidate_declared_size_mismatch_fails_before_inspection(
+    tmp_path, monkeypatch, kind, size
+):
+    candidate = candidate_fixture(tmp_path, kind, [record_fixture(tmp_path, 1)], monkeypatch)
+    contract = json.loads(candidate.contract_path.read_bytes())
+    contract["variants"]["float16"]["modelSizeBytes"] = size
+    write_json(candidate.contract_path, contract)
+    with pytest.raises(ValueError, match="size"):
+        joint.snapshot_candidate(candidate, kind, tmp_path / "snapshot")
+    assert not (tmp_path / "snapshot").exists()
+
+
+@pytest.mark.parametrize("kind", ["detector", "classifier"])
+@pytest.mark.parametrize("same_length", [False, True])
+def test_model_snapshot_tampering_cannot_publish_mismatched_bytes(
+    tmp_path, monkeypatch, kind, same_length
+):
+    inputs = promotion_fixture(tmp_path, monkeypatch)
+    original = release._snapshots
+
+    def tamper(*args):
+        snapshots = original(*args)
+        path = snapshots[kind]["paths"]["float16"]
+        payload = path.read_bytes()
+        path.write_bytes(b"X" * len(payload) if same_length else b"changed-size")
+        return snapshots
+
+    monkeypatch.setattr(release, "_snapshots", tamper)
+    with pytest.raises(ValueError, match="hash"):
+        release.promote_two_stage_release(inputs, tmp_path / "bundle")
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_source_replacement_after_snapshot_keeps_published_size_and_hash(tmp_path, monkeypatch):
+    inputs = promotion_fixture(tmp_path, monkeypatch)
+    original = release._snapshots
+    expected = {
+        kind: getattr(inputs, kind).model_path.read_bytes() for kind in ("detector", "classifier")
+    }
+
+    def replace_sources(*args):
+        snapshots = original(*args)
+        inputs.detector.model_path.write_bytes(b"later source replacement")
+        inputs.classifier.model_path.write_bytes(b"another replacement")
+        return snapshots
+
+    monkeypatch.setattr(release, "_snapshots", replace_sources)
+    receipt = release.promote_two_stage_release(inputs, tmp_path / "bundle")
+    metadata = json.loads((receipt.bundle_path / "card_recognition.release.json").read_bytes())
+    for kind, payload in expected.items():
+        assert (receipt.bundle_path / f"card_{kind}.tflite").read_bytes() == payload
+        assert metadata[kind]["modelSizeBytes"] == len(payload)
+        assert metadata[kind]["modelSha256"] == hashlib.sha256(payload).hexdigest()
 
 
 @pytest.mark.parametrize("target", ["model", "report", "receipt", "benchmark", "source"])

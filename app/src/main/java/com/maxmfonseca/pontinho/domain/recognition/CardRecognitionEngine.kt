@@ -16,5 +16,9 @@ interface CardRecognitionEngineProvider : AutoCloseable {
 }
 
 fun interface CardRecognitionEngineFactory {
-    fun create(model: ByteArray, metadata: RecognitionModelMetadata): CardRecognitionEngine
+    fun create(
+        detectorModel: ByteArray,
+        classifierModel: ByteArray,
+        metadata: RecognitionModelBundleMetadata,
+    ): CardRecognitionEngine
 }

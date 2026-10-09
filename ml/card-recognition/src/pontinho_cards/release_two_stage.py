@@ -289,9 +289,22 @@ def promote_two_stage_release(inputs, destination):
         for kind in ("detector", "classifier"):
             variant = selected[f"{kind}Variant"]
             snapshot = snapshots[kind]
-            models[f"card_{kind}.tflite"] = secure_read_bytes(snapshot["paths"][variant])
+            declared = snapshot["contract"]["variants"][variant]
+            model_payload = secure_read_bytes(snapshot["paths"][variant])
+            model_hash = digest(model_payload)
+            if model_hash != declared["modelSha256"]:
+                raise ValueError("release model snapshot hash mismatch")
+            model_size = len(model_payload)
+            if "modelSizeBytes" in declared and (
+                type(declared["modelSizeBytes"]) is not int
+                or declared["modelSizeBytes"] != model_size
+            ):
+                raise ValueError("release model snapshot size mismatch")
+            models[f"card_{kind}.tflite"] = model_payload
             contracts[kind] = {
-                **snapshot["contract"]["variants"][variant],
+                **declared,
+                "modelSha256": model_hash,
+                "modelSizeBytes": model_size,
                 "filename": f"card_{kind}.tflite",
                 "variant": variant,
             }

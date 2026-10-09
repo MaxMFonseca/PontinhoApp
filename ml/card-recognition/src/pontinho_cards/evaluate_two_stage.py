@@ -288,6 +288,11 @@ def snapshot_candidate(candidate, kind, staging):
         content = secure_read_bytes(root / filename, root=root)
         if digest(content) != declared.get("modelSha256"):
             raise EvaluationError("candidate model hash mismatch")
+        if "modelSizeBytes" in declared and (
+            type(declared["modelSizeBytes"]) is not int
+            or declared["modelSizeBytes"] != len(content)
+        ):
+            raise EvaluationError("candidate model size mismatch")
         secure_write_bytes(staging, filename, content)
         paths[variant] = staging / filename
         inspected = _inspect(paths[variant], variant, kind)

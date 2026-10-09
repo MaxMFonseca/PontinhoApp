@@ -5,7 +5,7 @@ import com.maxmfonseca.pontinho.domain.model.Card
 import com.maxmfonseca.pontinho.domain.model.Rank
 import com.maxmfonseca.pontinho.domain.model.Suit
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelMetadata
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelBundleMetadata
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
@@ -30,46 +30,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
-class MediaPipeCardRecognitionEngineTest {
-    @Test
-    fun `maps MediaPipe zero-based category indices through the shared postprocessor`() = runBlocking {
-        val runner = FakeRunner(
-            detections = listOf(
-                detection(classIndex = 13, left = 0.5f),
-                detection(classIndex = 0, left = 0.1f),
-            ),
-        )
-        val engine = engine(runner)
-
-        val result = engine.recognize(bitmap())
-
-        assertEquals(
-            listOf(
-                Card.Suited(Rank.ACE, Suit.CLUBS),
-                Card.Suited(Rank.ACE, Suit.DIAMONDS),
-            ),
-            result.candidates.map { it.card },
-        )
-        assertEquals("release-1", result.modelVersion)
-    }
-
-    @Test
-    fun `uses verified thresholds and deterministic elapsed time`() = runBlocking {
-        val runner = FakeRunner(
-            detections = listOf(
-                detection(classIndex = 0, confidence = 0.59f, left = 0.1f),
-                detection(classIndex = 1, confidence = 0.6f, left = 0.5f),
-            ),
-        )
-        val times = ArrayDeque(listOf(2_000_000_000L, 2_123_999_999L))
-        val engine = engine(runner, nanoTime = times::removeFirst)
-
-        val result = engine.recognize(bitmap())
-
-        assertEquals(listOf(Card.Suited(Rank.TWO, Suit.CLUBS)), result.candidates.map { it.card })
-        assertEquals(123L, result.durationMillis)
-    }
-
+class TwoStageCardRecognitionLifecycleTest {
     @Test
     fun `runs native inference off the caller thread`() = runBlocking {
         val callerThread = Thread.currentThread()
@@ -272,12 +233,10 @@ class MediaPipeCardRecognitionEngineTest {
         val model = "abc".encodeToByteArray()
         val factory = AssetGatedCardRecognitionEngineFactory(
             verifier = RecognitionAssetVerifier(),
-            delegate = MediaPipeCardRecognitionEngineFactory(
-                runnerFactory = MediaPipeDetectorRunnerFactory { _, _ -> error("native model path") },
-            ),
+            delegate = { _, _, _ -> error("native model path") },
         )
 
-        val engine = factory.create(model, approvedReleaseJson())
+        val engine = factory.create(model, BundleFixture.classifier, BundleFixture.bytes())
 
         assertEquals(
             RecognitionAvailability.Unavailable(
@@ -295,14 +254,10 @@ class MediaPipeCardRecognitionEngineTest {
         val model = "abc".encodeToByteArray()
         val factory = AssetGatedCardRecognitionEngineFactory(
             verifier = RecognitionAssetVerifier(),
-            delegate = MediaPipeCardRecognitionEngineFactory(
-                runnerFactory = MediaPipeDetectorRunnerFactory { _, _ ->
-                    throw NoClassDefFoundError("private native detail")
-                },
-            ),
+            delegate = { _, _, _ -> throw NoClassDefFoundError("private native detail") },
         )
 
-        val engine = factory.create(model, approvedReleaseJson())
+        val engine = factory.create(model, BundleFixture.classifier, BundleFixture.bytes())
 
         assertEquals(
             RecognitionAvailability.Unavailable(
@@ -317,56 +272,47 @@ class MediaPipeCardRecognitionEngineTest {
         val fatal = OutOfMemoryError("native allocation")
         val factory = AssetGatedCardRecognitionEngineFactory(
             verifier = RecognitionAssetVerifier(),
-            delegate = MediaPipeCardRecognitionEngineFactory(
-                runnerFactory = MediaPipeDetectorRunnerFactory { _, _ -> throw fatal },
-            ),
+            delegate = { _, _, _ -> throw fatal },
         )
 
         val thrown = assertThrows(OutOfMemoryError::class.java) {
-            factory.create("abc".encodeToByteArray(), approvedReleaseJson())
+            factory.create("abc".encodeToByteArray(), BundleFixture.classifier, BundleFixture.bytes())
         }
 
         assertTrue(thrown === fatal)
     }
 
     private fun engine(
-        runner: MediaPipeDetectorRunner,
+        runner: CardDetectorRunner,
         dispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Unconfined,
         nanoTime: () -> Long = { 0L },
-    ) = MediaPipeCardRecognitionEngine(
-        runner = runner,
+    ) = TwoStageCardRecognitionEngine(
+        detector = runner,
+        classifier = object : CardClassifierRunner {
+            override fun classify(bitmap: Bitmap) = RawCardClassification(FloatArray(52).apply { this[0] = 1f })
+            override fun close() = Unit
+        },
         metadata = metadata(),
         dispatcher = dispatcher,
         nanoTime = nanoTime,
     )
 
-    private fun metadata() = RecognitionModelMetadata(
-        modelVersion = "release-1",
-        modelSha256 = "a".repeat(64),
-        labels = CardClassIndex.labels,
-        inputWidth = 320,
-        inputHeight = 320,
-        confidenceThreshold = 0.6f,
-        iouThreshold = 0.4f,
-    )
+    private fun metadata() = (RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, BundleFixture.bytes())
+        as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
 
     private fun bitmap() = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
 
-    private fun detection(
-        classIndex: Int,
-        confidence: Float = 0.9f,
-        left: Float,
-    ) = RawCardDetection(classIndex, confidence, left, 0.1f, left + 0.2f, 0.4f)
+
 
     private open class FakeRunner(
-        private val detections: List<RawCardDetection> = emptyList(),
+        private val detections: List<RawCardBox> = listOf(RawCardBox(.9f, .1f, .1f, .4f, .4f)),
         private val failure: Throwable? = null,
-    ) : MediaPipeDetectorRunner {
+    ) : CardDetectorRunner {
         val detectCalls = AtomicInteger()
         val closeCalls = AtomicInteger()
         val detectThreads = mutableListOf<Thread>()
 
-        override fun detect(bitmap: Bitmap): List<RawCardDetection> {
+        override fun detect(bitmap: Bitmap): List<RawCardBox> {
             detectCalls.incrementAndGet()
             detectThreads += Thread.currentThread()
             failure?.let { throw it }
@@ -378,7 +324,7 @@ class MediaPipeCardRecognitionEngineTest {
         }
     }
 
-    private class BlockingRunner : MediaPipeDetectorRunner {
+    private class BlockingRunner : CardDetectorRunner {
         val firstEntered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val detectCalls = AtomicInteger()
@@ -386,14 +332,14 @@ class MediaPipeCardRecognitionEngineTest {
         val closeCalls = AtomicInteger()
         private val concurrent = AtomicInteger()
 
-        override fun detect(bitmap: Bitmap): List<RawCardDetection> {
+        override fun detect(bitmap: Bitmap): List<RawCardBox> {
             detectCalls.incrementAndGet()
             val active = concurrent.incrementAndGet()
             maxConcurrent.updateAndGet { maxOf(it, active) }
             firstEntered.countDown()
             release.await(5, TimeUnit.SECONDS)
             concurrent.decrementAndGet()
-            return emptyList()
+            return listOf(RawCardBox(.9f, .1f, .1f, .4f, .4f))
         }
 
         override fun close() {
@@ -401,23 +347,4 @@ class MediaPipeCardRecognitionEngineTest {
         }
     }
 
-    private fun approvedReleaseJson(): ByteArray {
-        val labels = CardClassIndex.labels.joinToString(",") { "\"$it\"" }
-        return """
-            {
-              "schemaVersion":1,"status":"APPROVED","modelVersion":"release-1",
-              "modelSha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","modelSizeBytes":3,
-              "labels":[$labels],"inputWidth":320,"inputHeight":320,
-              "quantization":{"variant":"int8","input":{"scales":[0.5],"zeroPoints":[128],"quantizedDimension":0},"nonemptyConstantTensorTypes":["INT32","INT8"],"quantizedConstantCount":2},
-              "confidenceThreshold":0.6,"iouThreshold":0.4,"sourceReportPath":"reports/release.json",
-              "sourceReportSha256":"${"1".repeat(64)}","modelContractSha256":"${"2".repeat(64)}","candidateContractSha256":"${"3".repeat(64)}",
-              "comparisonSha256":"${"4".repeat(64)}","validationManifestSha256":"${"5".repeat(64)}","thresholdSelectionSha256":"${"6".repeat(64)}",
-              "validationReceiptSha256":"${"7".repeat(64)}","sourceAuditReceiptSha256":"${"8".repeat(64)}","sourceManifestSha256":"${"9".repeat(64)}",
-              "splitManifestSha256":"${"a".repeat(64)}","trainingInputSha256":"${"b".repeat(64)}","syntheticManifestSha256":null,
-              "syntheticReviewSha256":null,"syntheticGenerationConfigSha256":null,"testManifestSha256":"${"c".repeat(64)}",
-              "exactTotalAccuracy":0.96,"exactCardMultisetAccuracy":0.95,"abstentionRate":0.05,"heldOutPhotoCount":200,
-              "heldOutDeckCount":10,"exportedAt":"2026-10-15T12:00:00Z"
-            }
-        """.trimIndent().encodeToByteArray()
-    }
 }
