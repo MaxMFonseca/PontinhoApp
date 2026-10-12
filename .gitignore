@@ -33,3 +33,18 @@ ml/card-recognition/reports/*
 !ml/card-recognition/reports/validation-template.json
 !ml/card-recognition/reports/release/
 !ml/card-recognition/reports/release/**
+
+# Single-stage YOLO workspace: retain only source, locks, and selected outputs.
+ml/card-recognition/yolo/.venv/
+ml/card-recognition/yolo/.pytest_cache/
+ml/card-recognition/yolo/.ruff_cache/
+ml/card-recognition/yolo/.cache/
+ml/card-recognition/yolo/**/__pycache__/
+ml/card-recognition/yolo/**/*.egg-info/
+ml/card-recognition/yolo/datasets/source-archives/
+ml/card-recognition/yolo/datasets/extracted/
+ml/card-recognition/yolo/runs/
+ml/card-recognition/yolo/checkpoints/
+ml/card-recognition/yolo/exports/*
+!ml/card-recognition/yolo/exports/selected/
+!ml/card-recognition/yolo/exports/selected/**

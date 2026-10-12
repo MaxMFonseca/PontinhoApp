@@ -1,0 +1,17 @@
+schema_version: 1
+model: yolov8n.pt
+data: dataset.yaml
+dataset_root: ../datasets/extracted/playing-cards-ow27d-v4
+dataset_audit: ../reports/dataset-audit.json
+source_receipt: ../datasets/playing-cards-ow27d-v4.source.json
+base_weights: ../checkpoints/yolov8n.pt
+dependency_lock: ../uv.lock
+runs: ../runs
+receipt: ../reports/training-receipt.json
+imgsz: 640
+epochs: 100
+batch: 16
+patience: 20
+seed: 1337
+deterministic: true
+device: 0

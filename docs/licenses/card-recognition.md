@@ -3,6 +3,58 @@
 **Status:** The debug build contains an experimental model trained from the
 source below. Release builds contain no model and keep the scanner disabled.
 
+## Single-stage YOLO candidate
+
+The planned replacement is a debug-only, offline 52-class detector trained
+with Ultralytics YOLOv8n `8.4.177`. Pontinho's complete corresponding source is
+distributed under AGPLv3 or later; the full text is in the repository
+[`LICENSE`](../../LICENSE), with third-party and data provenance notices in
+[`NOTICE.md`](../../NOTICE.md).
+
+The intended source is Roboflow's public `playing-cards-ow27d` dataset, version
+4. An authorized manual YOLOv8 download was registered on 2026-10-16 in
+[`playing-cards-ow27d-v4.source.json`](../../ml/card-recognition/yolo/datasets/playing-cards-ow27d-v4.source.json).
+The receipt binds the canonical Augmented Startups URL, version `4`, format
+`yolov8`, 2,170,532,362 archive bytes, 48,478 ZIP members, and SHA-256
+`461d1392bb70a0cd2fdb3b4d7c682e0544792b33e64e9fe79e0084e03bc19a74`.
+
+The receipt intentionally records only the stable public dataset/version URL:
+[`https://universe.roboflow.com/augmented-startups/playing-cards-ow27d/dataset/4`](https://universe.roboflow.com/augmented-startups/playing-cards-ow27d/dataset/4).
+The authenticated export download URL is ephemeral and can be secret-bearing,
+so it is intentionally omitted from the receipt, documentation, and source
+control.
+
+The archive's `data.yaml` identifies the same provider URL and records the
+license as **Public Domain**; `README.dataset.txt` independently says
+`License: Public Domain`, agreeing with the provider page's Public Domain
+badge. Its 52 class names, in archive order, are `10C`, `10D`, `10H`, `10S`,
+`2C`, `2D`, `2H`, `2S`, `3C`, `3D`, `3H`, `3S`, `4C`, `4D`, `4H`, `4S`, `5C`,
+`5D`, `5H`, `5S`, `6C`, `6D`, `6H`, `6S`, `7C`, `7D`, `7H`, `7S`, `8C`, `8D`,
+`8H`, `8S`, `9C`, `9D`, `9H`, `9S`, `AC`, `AD`, `AH`, `AS`, `JC`, `JD`, `JH`,
+`JS`, `KC`, `KD`, `KH`, `KS`, `QC`, `QD`, `QH`, and `QS`.
+
+The extracted export has 21,203 train, 2,020 validation, and 1,010 test
+image/label pairs. It is a synthetically generated detector dataset and has no
+production approval or final-holdout role.
+
+### Provider-declared export recipe and count reconciliation
+
+`README.roboflow.txt` says that Roboflow exported the dataset on 2023-03-07 at
+19:04 GMT in YOLOv8 format. It declares Auto-Orient preprocessing with
+EXIF-orientation stripping and a Stretch resize to 640x640. It also declares
+three augmented versions of each source image: 50% horizontal flip, 50%
+vertical flip, equal-probability 90-degree choices (none, clockwise,
+counter-clockwise, upside-down), random 0--15% crop, random -10 to +10 degree
+rotation, random -2 to +2 degree horizontal and vertical shear, random -25 to
++25% brightness, random -15 to +15% exposure, Gaussian blur up to 1.75 px,
+and salt-and-pepper noise on 2% of pixels. The README does not declare
+grayscale, hue/saturation, or cutout augmentation; none is inferred here.
+
+The same provider README declares 24,240 images. The receipt-bound archive
+inventory instead contains 24,233 paired images: 21,203 train + 2,020
+validation + 1,010 test = 24,233. The seven-image difference has no inferred
+cause; the exact immutable archive inventory controls this registration.
+
 ## Experimental model attribution
 
 The debug-only `rf100-beta-20261015-int8` model was trained from **Poker Cards
