@@ -1,0 +1,1388 @@
+{
+  "schemaVersion": 1,
+  "generator": "ml/card-recognition/yolo/tests/generate_android_yolo_golden.py",
+  "tensorLayout": "BCN",
+  "tensorShape": [
+    1,
+    56,
+    8400
+  ],
+  "rawTensorEncoding": "zero-default-sparse-anchors",
+  "tensorDefault": 0.0,
+  "boxEncoding": "normalized-input-xywh",
+  "sourceBoxEncoding": "normalized-source-ltrb",
+  "normalizedBoxTolerance": 1e-05,
+  "thresholdRepresentation": {
+    "metadata": "IEEE-754 binary64 parsed directly from JSON",
+    "confidenceComparison": "threshold normalized to IEEE-754 binary32; raw score > threshold",
+    "iouAndGeometry": "IEEE-754 binary64"
+  },
+  "labels": [
+    "10C",
+    "10D",
+    "10H",
+    "10S",
+    "2C",
+    "2D",
+    "2H",
+    "2S",
+    "3C",
+    "3D",
+    "3H",
+    "3S",
+    "4C",
+    "4D",
+    "4H",
+    "4S",
+    "5C",
+    "5D",
+    "5H",
+    "5S",
+    "6C",
+    "6D",
+    "6H",
+    "6S",
+    "7C",
+    "7D",
+    "7H",
+    "7S",
+    "8C",
+    "8D",
+    "8H",
+    "8S",
+    "9C",
+    "9D",
+    "9H",
+    "9S",
+    "AC",
+    "AD",
+    "AH",
+    "AS",
+    "JC",
+    "JD",
+    "JH",
+    "JS",
+    "KC",
+    "KD",
+    "KH",
+    "KS",
+    "QC",
+    "QD",
+    "QH",
+    "QS"
+  ],
+  "settings": {
+    "confidence": 0.5,
+    "iou": 0.5,
+    "maxCards": 10,
+    "physicalDuplicateIou": 0.95
+  },
+  "preprocessContract": {
+    "implementation": "ultralytics-8.4.177-LetterBox-cv2-4.11.0-INTER_LINEAR",
+    "layout": "NHWC-RGB-float32",
+    "paddingRgb": [
+      114,
+      114,
+      114
+    ],
+    "normalizationDivisor": 255.0
+  },
+  "preprocessCases": [
+    {
+      "id": "odd-landscape-3x2",
+      "sourceWidth": 3,
+      "sourceHeight": 2,
+      "sourceRgb": [
+        255,
+        0,
+        0,
+        0,
+        255,
+        0,
+        0,
+        0,
+        255,
+        12,
+        34,
+        56,
+        78,
+        90,
+        123,
+        250,
+        128,
+        5
+      ],
+      "geometry": {
+        "sourceWidth": 3,
+        "sourceHeight": 2,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 427,
+        "scale": 213.33333333333334,
+        "padX": 0.0,
+        "padY": 106.0,
+        "padRight": 0,
+        "padBottom": 107
+      },
+      "expectedNormalizedFloat32Sha256": "f789b18002caa7969817a662831fbcb44c14c288d91825dc4008c7d5cb8b3c44",
+      "samples": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgb": [
+            114,
+            114,
+            114
+          ]
+        },
+        {
+          "x": 0,
+          "y": 106,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 1,
+          "y": 106,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 320,
+          "y": 319,
+          "rgb": [
+            39,
+            172,
+            62
+          ]
+        },
+        {
+          "x": 639,
+          "y": 532,
+          "rgb": [
+            250,
+            128,
+            5
+          ]
+        },
+        {
+          "x": 639,
+          "y": 639,
+          "rgb": [
+            114,
+            114,
+            114
+          ]
+        }
+      ]
+    },
+    {
+      "id": "odd-portrait-2x3",
+      "sourceWidth": 2,
+      "sourceHeight": 3,
+      "sourceRgb": [
+        1,
+        101,
+        201,
+        252,
+        152,
+        52,
+        31,
+        63,
+        95,
+        127,
+        159,
+        191,
+        250,
+        10,
+        90,
+        40,
+        220,
+        140
+      ],
+      "geometry": {
+        "sourceWidth": 2,
+        "sourceHeight": 3,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 427,
+        "resizedHeight": 640,
+        "scale": 213.33333333333334,
+        "padX": 106.0,
+        "padY": 0.0,
+        "padRight": 107,
+        "padBottom": 0
+      },
+      "expectedNormalizedFloat32Sha256": "0f300aa879f2cfbf8b6008b971d2ebd07fc00e046a1bfce917e4956f75ee5647",
+      "samples": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgb": [
+            114,
+            114,
+            114
+          ]
+        },
+        {
+          "x": 106,
+          "y": 0,
+          "rgb": [
+            1,
+            101,
+            201
+          ]
+        },
+        {
+          "x": 107,
+          "y": 0,
+          "rgb": [
+            1,
+            101,
+            201
+          ]
+        },
+        {
+          "x": 319,
+          "y": 320,
+          "rgb": [
+            79,
+            111,
+            143
+          ]
+        },
+        {
+          "x": 532,
+          "y": 639,
+          "rgb": [
+            40,
+            220,
+            140
+          ]
+        },
+        {
+          "x": 639,
+          "y": 639,
+          "rgb": [
+            114,
+            114,
+            114
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nonintegral-landscape-7x5",
+      "sourceWidth": 7,
+      "sourceHeight": 5,
+      "sourceRgb": [
+        0,
+        11,
+        22,
+        37,
+        48,
+        59,
+        74,
+        85,
+        96,
+        111,
+        122,
+        133,
+        148,
+        159,
+        170,
+        185,
+        196,
+        207,
+        222,
+        233,
+        244,
+        19,
+        30,
+        41,
+        56,
+        67,
+        78,
+        93,
+        104,
+        115,
+        130,
+        141,
+        152,
+        167,
+        178,
+        189,
+        204,
+        215,
+        226,
+        241,
+        252,
+        7,
+        38,
+        49,
+        60,
+        75,
+        86,
+        97,
+        112,
+        123,
+        134,
+        149,
+        160,
+        171,
+        186,
+        197,
+        208,
+        223,
+        234,
+        245,
+        4,
+        15,
+        26,
+        57,
+        68,
+        79,
+        94,
+        105,
+        116,
+        131,
+        142,
+        153,
+        168,
+        179,
+        190,
+        205,
+        216,
+        227,
+        242,
+        253,
+        8,
+        23,
+        34,
+        45,
+        76,
+        87,
+        98,
+        113,
+        124,
+        135,
+        150,
+        161,
+        172,
+        187,
+        198,
+        209,
+        224,
+        235,
+        246,
+        5,
+        16,
+        27,
+        42,
+        53,
+        64
+      ],
+      "geometry": {
+        "sourceWidth": 7,
+        "sourceHeight": 5,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 457,
+        "scale": 91.42857142857143,
+        "padX": 0.0,
+        "padY": 91.0,
+        "padRight": 0,
+        "padBottom": 92
+      },
+      "expectedNormalizedFloat32Sha256": "440e9eeb558f7d4bdf9c5f1f113a4ce7c7655205acdfe5eace53317f75ac8de2",
+      "samples": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgb": [
+            114,
+            114,
+            114
+          ]
+        },
+        {
+          "x": 0,
+          "y": 91,
+          "rgb": [
+            0,
+            11,
+            22
+          ]
+        },
+        {
+          "x": 1,
+          "y": 91,
+          "rgb": [
+            0,
+            11,
+            22
+          ]
+        },
+        {
+          "x": 320,
+          "y": 319,
+          "rgb": [
+            149,
+            160,
+            171
+          ]
+        },
+        {
+          "x": 639,
+          "y": 547,
+          "rgb": [
+            42,
+            53,
+            64
+          ]
+        },
+        {
+          "x": 639,
+          "y": 639,
+          "rgb": [
+            114,
+            114,
+            114
+          ]
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "square-max-class-strict-confidence",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 7,
+          "xywh": [
+            0.5,
+            0.5,
+            0.25,
+            0.3125
+          ],
+          "scores": {
+            "3": 0.8,
+            "8": 0.79
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.5,
+            0.5,
+            0.125,
+            0.125
+          ],
+          "scores": {
+            "4": 0.5
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 7,
+          "classIndex": 3,
+          "label": "10S",
+          "confidence": 0.8,
+          "normalizedBox": [
+            0.375,
+            0.34375,
+            0.625,
+            0.65625
+          ]
+        }
+      ]
+    },
+    {
+      "id": "confidence-float32-strict-boundary",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "settings": {
+        "confidence": 0.3
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.25,
+            0.25,
+            0.1,
+            0.1
+          ],
+          "scores": {
+            "0": 0.30000001192092896
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.75,
+            0.25,
+            0.1,
+            0.1
+          ],
+          "scores": {
+            "1": 0.30000004172325134
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 1,
+          "classIndex": 1,
+          "label": "10D",
+          "confidence": 0.30000004172325134,
+          "normalizedBox": [
+            0.7,
+            0.2,
+            0.8,
+            0.3
+          ]
+        }
+      ]
+    },
+    {
+      "id": "portrait-padding-boundary",
+      "geometry": {
+        "sourceWidth": 320,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 320,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 160.0,
+        "padY": 0.0,
+        "padRight": 160,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.5,
+            0.5,
+            0.5,
+            1.0
+          ],
+          "scores": {
+            "0": 0.91
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.2734375,
+            0.15625,
+            0.09375,
+            0.125
+          ],
+          "scores": {
+            "1": 0.89
+          }
+        },
+        {
+          "anchor": 2,
+          "xywh": [
+            0.375,
+            0.3125,
+            0.125,
+            0.3125
+          ],
+          "scores": {
+            "2": 0.88
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 0,
+          "label": "10C",
+          "confidence": 0.91,
+          "normalizedBox": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "anchorIndex": 2,
+          "classIndex": 2,
+          "label": "10H",
+          "confidence": 0.88,
+          "normalizedBox": [
+            0.125,
+            0.15625,
+            0.375,
+            0.46875
+          ]
+        }
+      ]
+    },
+    {
+      "id": "landscape-padding-boundary",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 320,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 320,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 160.0,
+        "padRight": 0,
+        "padBottom": 160
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.5,
+            0.5,
+            1.0,
+            0.5
+          ],
+          "scores": {
+            "36": 0.93
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.15625,
+            0.234375,
+            0.09375,
+            0.0625
+          ],
+          "scores": {
+            "37": 0.87
+          }
+        },
+        {
+          "anchor": 2,
+          "xywh": [
+            0.3125,
+            0.375,
+            0.3125,
+            0.125
+          ],
+          "scores": {
+            "38": 0.86
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 36,
+          "label": "AC",
+          "confidence": 0.93,
+          "normalizedBox": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "anchorIndex": 2,
+          "classIndex": 38,
+          "label": "AH",
+          "confidence": 0.86,
+          "normalizedBox": [
+            0.15625,
+            0.125,
+            0.46875,
+            0.375
+          ]
+        }
+      ]
+    },
+    {
+      "id": "duplicates-and-adjacent-cards",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.15625,
+            0.15625,
+            0.125,
+            0.1875
+          ],
+          "scores": {
+            "2": 0.95
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.1578125,
+            0.1578125,
+            0.125,
+            0.1875
+          ],
+          "scores": {
+            "2": 0.9
+          }
+        },
+        {
+          "anchor": 2,
+          "xywh": [
+            0.15625,
+            0.15625,
+            0.125,
+            0.1875
+          ],
+          "scores": {
+            "8": 0.92
+          }
+        },
+        {
+          "anchor": 3,
+          "xywh": [
+            0.328125,
+            0.15625,
+            0.125,
+            0.1875
+          ],
+          "scores": {
+            "8": 0.88
+          }
+        },
+        {
+          "anchor": 4,
+          "xywh": [
+            0.359375,
+            0.15625,
+            0.125,
+            0.1875
+          ],
+          "scores": {
+            "9": 0.87
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 2,
+          "label": "10H",
+          "confidence": 0.95,
+          "normalizedBox": [
+            0.09375,
+            0.0625,
+            0.21875,
+            0.25
+          ]
+        },
+        {
+          "anchorIndex": 3,
+          "classIndex": 8,
+          "label": "3C",
+          "confidence": 0.88,
+          "normalizedBox": [
+            0.265625,
+            0.0625,
+            0.390625,
+            0.25
+          ]
+        },
+        {
+          "anchorIndex": 4,
+          "classIndex": 9,
+          "label": "3D",
+          "confidence": 0.87,
+          "normalizedBox": [
+            0.296875,
+            0.0625,
+            0.421875,
+            0.25
+          ]
+        }
+      ]
+    },
+    {
+      "id": "class-nms-binary64-threshold-boundary",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "settings": {
+        "iou": 0.3
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.5772691965103149,
+            0.25,
+            0.35965079069137573,
+            0.1
+          ],
+          "scores": {
+            "0": 0.9
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.7709273099899292,
+            0.25,
+            0.35965079069137573,
+            0.1
+          ],
+          "scores": {
+            "0": 0.8
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 0,
+          "label": "10C",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.3974438011646271,
+            0.2,
+            0.7570945918560028,
+            0.3
+          ]
+        }
+      ]
+    },
+    {
+      "id": "physical-nms-binary64-threshold-boundary",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.41983315348625183,
+            0.5,
+            0.34758538007736206,
+            0.1
+          ],
+          "scores": {
+            "0": 0.9
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.4287455976009369,
+            0.5,
+            0.34758538007736206,
+            0.1
+          ],
+          "scores": {
+            "1": 0.8
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 0,
+          "label": "10C",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.2460404634475708,
+            0.45,
+            0.5936258435249329,
+            0.55
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deterministic-priority-and-spatial-order",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 7,
+          "xywh": [
+            0.78125,
+            0.15625,
+            0.0625,
+            0.09375
+          ],
+          "scores": {
+            "4": 0.8
+          }
+        },
+        {
+          "anchor": 2,
+          "xywh": [
+            0.15625,
+            0.15625,
+            0.0625,
+            0.09375
+          ],
+          "scores": {
+            "5": 0.8
+          }
+        },
+        {
+          "anchor": 3,
+          "xywh": [
+            0.15625,
+            0.15625,
+            0.0625,
+            0.09375
+          ],
+          "scores": {
+            "4": 0.8
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 3,
+          "classIndex": 4,
+          "label": "2C",
+          "confidence": 0.8,
+          "normalizedBox": [
+            0.125,
+            0.109375,
+            0.1875,
+            0.203125
+          ]
+        },
+        {
+          "anchorIndex": 7,
+          "classIndex": 4,
+          "label": "2C",
+          "confidence": 0.8,
+          "normalizedBox": [
+            0.75,
+            0.109375,
+            0.8125,
+            0.203125
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zero-candidates",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [],
+      "expected": []
+    },
+    {
+      "id": "invalid-selected-box",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.5,
+            0.5,
+            0.0,
+            0.25
+          ],
+          "scores": {
+            "0": 0.9
+          }
+        }
+      ],
+      "expectedError": "DECODE_ERROR"
+    },
+    {
+      "id": "eleven-candidates",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.0390625,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "0": 0.9
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.125,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "1": 0.9
+          }
+        },
+        {
+          "anchor": 2,
+          "xywh": [
+            0.2109375,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "2": 0.9
+          }
+        },
+        {
+          "anchor": 3,
+          "xywh": [
+            0.296875,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "3": 0.9
+          }
+        },
+        {
+          "anchor": 4,
+          "xywh": [
+            0.3828125,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "4": 0.9
+          }
+        },
+        {
+          "anchor": 5,
+          "xywh": [
+            0.46875,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "5": 0.9
+          }
+        },
+        {
+          "anchor": 6,
+          "xywh": [
+            0.5546875,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "6": 0.9
+          }
+        },
+        {
+          "anchor": 7,
+          "xywh": [
+            0.640625,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "7": 0.9
+          }
+        },
+        {
+          "anchor": 8,
+          "xywh": [
+            0.7265625,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "8": 0.9
+          }
+        },
+        {
+          "anchor": 9,
+          "xywh": [
+            0.8125,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "9": 0.9
+          }
+        },
+        {
+          "anchor": 10,
+          "xywh": [
+            0.8984375,
+            0.15625,
+            0.03125,
+            0.0625
+          ],
+          "scores": {
+            "10": 0.9
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 0,
+          "label": "10C",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.0234375,
+            0.125,
+            0.0546875,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 1,
+          "classIndex": 1,
+          "label": "10D",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.109375,
+            0.125,
+            0.140625,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 2,
+          "classIndex": 2,
+          "label": "10H",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.1953125,
+            0.125,
+            0.2265625,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 3,
+          "classIndex": 3,
+          "label": "10S",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.28125,
+            0.125,
+            0.3125,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 4,
+          "classIndex": 4,
+          "label": "2C",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.3671875,
+            0.125,
+            0.3984375,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 5,
+          "classIndex": 5,
+          "label": "2D",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.453125,
+            0.125,
+            0.484375,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 6,
+          "classIndex": 6,
+          "label": "2H",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.5390625,
+            0.125,
+            0.5703125,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 7,
+          "classIndex": 7,
+          "label": "2S",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.625,
+            0.125,
+            0.65625,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 8,
+          "classIndex": 8,
+          "label": "3C",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.7109375,
+            0.125,
+            0.7421875,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 9,
+          "classIndex": 9,
+          "label": "3D",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.796875,
+            0.125,
+            0.828125,
+            0.1875
+          ]
+        },
+        {
+          "anchorIndex": 10,
+          "classIndex": 10,
+          "label": "3H",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.8828125,
+            0.125,
+            0.9140625,
+            0.1875
+          ]
+        }
+      ],
+      "expectedError": "TOO_MANY_DETECTIONS",
+      "expectedCount": 11
+    }
+  ]
+}

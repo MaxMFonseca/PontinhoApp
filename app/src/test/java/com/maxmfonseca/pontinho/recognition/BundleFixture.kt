@@ -83,4 +83,30 @@ internal object BundleFixture {
         }
     }
     fun bytes() = json().toString().encodeToByteArray()
+
+    fun legacyMetadata() = com.maxmfonseca.pontinho.domain.recognition.RecognitionModelBundleMetadata(
+        version = "a".repeat(64),
+        detector = com.maxmfonseca.pontinho.domain.recognition.RecognitionStageMetadata(
+            modelSha256 = detectorHash,
+            modelSizeBytes = detector.size.toLong(),
+            labels = listOf("card"),
+            inputWidth = 320,
+            inputHeight = 320,
+            quantizationVariant = "float16",
+        ),
+        classifier = com.maxmfonseca.pontinho.domain.recognition.RecognitionStageMetadata(
+            modelSha256 = classifierHash,
+            modelSizeBytes = classifier.size.toLong(),
+            labels = labels,
+            inputWidth = 224,
+            inputHeight = 224,
+            quantizationVariant = "float16",
+        ),
+        labels = labels,
+        detectorThreshold = .5f,
+        classifierThreshold = .6f,
+        iouThreshold = .4f,
+        cropMargin = .1f,
+        maxCards = 10,
+    )
 }

@@ -9,11 +9,16 @@ import types
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from pontinho_yolo import evaluate as evaluate_module
+from pontinho_yolo import export as export_module
 from pontinho_yolo.evaluate import (
     BucketMetrics,
+    ClassMetrics,
     EvaluationReport,
+    RepositoryIdentity,
     ThresholdSelection,
 )
 from pontinho_yolo.export import (
@@ -26,12 +31,156 @@ from pontinho_yolo.export import (
 )
 from pontinho_yolo.labels import CARD_LABELS
 
+CHECKPOINT_SHA256 = hashlib.sha256(b"checkpoint").hexdigest()
+
+
+def _tflite_offset_vector(builder, start, offsets: tuple[int, ...]) -> int:
+    start(builder, len(offsets))
+    for offset in reversed(offsets):
+        builder.PrependUOffsetTRelative(offset)
+    return builder.EndVector()
+
+
+def _tflite_int_vector(builder, start, values: tuple[int, ...]) -> int:
+    start(builder, len(values))
+    for value in reversed(values):
+        builder.PrependInt32(value)
+    return builder.EndVector()
+
+
+def _serialized_quantized_conv(
+    *,
+    weight_data: bytes = b"\x01",
+    weight_buffer_index: int = 3,
+    runtime_buffer_indices: tuple[int, int, int] = (1, 4, 5),
+    external_weight: tuple[int, int] | None = None,
+) -> bytes:
+    """Build the pinned FP32-boundary/INT8-kernel shape through the real schema API."""
+    import flatbuffers
+    import tflite
+
+    builder = flatbuffers.Builder(2048)
+
+    scales = []
+    for scale in (0.01, 0.02, 0.04):
+        tflite.QuantizationParametersStartScaleVector(builder, 1)
+        builder.PrependFloat32(scale)
+        scale_vector = builder.EndVector()
+        tflite.QuantizationParametersStartZeroPointVector(builder, 1)
+        builder.PrependInt64(0)
+        zero_point_vector = builder.EndVector()
+        tflite.QuantizationParametersStart(builder)
+        tflite.QuantizationParametersAddScale(builder, scale_vector)
+        tflite.QuantizationParametersAddZeroPoint(builder, zero_point_vector)
+        scales.append(tflite.QuantizationParametersEnd(builder))
+
+    tensor_specs = (
+        ((1, 640, 640, 3), tflite.TensorType.FLOAT32, 0, None),
+        (
+            (1, 640, 640, 3),
+            tflite.TensorType.INT8,
+            runtime_buffer_indices[0],
+            scales[0],
+        ),
+        ((1,), tflite.TensorType.INT8, weight_buffer_index, scales[1]),
+        ((1, 56, 8400), tflite.TensorType.INT8, runtime_buffer_indices[1], scales[2]),
+        ((1, 56, 8400), tflite.TensorType.FLOAT32, runtime_buffer_indices[2], None),
+    )
+    tensors = []
+    for shape, dtype, buffer_index, quantization in tensor_specs:
+        shape_vector = _tflite_int_vector(builder, tflite.TensorStartShapeVector, shape)
+        tflite.TensorStart(builder)
+        tflite.TensorAddShape(builder, shape_vector)
+        tflite.TensorAddType(builder, dtype)
+        tflite.TensorAddBuffer(builder, buffer_index)
+        if quantization is not None:
+            tflite.TensorAddQuantization(builder, quantization)
+        tensors.append(tflite.TensorEnd(builder))
+
+    operators = []
+    for opcode_index, inputs, outputs in (
+        (0, (0,), (1,)),
+        (1, (1, 2), (3,)),
+        (2, (3,), (4,)),
+    ):
+        input_vector = _tflite_int_vector(builder, tflite.OperatorStartInputsVector, inputs)
+        output_vector = _tflite_int_vector(builder, tflite.OperatorStartOutputsVector, outputs)
+        tflite.OperatorStart(builder)
+        tflite.OperatorAddOpcodeIndex(builder, opcode_index)
+        tflite.OperatorAddInputs(builder, input_vector)
+        tflite.OperatorAddOutputs(builder, output_vector)
+        operators.append(tflite.OperatorEnd(builder))
+
+    operator_codes = []
+    for code in (
+        tflite.BuiltinOperator.QUANTIZE,
+        tflite.BuiltinOperator.CONV_2D,
+        tflite.BuiltinOperator.DEQUANTIZE,
+    ):
+        tflite.OperatorCodeStart(builder)
+        tflite.OperatorCodeAddDeprecatedBuiltinCode(builder, code)
+        tflite.OperatorCodeAddBuiltinCode(builder, code)
+        operator_codes.append(tflite.OperatorCodeEnd(builder))
+
+    buffers = []
+    for index in range(6):
+        data_vector = None
+        if index == weight_buffer_index and weight_data:
+            data_vector = builder.CreateByteVector(weight_data)
+        tflite.BufferStart(builder)
+        if data_vector is not None:
+            tflite.BufferAddData(builder, data_vector)
+        if index == weight_buffer_index and external_weight is not None:
+            tflite.BufferAddOffset(builder, external_weight[0])
+            tflite.BufferAddSize(builder, external_weight[1])
+        buffers.append(tflite.BufferEnd(builder))
+
+    tensor_vector = _tflite_offset_vector(
+        builder, tflite.SubGraphStartTensorsVector, tuple(tensors)
+    )
+    input_vector = _tflite_int_vector(builder, tflite.SubGraphStartInputsVector, (0,))
+    output_vector = _tflite_int_vector(builder, tflite.SubGraphStartOutputsVector, (4,))
+    operator_vector = _tflite_offset_vector(
+        builder, tflite.SubGraphStartOperatorsVector, tuple(operators)
+    )
+    tflite.SubGraphStart(builder)
+    tflite.SubGraphAddTensors(builder, tensor_vector)
+    tflite.SubGraphAddInputs(builder, input_vector)
+    tflite.SubGraphAddOutputs(builder, output_vector)
+    tflite.SubGraphAddOperators(builder, operator_vector)
+    subgraph = tflite.SubGraphEnd(builder)
+
+    operator_code_vector = _tflite_offset_vector(
+        builder, tflite.ModelStartOperatorCodesVector, tuple(operator_codes)
+    )
+    subgraph_vector = _tflite_offset_vector(builder, tflite.ModelStartSubgraphsVector, (subgraph,))
+    buffer_vector = _tflite_offset_vector(builder, tflite.ModelStartBuffersVector, tuple(buffers))
+    tflite.ModelStart(builder)
+    tflite.ModelAddVersion(builder, 3)
+    tflite.ModelAddOperatorCodes(builder, operator_code_vector)
+    tflite.ModelAddSubgraphs(builder, subgraph_vector)
+    tflite.ModelAddBuffers(builder, buffer_vector)
+    model = tflite.ModelEnd(builder)
+    builder.Finish(model, file_identifier=b"TFL3")
+    return bytes(builder.Output())
+
+
+@pytest.fixture(autouse=True)
+def _canonical_test_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    common_git_dir = tmp_path / "common-git"
+    common_git_dir.mkdir()
+    (tmp_path / "ml" / "card-recognition" / "yolo" / "reports").mkdir(parents=True)
+    identity = RepositoryIdentity(tmp_path, common_git_dir)
+    monkeypatch.setattr(evaluate_module, "_discover_repository_identity", lambda: identity)
+    monkeypatch.setattr(export_module, "_discover_repository_identity", lambda: identity)
+
 
 def _report(
     partition: str,
     *,
     exact_multiset: float,
     exact_total: float,
+    exact_detection: float | None = None,
     candidate_sha256: str | None = None,
 ) -> EvaluationReport:
     return EvaluationReport(
@@ -40,6 +189,7 @@ def _report(
         candidate_sha256=candidate_sha256,
         confidence=0.5,
         iou=0.5,
+        localization_iou=0.5,
         scene_count=10,
         truth_card_count=10,
         predicted_card_count=10,
@@ -49,16 +199,20 @@ def _report(
         precision=1.0,
         recall=1.0,
         false_positive_share=0.0,
+        exact_detection_accuracy=(exact_multiset if exact_detection is None else exact_detection),
         exact_count_accuracy=1.0,
         exact_multiset_accuracy=exact_multiset,
         exact_total_accuracy=exact_total,
         abstention_rate=0.0,
+        per_class={label: ClassMetrics.from_counts(0, 0, 0) for label in CARD_LABELS},
+        confusion={},
         buckets={count: BucketMetrics.unsupported(count) for count in range(1, 11)},
     )
 
 
 def _selection() -> ThresholdSelection:
     return ThresholdSelection(
+        source_checkpoint_sha256=CHECKPOINT_SHA256,
         confidence=0.5,
         iou=0.5,
         validation_dataset_sha256="a" * 64,
@@ -69,8 +223,11 @@ def _selection() -> ThresholdSelection:
 
 
 class FakeExporter:
-    def __init__(self, int8_report: EvaluationReport) -> None:
+    def __init__(
+        self, int8_report: EvaluationReport, test_report: EvaluationReport | None = None
+    ) -> None:
         self.int8_report = int8_report
+        self.test_report = test_report or _report("test", exact_multiset=0.91, exact_total=0.96)
         self.calls: list[tuple[str, str]] = []
 
     def export(self, checkpoint: Path, destination: Path, *, quantization: str) -> Path:
@@ -82,13 +239,19 @@ class FakeExporter:
         quantization = model.stem
         return TensorContract(
             input_shape=(1, 640, 640, 3),
-            input_dtype="float32" if quantization == "fp32" else "int8",
+            input_dtype="float32",
             output_shape=(1, 56, 8400),
-            output_dtype="float32" if quantization == "fp32" else "int8",
+            output_dtype="float32",
             raw_output=True,
             label_count=52,
-            input_quantization=(1.0 / 255.0, -128) if quantization == "int8" else None,
-            output_quantization=(0.01, -5) if quantization == "int8" else None,
+            input_quantization=None,
+            output_quantization=None,
+            internal_int8_tensor_count=48 if quantization == "int8" else 0,
+            weighted_compute_operator_count=24,
+            quantized_compute_operator_count=24 if quantization == "int8" else 0,
+            quantized_compute_operator_codes=(
+                ("CONV_2D", "DEPTHWISE_CONV_2D") if quantization == "int8" else ()
+            ),
         )
 
     def evaluate_validation(self, model: Path, selection: ThresholdSelection) -> EvaluationReport:
@@ -99,6 +262,13 @@ class FakeExporter:
             else self.int8_report
         )
         return replace(report, candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest())
+
+    def evaluate_test(self, model: Path, selection: ThresholdSelection) -> EvaluationReport:
+        assert selection == _selection()
+        return replace(
+            self.test_report,
+            candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
+        )
 
 
 def test_inspection_requires_exact_raw_single_stage_tensor_contract() -> None:
@@ -169,6 +339,9 @@ def test_ultralytics_adapter_exports_raw_fp32_and_train_calibrated_int8_with_fak
         inspector=lambda _path: contract,
         validation_evaluator=lambda model, _selection: evaluated.append(model)
         or _report("validation", exact_multiset=1.0, exact_total=1.0),
+        test_evaluator=lambda _model, _selection: _report(
+            "test", exact_multiset=1.0, exact_total=1.0
+        ),
     )
 
     fp32 = adapter.export(checkpoint, tmp_path / "fp32.tflite", quantization="fp32")
@@ -205,6 +378,46 @@ def test_ultralytics_adapter_exports_raw_fp32_and_train_calibrated_int8_with_fak
     assert evaluated == [fp32]
 
 
+def test_pinned_ultralytics_tensorflow_decoder_normalizes_xywh_by_input_grid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Execute the pinned exporter helper so decoder units track the real integration."""
+    config_directory = tmp_path / "ultralytics-config"
+    config_directory.mkdir()
+    monkeypatch.setenv("YOLO_CONFIG_DIR", str(config_directory))
+    import torch
+    import ultralytics
+    from ultralytics.utils.export.tensorflow import _tf_decode_boxes
+
+    assert ultralytics.__version__ == "8.4.177"
+
+    class FakeHead:
+        format = "tflite"
+        dynamic = False
+        shape = (1, 1, 80, 40)
+        strides = torch.tensor([[8.0]])
+        stride = torch.tensor([8.0])
+        anchors = torch.zeros((2, 1))
+
+        @staticmethod
+        def dfl(boxes):
+            return boxes
+
+        @staticmethod
+        def decode_bboxes(distances, _anchors, _angle):
+            return distances
+
+    decoded = _tf_decode_boxes(
+        FakeHead(),
+        {
+            "feats": [torch.zeros((1, 1, 80, 40))],
+            "boxes": torch.ones((1, 4, 1)),
+        },
+    )
+
+    assert decoded.flatten().tolist() == pytest.approx([1 / 40, 1 / 80, 1 / 40, 1 / 80])
+
+
 def test_tflite_inspection_wraps_malformed_flatbuffer_as_export_error(tmp_path: Path) -> None:
     """FlatBuffer parser details must not escape the fail-closed export boundary."""
     malformed = tmp_path / "malformed.tflite"
@@ -214,30 +427,233 @@ def test_tflite_inspection_wraps_malformed_flatbuffer_as_export_error(tmp_path: 
         inspect_tflite(malformed)
 
 
+def test_serialized_tflite_rejects_empty_nonzero_weight_buffer(tmp_path: Path) -> None:
+    """A nonzero buffer ID is not proof that an INT8 weight has constant bytes."""
+    model_path = tmp_path / "empty-weight.tflite"
+    model_path.write_bytes(
+        _serialized_quantized_conv(weight_data=b"", runtime_buffer_indices=(0, 0, 0))
+    )
+
+    contract = inspect_tflite(model_path)
+
+    assert contract.weighted_compute_operator_count == 1
+    assert contract.quantized_compute_operator_count == 0
+    assert contract.quantized_compute_operator_codes == ()
+
+
+def test_serialized_tflite_accepts_graph_runtime_tensors_with_nonzero_empty_buffers(
+    tmp_path: Path,
+) -> None:
+    """Real schema buffers may be empty/nonzero while graph provenance proves runtime data."""
+    model_path = tmp_path / "embedded-weight.tflite"
+    model_path.write_bytes(_serialized_quantized_conv())
+
+    contract = inspect_tflite(model_path)
+
+    assert contract.internal_int8_tensor_count == 3
+    assert contract.weighted_compute_operator_count == 1
+    assert contract.quantized_compute_operator_count == 1
+    assert contract.quantized_compute_operator_codes == ("CONV_2D",)
+    assert contract.quantized_compute_coverage == 1.0
+
+
+def test_serialized_tflite_bounds_checks_tensor_buffer_references(tmp_path: Path) -> None:
+    model_path = tmp_path / "invalid-buffer-reference.tflite"
+    model_path.write_bytes(_serialized_quantized_conv(weight_buffer_index=99))
+
+    with pytest.raises(ExportError, match="buffer reference"):
+        inspect_tflite(model_path)
+
+
+def test_serialized_tflite_accepts_in_bounds_external_weight_storage(tmp_path: Path) -> None:
+    provisional = _serialized_quantized_conv(weight_data=b"", external_weight=(1, 1))
+    model = _serialized_quantized_conv(weight_data=b"", external_weight=(len(provisional), 1))
+    assert len(model) == len(provisional)
+    model_path = tmp_path / "external-weight.tflite"
+    model_path.write_bytes(model + b"\x01")
+
+    contract = inspect_tflite(model_path)
+
+    assert contract.quantized_compute_operator_count == 1
+    assert contract.quantized_compute_operator_codes == ("CONV_2D",)
+
+
+def test_tflite_inspector_attests_pinned_static_int8_compute_pattern(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pinned export uses FP32 boundaries around INT8 activation/weight/output kernels."""
+    import tflite
+
+    class Quantization:
+        def __init__(self, scales=(), zero_points=()) -> None:
+            self.scales = np.asarray(scales, dtype=np.float32)
+            self.zero_points = np.asarray(zero_points, dtype=np.int64)
+
+        def ScaleAsNumpy(self):
+            return self.scales
+
+        def ZeroPointAsNumpy(self):
+            return self.zero_points
+
+    class Tensor:
+        def __init__(self, shape, dtype, *, scales=(), zero_points=(), buffer=0) -> None:
+            self.shape = np.asarray(shape, dtype=np.int32)
+            self.dtype = dtype
+            self.quantization = (
+                Quantization(scales, zero_points) if scales and zero_points else None
+            )
+            self.buffer = buffer
+
+        def ShapeAsNumpy(self):
+            return self.shape
+
+        def Type(self):
+            return self.dtype
+
+        def Quantization(self):
+            return self.quantization
+
+        def Buffer(self):
+            return self.buffer
+
+    tensors = (
+        Tensor((1, 640, 640, 3), tflite.TensorType.FLOAT32),
+        Tensor((1, 640, 640, 3), tflite.TensorType.INT8, scales=(0.01,), zero_points=(0,)),
+        Tensor(
+            (16, 3, 3, 3),
+            tflite.TensorType.INT8,
+            scales=(0.02, 0.03),
+            zero_points=(0, 0),
+            buffer=1,
+        ),
+        Tensor((1, 320, 320, 16), tflite.TensorType.INT8, scales=(0.04,), zero_points=(0,)),
+        Tensor((1, 56, 8400), tflite.TensorType.FLOAT32),
+    )
+
+    class Operator:
+        def __init__(self, opcode_index: int, inputs: tuple[int, ...], outputs: tuple[int, ...]):
+            self.opcode_index = opcode_index
+            self.inputs = np.asarray(inputs, dtype=np.int32)
+            self.outputs = np.asarray(outputs, dtype=np.int32)
+
+        def OpcodeIndex(self):
+            return self.opcode_index
+
+        def InputsAsNumpy(self):
+            return self.inputs
+
+        def OutputsAsNumpy(self):
+            return self.outputs
+
+    operators = (
+        Operator(0, (0,), (1,)),
+        Operator(1, (1, 2), (3,)),
+        Operator(2, (3,), (4,)),
+    )
+
+    class OperatorCode:
+        def __init__(self, code: int) -> None:
+            self.code = code
+
+        def BuiltinCode(self):
+            return self.code
+
+    operator_codes = (
+        OperatorCode(tflite.BuiltinOperator.QUANTIZE),
+        OperatorCode(tflite.BuiltinOperator.CONV_2D),
+        OperatorCode(tflite.BuiltinOperator.DEQUANTIZE),
+    )
+
+    class Buffer:
+        def __init__(self, data: bytes = b"") -> None:
+            self.data = np.frombuffer(data, dtype=np.uint8)
+
+        def DataLength(self):
+            return len(self.data)
+
+        def DataAsNumpy(self):
+            return self.data
+
+        def Offset(self):
+            return 0
+
+        def Size(self):
+            return 0
+
+    buffers = (Buffer(), Buffer(bytes(16 * 3 * 3 * 3)))
+
+    class Subgraph:
+        def InputsLength(self):
+            return 1
+
+        def OutputsLength(self):
+            return 1
+
+        def Inputs(self, _index):
+            return 0
+
+        def Outputs(self, _index):
+            return 4
+
+        def TensorsLength(self):
+            return len(tensors)
+
+        def Tensors(self, index):
+            return tensors[index]
+
+        def OperatorsLength(self):
+            return len(operators)
+
+        def Operators(self, index):
+            return operators[index]
+
+    class Model:
+        def SubgraphsLength(self):
+            return 1
+
+        def Subgraphs(self, _index):
+            return Subgraph()
+
+        def OperatorCodes(self, index):
+            return operator_codes[index]
+
+        def BuffersLength(self):
+            return len(buffers)
+
+        def Buffers(self, index):
+            return buffers[index]
+
+    monkeypatch.setattr(tflite.Model, "GetRootAsModel", lambda _payload, _offset: Model())
+    model_path = tmp_path / "static-int8.tflite"
+    model_path.write_bytes(b"pinned-realistic-flatbuffer-contract")
+
+    contract = inspect_tflite(model_path)
+
+    assert contract.input_dtype == "float32"
+    assert contract.output_dtype == "float32"
+    assert contract.internal_int8_tensor_count == 3
+    assert contract.weighted_compute_operator_count == 1
+    assert contract.quantized_compute_operator_count == 1
+    assert contract.quantized_compute_operator_codes == ("CONV_2D",)
+    assert contract.quantized_compute_coverage == 1.0
+
+
 def test_export_selects_int8_within_one_point_and_publishes_exact_bundle(tmp_path: Path) -> None:
     """Candidate selection must use validation metrics and bind every published byte."""
-    exporter = FakeExporter(_report("validation", exact_multiset=0.94, exact_total=0.97))
+    holdout = _report("test", exact_multiset=0.91, exact_total=0.96)
+    exporter = FakeExporter(_report("validation", exact_multiset=0.94, exact_total=0.97), holdout)
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"checkpoint")
     license_file = tmp_path / "LICENSE"
     notice_file = tmp_path / "NOTICE.md"
     license_file.write_text("AGPL", encoding="utf-8")
     notice_file.write_text("dataset notice", encoding="utf-8")
-    holdout = _report("test", exact_multiset=0.91, exact_total=0.96)
-    output = tmp_path / "selected"
-
-    def evaluate_test(model: Path) -> EvaluationReport:
-        return replace(
-            holdout,
-            candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
-        )
+    output = tmp_path / "ml" / "card-recognition" / "yolo" / "exports" / "selected"
 
     bundle = export_candidate(
         checkpoint=checkpoint,
-        destination=output,
         exporter=exporter,
         selection=_selection(),
-        evaluate_test=evaluate_test,
         dataset_receipt_sha256="d" * 64,
         dataset_audit_sha256="e" * 64,
         notices=(license_file, notice_file),
@@ -263,18 +679,28 @@ def test_export_selects_int8_within_one_point_and_publishes_exact_bundle(tmp_pat
         "sha256": hashlib.sha256(model.read_bytes()).hexdigest(),
         "sizeBytes": len(model.read_bytes()),
         "quantization": "int8",
+        "sourceCheckpointSha256": CHECKPOINT_SHA256,
+        "internalQuantization": {
+            "int8TensorCount": 48,
+            "weightedComputeOperatorCount": 24,
+            "quantizedComputeOperatorCount": 24,
+            "quantizedComputeCoverage": 1.0,
+            "operatorCodes": ["CONV_2D", "DEPTHWISE_CONV_2D"],
+        },
     }
     assert tuple(metadata["labels"]) == CARD_LABELS
     assert metadata["input"]["shape"] == [1, 640, 640, 3]
-    assert metadata["input"]["dtype"] == "int8"
-    assert metadata["input"]["quantization"] == {"scale": 1.0 / 255.0, "zeroPoint": -128}
+    assert metadata["input"]["dtype"] == "float32"
+    assert metadata["input"]["quantization"] is None
     assert metadata["output"] == {
         "shape": [1, 56, 8400],
-        "dtype": "int8",
-        "quantization": {"scale": 0.01, "zeroPoint": -5},
+        "dtype": "float32",
+        "quantization": None,
         "layout": "channels-first",
         "raw": True,
         "boxEncoding": "xywh",
+        "boxCoordinateUnits": "normalized-input-dimensions",
+        "boxCoordinateReference": {"width": 640, "height": 640},
         "classCount": 52,
     }
     assert metadata["thresholds"] == {
@@ -283,11 +709,24 @@ def test_export_selects_int8_within_one_point_and_publishes_exact_bundle(tmp_pat
         "comparison": "strict-greater-than",
         "selectedOn": "validation",
         "selectionSha256": _selection().sha256,
+        "sourceCheckpointSha256": CHECKPOINT_SHA256,
     }
     assert metadata["maxCards"] == 10
     assert metadata["datasetReceiptSha256"] == "d" * 64
     assert metadata["datasetAuditSha256"] == "e" * 64
-    assert metadata["testEvaluationSha256"] == evaluate_test(model).sha256
+    assert (
+        metadata["testEvaluationSha256"]
+        == replace(holdout, candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest()).sha256
+    )
+    assert metadata["model"]["sourceCheckpointSha256"] == CHECKPOINT_SHA256
+    assert metadata["model"]["internalQuantization"] == {
+        "int8TensorCount": 48,
+        "weightedComputeOperatorCount": 24,
+        "quantizedComputeOperatorCount": 24,
+        "quantizedComputeCoverage": 1.0,
+        "operatorCodes": ["CONV_2D", "DEPTHWISE_CONV_2D"],
+    }
+    assert bundle.holdout_receipt_sha256 == metadata["holdoutReceiptSha256"]
 
 
 def test_export_keeps_fp32_when_int8_loses_more_than_one_point(tmp_path: Path) -> None:
@@ -303,13 +742,8 @@ def test_export_keeps_fp32_when_int8_loses_more_than_one_point(tmp_path: Path) -
 
     bundle = export_candidate(
         checkpoint=checkpoint,
-        destination=tmp_path / "selected",
         exporter=exporter,
         selection=_selection(),
-        evaluate_test=lambda model: replace(
-            _report("test", exact_multiset=0.90, exact_total=0.95),
-            candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
-        ),
         dataset_receipt_sha256="d" * 64,
         dataset_audit_sha256="e" * 64,
         notices=tuple(notices),
@@ -318,6 +752,131 @@ def test_export_keeps_fp32_when_int8_loses_more_than_one_point(tmp_path: Path) -
 
     assert bundle.quantization == "fp32"
     assert bundle.model.read_bytes() == b"fp32-raw-yolo"
+
+
+def test_export_gates_int8_on_localization_aware_accuracy(tmp_path: Path) -> None:
+    """Label-only parity cannot hide an INT8 localization regression."""
+    exporter = FakeExporter(
+        _report(
+            "validation",
+            exact_multiset=0.95,
+            exact_total=0.98,
+            exact_detection=0.93,
+        )
+    )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    notices = []
+    for name in ("LICENSE", "NOTICE.md"):
+        path = tmp_path / name
+        path.write_text(name, encoding="utf-8")
+        notices.append(path)
+
+    bundle = export_candidate(
+        checkpoint=checkpoint,
+        exporter=exporter,
+        selection=_selection(),
+        dataset_receipt_sha256="d" * 64,
+        dataset_audit_sha256="e" * 64,
+        notices=tuple(notices),
+        status="DEBUG_ONLY",
+    )
+
+    assert bundle.quantization == "fp32"
+
+
+def test_export_rejects_int8_label_without_internal_quantized_graph(tmp_path: Path) -> None:
+    """FP32 boundaries are expected, but an INT8 candidate needs quantized operators."""
+
+    class FakeInt8LabelOnly(FakeExporter):
+        def inspect(self, model: Path) -> TensorContract:
+            return replace(
+                super().inspect(model),
+                internal_int8_tensor_count=0,
+                weighted_compute_operator_count=24,
+                quantized_compute_operator_count=0,
+                quantized_compute_operator_codes=(),
+            )
+
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    notices = []
+    for name in ("LICENSE", "NOTICE.md"):
+        path = tmp_path / name
+        path.write_text(name, encoding="utf-8")
+        notices.append(path)
+
+    with pytest.raises(ExportError, match="internal quantized"):
+        export_candidate(
+            checkpoint=checkpoint,
+            exporter=FakeInt8LabelOnly(_report("validation", exact_multiset=1.0, exact_total=1.0)),
+            selection=_selection(),
+            dataset_receipt_sha256="d" * 64,
+            dataset_audit_sha256="e" * 64,
+            notices=tuple(notices),
+            status="DEBUG_ONLY",
+        )
+
+
+def test_export_rejects_sparse_int8_attestation_without_meaningful_kernel_coverage(
+    tmp_path: Path,
+) -> None:
+    """Quantize/dequantize wrappers or one token INT8 kernel cannot attest the graph."""
+
+    class SparseQuantizedExporter(FakeExporter):
+        def inspect(self, model: Path) -> TensorContract:
+            contract = super().inspect(model)
+            if model.stem != "int8":
+                return contract
+            return replace(
+                contract,
+                internal_int8_tensor_count=4,
+                weighted_compute_operator_count=20,
+                quantized_compute_operator_count=1,
+                quantized_compute_operator_codes=("CONV_2D",),
+            )
+
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    notices = []
+    for name in ("LICENSE", "NOTICE.md"):
+        path = tmp_path / name
+        path.write_text(name, encoding="utf-8")
+        notices.append(path)
+
+    with pytest.raises(ExportError, match="coverage"):
+        export_candidate(
+            checkpoint=checkpoint,
+            exporter=SparseQuantizedExporter(
+                _report("validation", exact_multiset=1.0, exact_total=1.0)
+            ),
+            selection=_selection(),
+            dataset_receipt_sha256="d" * 64,
+            dataset_audit_sha256="e" * 64,
+            notices=tuple(notices),
+            status="DEBUG_ONLY",
+        )
+
+
+def test_export_rejects_selection_from_different_checkpoint(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    notices = []
+    for name in ("LICENSE", "NOTICE.md"):
+        path = tmp_path / name
+        path.write_text(name, encoding="utf-8")
+        notices.append(path)
+
+    with pytest.raises(ExportError, match="source checkpoint"):
+        export_candidate(
+            checkpoint=checkpoint,
+            exporter=FakeExporter(_report("validation", exact_multiset=1.0, exact_total=1.0)),
+            selection=replace(_selection(), source_checkpoint_sha256="0" * 64),
+            dataset_receipt_sha256="d" * 64,
+            dataset_audit_sha256="e" * 64,
+            notices=tuple(notices),
+            status="DEBUG_ONLY",
+        )
 
 
 def test_export_rejects_test_metrics_for_candidate_selection_or_release_status(
@@ -336,13 +895,8 @@ def test_export_rejects_test_metrics_for_candidate_selection_or_release_status(
     with pytest.raises(ExportError, match="validation"):
         export_candidate(
             checkpoint=checkpoint,
-            destination=tmp_path / "leaky",
             exporter=test_metric_exporter,
             selection=_selection(),
-            evaluate_test=lambda model: replace(
-                _report("test", exact_multiset=1.0, exact_total=1.0),
-                candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
-            ),
             dataset_receipt_sha256="d" * 64,
             dataset_audit_sha256="e" * 64,
             notices=tuple(notices),
@@ -352,13 +906,8 @@ def test_export_rejects_test_metrics_for_candidate_selection_or_release_status(
     with pytest.raises(ExportError, match="status"):
         export_candidate(
             checkpoint=checkpoint,
-            destination=tmp_path / "approved",
             exporter=FakeExporter(_report("validation", exact_multiset=1.0, exact_total=1.0)),
             selection=_selection(),
-            evaluate_test=lambda model: replace(
-                _report("test", exact_multiset=1.0, exact_total=1.0),
-                candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
-            ),
             dataset_receipt_sha256="d" * 64,
             dataset_audit_sha256="e" * 64,
             notices=tuple(notices),
@@ -380,18 +929,13 @@ def test_export_failure_never_publishes_partial_bundle(tmp_path: Path) -> None:
         path = tmp_path / name
         path.write_text(name, encoding="utf-8")
         notices.append(path)
-    destination = tmp_path / "selected"
+    destination = tmp_path / "ml" / "card-recognition" / "yolo" / "exports" / "selected"
 
     with pytest.raises(ExportError):
         export_candidate(
             checkpoint=checkpoint,
-            destination=destination,
             exporter=BadShapeExporter(_report("validation", exact_multiset=1.0, exact_total=1.0)),
             selection=_selection(),
-            evaluate_test=lambda model: replace(
-                _report("test", exact_multiset=1.0, exact_total=1.0),
-                candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
-            ),
             dataset_receipt_sha256="d" * 64,
             dataset_audit_sha256="e" * 64,
             notices=tuple(notices),
@@ -421,13 +965,8 @@ def test_export_rejects_validation_report_not_bound_to_each_candidate(tmp_path: 
     with pytest.raises(ExportError, match="candidate bytes"):
         export_candidate(
             checkpoint=checkpoint,
-            destination=tmp_path / "selected",
             exporter=UnboundExporter(_report("validation", exact_multiset=1.0, exact_total=1.0)),
             selection=_selection(),
-            evaluate_test=lambda model: replace(
-                _report("test", exact_multiset=1.0, exact_total=1.0),
-                candidate_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
-            ),
             dataset_receipt_sha256="d" * 64,
             dataset_audit_sha256="e" * 64,
             notices=tuple(notices),

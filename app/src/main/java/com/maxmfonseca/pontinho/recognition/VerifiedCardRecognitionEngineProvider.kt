@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * await/inference, not the reusable detector. Closing the provider also disposes a late native result.
  */
 class VerifiedCardRecognitionEngineProvider internal constructor(
-    private val readAssets: suspend () -> Triple<ByteArray?, ByteArray?, ByteArray?>,
+    private val readAssets: suspend () -> Any?,
     private val factory: CardRecognitionEngineFactory?,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : CardRecognitionEngineProvider {
@@ -23,24 +23,26 @@ class VerifiedCardRecognitionEngineProvider internal constructor(
     private val state = MutableStateFlow<RecognitionAvailability>(RecognitionAvailability.Checking)
     override val availability = state.asStateFlow()
     private val verified = scope.async {
-        val (detectorSource, classifierSource, releaseSource) = try { readAssets() }
+        val sources = try { readAssets() }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { Triple(null, null, null) }
+        catch (_: Exception) { null }
+        val pair = sources as? Pair<*, *>
+        val modelSource = pair?.first as? ByteArray
+        val releaseSource = pair?.second as? ByteArray
         // Own immutable snapshots through verification and native construction.
-        val detector = detectorSource?.copyOf()
-        val classifier = classifierSource?.copyOf()
+        val model = modelSource?.copyOf()
         val result = RecognitionAssetVerifier(allowExperimental = BuildConfig.DEBUG)
-            .verify(detector, classifier, releaseSource?.copyOf())
+            .verify(model, releaseSource?.copyOf())
         state.value = if (result is RecognitionAvailability.Available && factory == null)
             unavailable() else result
-        Triple(detector, classifier, state.value)
+        VerifiedAssets(model, state.value)
     }
     private val initialized = scope.async(start = CoroutineStart.LAZY) {
-        val (detector, classifier, result) = verified.await()
-        check(result is RecognitionAvailability.Available && detector != null && classifier != null && factory != null) {
+        val (model, result) = verified.await()
+        check(result is RecognitionAvailability.Available && model != null && factory != null) {
             "Card recognition is unavailable"
         }
-        val created = try { factory.create(detector, classifier, result.metadata as RecognitionModelBundleMetadata) }
+        val created = try { factory.create(model, result.metadata as YoloRecognitionMetadata) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: LinkageError) { state.value = unavailable(); throw CardRecognitionException.InferenceFailed() }
         catch (_: Exception) { state.value = unavailable(); throw CardRecognitionException.InferenceFailed() }
@@ -80,4 +82,9 @@ class VerifiedCardRecognitionEngineProvider internal constructor(
     }
 
     private fun unavailable() = RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED)
+
+    private data class VerifiedAssets(
+        val model: ByteArray?,
+        val availability: RecognitionAvailability,
+    )
 }

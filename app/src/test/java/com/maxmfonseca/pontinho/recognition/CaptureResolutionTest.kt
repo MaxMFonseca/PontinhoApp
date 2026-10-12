@@ -47,8 +47,7 @@ class CaptureResolutionTest {
                 }
                 override fun close() = Unit
             }
-            val metadata = (RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, BundleFixture.bytes())
-                as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
+            val metadata = BundleFixture.legacyMetadata()
             TwoStageCardRecognitionEngine(detector, classifier, metadata, Dispatchers.Unconfined).use { it.recognize(loaded) }
             assertEquals(3000 to 2000, detectorSize)
             assertEquals(900 to 1200, cropSize)

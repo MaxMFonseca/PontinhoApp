@@ -24,6 +24,9 @@ class TwoStageCardRecognitionEngineFactory internal constructor(
         { bytes, metadata -> MediaPipeCardClassifierRunner.create(context.applicationContext, bytes, metadata) },
     )
 
+    override fun create(model: ByteArray, metadata: YoloRecognitionMetadata): CardRecognitionEngine =
+        throw UnsupportedOperationException("Two-stage runtime cannot consume single-stage assets")
+
     override fun create(detectorModel: ByteArray, classifierModel: ByteArray, metadata: RecognitionModelBundleMetadata): CardRecognitionEngine {
         val detector = detectorFactory(detectorModel, metadata)
         try {

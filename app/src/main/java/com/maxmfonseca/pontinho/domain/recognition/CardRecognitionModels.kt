@@ -59,6 +59,31 @@ sealed interface RecognitionMetadata {
     val modelVersion: String
 }
 
+data class YoloRecognitionMetadata(
+    val modelSha256: String,
+    val modelSizeBytes: Long,
+    val quantization: String,
+    val labels: List<String>,
+    val inputWidth: Int,
+    val inputHeight: Int,
+    val outputShape: List<Int>,
+    val normalizationScale: Double,
+    val normalizationOffset: Double,
+    val confidenceThreshold: Double,
+    val iouThreshold: Double,
+    val maxCards: Int,
+    val datasetReceiptSha256: String,
+    val datasetAuditSha256: String,
+    val holdoutReceiptSha256: String,
+    val exportInvocationSha256: String,
+    val validationEvaluationSha256: String,
+    val testEvaluationSha256: String,
+    val debugOnly: Boolean,
+    val productionApproved: Boolean,
+) : RecognitionMetadata {
+    override val modelVersion: String = modelSha256
+}
+
 /** Compatibility value for existing injected UI fixtures; never produced by the asset verifier. */
 data class RecognitionModelMetadata(
     override val modelVersion: String,
@@ -97,6 +122,7 @@ sealed interface RecognitionAvailability {
     data class Unavailable(val reason: RecognitionUnavailableReason) : RecognitionAvailability
 }
 
+/** Compile-only compatibility for the two-stage implementation retained until Stage 8. */
 data class RecognitionStageMetadata(
     val modelSha256: String,
     val modelSizeBytes: Long,
@@ -109,6 +135,7 @@ data class RecognitionStageMetadata(
     val outputQuantizationScale: Double = 0.0,
 )
 
+/** Compile-only compatibility for the two-stage implementation retained until Stage 8. */
 data class RecognitionModelBundleMetadata(
     val version: String,
     val detector: RecognitionStageMetadata,

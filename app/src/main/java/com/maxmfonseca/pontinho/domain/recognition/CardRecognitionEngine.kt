@@ -17,8 +17,14 @@ interface CardRecognitionEngineProvider : AutoCloseable {
 
 fun interface CardRecognitionEngineFactory {
     fun create(
+        model: ByteArray,
+        metadata: YoloRecognitionMetadata,
+    ): CardRecognitionEngine
+
+    /** Temporary source bridge for the legacy runtime, which Stage 8 removes. */
+    fun create(
         detectorModel: ByteArray,
         classifierModel: ByteArray,
         metadata: RecognitionModelBundleMetadata,
-    ): CardRecognitionEngine
+    ): CardRecognitionEngine = throw UnsupportedOperationException("Two-stage recognition is disabled")
 }

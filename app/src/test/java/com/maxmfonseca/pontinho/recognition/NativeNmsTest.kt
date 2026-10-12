@@ -55,8 +55,7 @@ class NativeNmsTest {
             } }
             for ((width, height) in listOf(320 to 320, 1000 to 500, 3000 to 2000)) {
                 val source = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val release = BundleFixture.json().apply { getJSONObject("thresholds").put("iou", case.get("threshold")) }
-                val metadata = (RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, release.toString().encodeToByteArray()) as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
+                val metadata = BundleFixture.legacyMetadata().copy(iouThreshold = case.getDouble("threshold").toFloat())
                 val engine = TwoStageCardRecognitionEngine(object : CardDetectorRunner {
                     override fun detect(bitmap: Bitmap) = raw
                     override fun close() = Unit

@@ -158,8 +158,7 @@ class TwoStageCardRecognitionEngineTest {
     private fun engine(detector: CardDetectorRunner, classifier: CardClassifierRunner, metadata: RecognitionModelBundleMetadata = metadata(), dispatcher: CoroutineDispatcher = Dispatchers.Unconfined) =
         TwoStageCardRecognitionEngine(detector, classifier, metadata, dispatcher)
 
-    private fun metadata() = (RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, BundleFixture.bytes()) as RecognitionAvailability.Available)
-        .metadata.let { it as RecognitionModelBundleMetadata }.copy(classifierThreshold = .7f)
+    private fun metadata() = BundleFixture.legacyMetadata().copy(classifierThreshold = .7f)
 
     private fun bitmap() = Bitmap.createBitmap(2000, 1000, Bitmap.Config.ARGB_8888)
     private fun box(left: Float, score: Float = .9f): RawCardBox {

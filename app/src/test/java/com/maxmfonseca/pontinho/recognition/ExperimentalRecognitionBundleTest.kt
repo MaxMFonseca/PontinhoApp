@@ -35,13 +35,9 @@ class ExperimentalRecognitionBundleTest {
     @Test fun `experiment is rejected by strict verifier even when every model hash matches`() {
         assertTrue(verify(json(), false) is RecognitionAvailability.Unavailable)
     }
-    @Test fun `explicit debug experiment accepts measured low quality and preserves warning identity`() {
+    @Test fun `legacy debug experiment is rejected after single stage migration`() {
         val result = verify(json(), true)
-        if (BuildConfig.DEBUG) {
-            val metadata = (result as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
-            assertTrue(metadata.experimental)
-            assertTrue(metadata.modelVersion.startsWith("experimental-"))
-        } else assertTrue(result is RecognitionAvailability.Unavailable)
+        assertTrue(result is RecognitionAvailability.Unavailable)
     }
     @Test fun `experiment still rejects tampering missing models and false release claims`() {
         for (document in listOf(
@@ -56,15 +52,13 @@ class ExperimentalRecognitionBundleTest {
         assertTrue(RecognitionAssetVerifier(allowExperimental = true)
             .verify(BundleFixture.detector, null, json().toString().encodeToByteArray()) is RecognitionAvailability.Unavailable)
     }
-    @Test fun `provider admits both experiment models only in debug and keeps construction lazy`() = runTest {
+    @Test fun `provider rejects legacy experiment triples without constructing a classifier path`() = runTest {
         var constructions = 0
         val provider = VerifiedCardRecognitionEngineProvider(
             { Triple(BundleFixture.detector, BundleFixture.classifier, json().toString().encodeToByteArray()) },
-            { detector, classifier, metadata ->
+            { detector, metadata ->
                 constructions++
                 assertArrayEquals(BundleFixture.detector, detector)
-                assertArrayEquals(BundleFixture.classifier, classifier)
-                assertTrue(metadata.experimental)
                 object : CardRecognitionEngine {
                     override val availability = RecognitionAvailability.Available(metadata)
                     override suspend fun recognize(bitmap: Bitmap) = CardRecognitionResult(emptyList(), 0, metadata.modelVersion)
@@ -74,13 +68,7 @@ class ExperimentalRecognitionBundleTest {
         )
         advanceUntilIdle()
         assertEquals(0, constructions)
-        if (BuildConfig.DEBUG) {
-            assertTrue(provider.availability.value is RecognitionAvailability.Available)
-            val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-            provider.get().recognize(bitmap)
-            assertEquals(1, constructions)
-            bitmap.recycle()
-        } else assertTrue(provider.availability.value is RecognitionAvailability.Unavailable)
+        assertTrue(provider.availability.value is RecognitionAvailability.Unavailable)
         provider.close()
     }
 }

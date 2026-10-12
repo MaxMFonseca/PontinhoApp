@@ -11,6 +11,9 @@ from pontinho_yolo.labels import CARD_LABELS
 
 INPUT_SIZE = 640
 OUTPUT_SHAPE = (1, 56, 8400)
+OUTPUT_BOX_COORDINATE_UNITS = "normalized-input-dimensions"
+PHYSICAL_DUPLICATE_IOU = 0.95
+BOUNDARY_EPSILON_PIXELS = 1e-4
 
 
 class DecodeError(ValueError):
@@ -63,9 +66,13 @@ class LetterboxGeometry:
     source_height: int
     input_width: int
     input_height: int
+    resized_width: int
+    resized_height: int
     scale: float
     pad_x: float
     pad_y: float
+    pad_right: int
+    pad_bottom: int
 
     @classmethod
     def for_source(
@@ -74,16 +81,24 @@ class LetterboxGeometry:
         if source_width <= 0 or source_height <= 0 or input_size <= 0:
             raise DecodeError("letterbox dimensions must be positive")
         scale = min(input_size / source_width, input_size / source_height)
-        scaled_width = source_width * scale
-        scaled_height = source_height * scale
+        resized_width = round(source_width * scale)
+        resized_height = round(source_height * scale)
+        horizontal_padding = input_size - resized_width
+        vertical_padding = input_size - resized_height
+        pad_x = round(horizontal_padding / 2 - 0.1)
+        pad_y = round(vertical_padding / 2 - 0.1)
         return cls(
             source_width=source_width,
             source_height=source_height,
             input_width=input_size,
             input_height=input_size,
+            resized_width=resized_width,
+            resized_height=resized_height,
             scale=scale,
-            pad_x=(input_size - scaled_width) / 2.0,
-            pad_y=(input_size - scaled_height) / 2.0,
+            pad_x=float(pad_x),
+            pad_y=float(pad_y),
+            pad_right=round(horizontal_padding / 2 + 0.1),
+            pad_bottom=round(vertical_padding / 2 + 0.1),
         )
 
     def validate(self) -> None:
@@ -93,18 +108,34 @@ class LetterboxGeometry:
             or self.source_height <= 0
             or self.input_width != INPUT_SIZE
             or self.input_height != INPUT_SIZE
+            or self.resized_width <= 0
+            or self.resized_height <= 0
             or not all(math.isfinite(value) for value in values)
             or self.scale <= 0
             or self.pad_x < 0
             or self.pad_y < 0
+            or self.pad_right < 0
+            or self.pad_bottom < 0
         ):
             raise DecodeError("invalid letterbox geometry")
-        scaled_width = self.source_width * self.scale
-        scaled_height = self.source_height * self.scale
-        if not math.isclose(scaled_width + 2 * self.pad_x, self.input_width, abs_tol=1e-5):
-            raise DecodeError("letterbox horizontal geometry is inconsistent")
-        if not math.isclose(scaled_height + 2 * self.pad_y, self.input_height, abs_tol=1e-5):
-            raise DecodeError("letterbox vertical geometry is inconsistent")
+        expected_scale = min(
+            self.input_width / self.source_width, self.input_height / self.source_height
+        )
+        if not math.isclose(self.scale, expected_scale, rel_tol=0.0, abs_tol=1e-12):
+            raise DecodeError("letterbox scale is inconsistent")
+        if self.resized_width != round(
+            self.source_width * self.scale
+        ) or self.resized_height != round(self.source_height * self.scale):
+            raise DecodeError("letterbox resized raster is inconsistent")
+        horizontal_padding = self.input_width - self.resized_width
+        vertical_padding = self.input_height - self.resized_height
+        if (
+            self.pad_x != float(round(horizontal_padding / 2 - 0.1))
+            or self.pad_right != round(horizontal_padding / 2 + 0.1)
+            or self.pad_y != float(round(vertical_padding / 2 - 0.1))
+            or self.pad_bottom != round(vertical_padding / 2 + 0.1)
+        ):
+            raise DecodeError("letterbox padding split is inconsistent")
 
 
 def decode_yolo(
@@ -114,7 +145,7 @@ def decode_yolo(
     iou: float,
     max_cards: int,
 ) -> tuple[Detection, ...]:
-    """Decode raw BCN output using class-aware NMS then physical duplicate suppression."""
+    """Decode normalized-input BCN xywh using class NMS then duplicate suppression."""
     geometry.validate()
     if not isinstance(output, np.ndarray) or output.shape != OUTPUT_SHAPE:
         raise DecodeError(f"raw YOLO output must have shape {OUTPUT_SHAPE}")
@@ -143,6 +174,10 @@ def decode_yolo(
         cx, cy, width, height = (float(value) for value in output[0, :4, anchor_index].tolist())
         if width <= 0.0 or height <= 0.0:
             raise DecodeError("selected raw YOLO box has a non-positive extent")
+        cx *= geometry.input_width
+        width *= geometry.input_width
+        cy *= geometry.input_height
+        height *= geometry.input_height
         model_box = Box(
             left=cx - width / 2.0,
             top=cy - height / 2.0,
@@ -164,7 +199,7 @@ def decode_yolo(
 
     priority = sorted(candidates, key=_priority_key)
     class_aware = _nms(priority, iou, class_aware=True)
-    physical = _nms(class_aware, iou, class_aware=False)
+    physical = _nms(class_aware, PHYSICAL_DUPLICATE_IOU, class_aware=False)
     ordered = tuple(sorted(physical, key=_spatial_key))
     if len(ordered) > max_cards:
         raise TooManyDetections(ordered, max_cards)
@@ -174,9 +209,9 @@ def decode_yolo(
 def _invert_complete_box(box: Box, geometry: LetterboxGeometry) -> Box | None:
     content_left = geometry.pad_x
     content_top = geometry.pad_y
-    content_right = geometry.input_width - geometry.pad_x
-    content_bottom = geometry.input_height - geometry.pad_y
-    epsilon = 1e-5
+    content_right = geometry.pad_x + geometry.source_width * geometry.scale
+    content_bottom = geometry.pad_y + geometry.source_height * geometry.scale
+    epsilon = BOUNDARY_EPSILON_PIXELS
     if (
         box.left < content_left - epsilon
         or box.top < content_top - epsilon
@@ -199,7 +234,12 @@ def _invert_complete_box(box: Box, geometry: LetterboxGeometry) -> Box | None:
         or source.bottom > geometry.source_height + epsilon
     ):
         return None
-    return source
+    return Box(
+        left=min(max(source.left, 0.0), float(geometry.source_width)),
+        top=min(max(source.top, 0.0), float(geometry.source_height)),
+        right=min(max(source.right, 0.0), float(geometry.source_width)),
+        bottom=min(max(source.bottom, 0.0), float(geometry.source_height)),
+    )
 
 
 def _priority_key(detection: Detection) -> tuple[float | int, ...]:

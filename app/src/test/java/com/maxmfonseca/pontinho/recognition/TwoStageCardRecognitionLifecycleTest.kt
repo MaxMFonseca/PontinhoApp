@@ -229,28 +229,30 @@ class TwoStageCardRecognitionLifecycleTest {
     }
 
     @Test
-    fun `gated factory fails closed when verified runner creation fails`() {
+    fun `gated factory rejects legacy classifier bundle before runner creation`() {
         val model = "abc".encodeToByteArray()
+        var constructions = 0
         val factory = AssetGatedCardRecognitionEngineFactory(
             verifier = RecognitionAssetVerifier(),
-            delegate = { _, _, _ -> error("native model path") },
+            delegate = { _, _, _ -> constructions++; error("native model path") },
         )
 
         val engine = factory.create(model, BundleFixture.classifier, BundleFixture.bytes())
 
         assertEquals(
             RecognitionAvailability.Unavailable(
-                com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason.ENGINE_NOT_INSTALLED,
+                com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason.INVALID_ASSETS,
             ),
             engine.availability,
         )
+        assertEquals(0, constructions)
         assertThrows(IllegalStateException::class.java) {
             runBlocking { engine.recognize(bitmap()) }
         }
     }
 
     @Test
-    fun `gated factory fails closed when native linkage is unavailable`() {
+    fun `gated factory does not invoke legacy native linkage`() {
         val model = "abc".encodeToByteArray()
         val factory = AssetGatedCardRecognitionEngineFactory(
             verifier = RecognitionAssetVerifier(),
@@ -261,25 +263,26 @@ class TwoStageCardRecognitionLifecycleTest {
 
         assertEquals(
             RecognitionAvailability.Unavailable(
-                com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason.ENGINE_NOT_INSTALLED,
+                com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason.INVALID_ASSETS,
             ),
             engine.availability,
         )
     }
 
     @Test
-    fun `gated factory does not swallow fatal VM errors`() {
+    fun `gated factory rejects legacy bundle before fatal delegate`() {
         val fatal = OutOfMemoryError("native allocation")
+        var constructions = 0
         val factory = AssetGatedCardRecognitionEngineFactory(
             verifier = RecognitionAssetVerifier(),
-            delegate = { _, _, _ -> throw fatal },
+            delegate = { _, _, _ -> constructions++; throw fatal },
         )
 
-        val thrown = assertThrows(OutOfMemoryError::class.java) {
-            factory.create("abc".encodeToByteArray(), BundleFixture.classifier, BundleFixture.bytes())
-        }
-
-        assertTrue(thrown === fatal)
+        val engine = factory.create("abc".encodeToByteArray(), BundleFixture.classifier, BundleFixture.bytes())
+        assertEquals(RecognitionAvailability.Unavailable(
+            com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason.INVALID_ASSETS,
+        ), engine.availability)
+        assertEquals(0, constructions)
     }
 
     private fun engine(
@@ -297,8 +300,7 @@ class TwoStageCardRecognitionLifecycleTest {
         nanoTime = nanoTime,
     )
 
-    private fun metadata() = (RecognitionAssetVerifier().verify(BundleFixture.detector, BundleFixture.classifier, BundleFixture.bytes())
-        as RecognitionAvailability.Available).metadata as RecognitionModelBundleMetadata
+    private fun metadata() = BundleFixture.legacyMetadata()
 
     private fun bitmap() = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
 
