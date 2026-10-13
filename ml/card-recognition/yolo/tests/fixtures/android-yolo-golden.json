@@ -579,6 +579,109 @@
       ]
     },
     {
+      "id": "complete-box-suppresses-weaker-clipped-duplicate",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.1,
+            0.5,
+            0.2,
+            0.25
+          ],
+          "scores": {
+            "4": 0.9
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.09,
+            0.5,
+            0.2,
+            0.25
+          ],
+          "scores": {
+            "4": 0.8
+          }
+        }
+      ],
+      "expected": [
+        {
+          "anchorIndex": 0,
+          "classIndex": 4,
+          "label": "2C",
+          "confidence": 0.9,
+          "normalizedBox": [
+            0.0,
+            0.375,
+            0.2,
+            0.625
+          ]
+        }
+      ]
+    },
+    {
+      "id": "surviving-clipped-duplicate-is-incomplete",
+      "geometry": {
+        "sourceWidth": 640,
+        "sourceHeight": 640,
+        "inputWidth": 640,
+        "inputHeight": 640,
+        "resizedWidth": 640,
+        "resizedHeight": 640,
+        "scale": 1.0,
+        "padX": 0.0,
+        "padY": 0.0,
+        "padRight": 0,
+        "padBottom": 0
+      },
+      "anchors": [
+        {
+          "anchor": 0,
+          "xywh": [
+            0.1,
+            0.5,
+            0.2,
+            0.25
+          ],
+          "scores": {
+            "4": 0.8
+          }
+        },
+        {
+          "anchor": 1,
+          "xywh": [
+            0.09,
+            0.5,
+            0.2,
+            0.25
+          ],
+          "scores": {
+            "4": 0.9
+          }
+        }
+      ],
+      "expected": [],
+      "expectedError": "INCOMPLETE_DETECTIONS",
+      "expectedIncompleteAnchors": [
+        1
+      ]
+    },
+    {
       "id": "portrait-padding-boundary",
       "geometry": {
         "sourceWidth": 320,
@@ -656,6 +759,10 @@
             0.46875
           ]
         }
+      ],
+      "expectedError": "INCOMPLETE_DETECTIONS",
+      "expectedIncompleteAnchors": [
+        1
       ]
     },
     {
@@ -736,6 +843,10 @@
             0.375
           ]
         }
+      ],
+      "expectedError": "INCOMPLETE_DETECTIONS",
+      "expectedIncompleteAnchors": [
+        1
       ]
     },
     {

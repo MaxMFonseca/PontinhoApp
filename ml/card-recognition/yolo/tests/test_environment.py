@@ -1,19 +1,35 @@
 """Contract tests for the self-contained YOLO training environment."""
 
+import os
 from pathlib import Path
 
+import pytest
 import torch
+import torchvision
 import ultralytics
 from ultralytics import YOLO
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
 
-def test_pinned_ultralytics_runtime_exposes_yolo_and_reports_cuda() -> None:
-    """Fail if the reproducible training runtime is replaced or unavailable."""
+def test_pinned_runtime_uses_the_official_cuda_13_builds() -> None:
+    """Fail if a clean sync can silently resolve PyTorch's CPU-only wheels."""
     assert ultralytics.__version__ == "8.4.177"
     assert YOLO is not None
-    assert isinstance(torch.cuda.is_available(), bool)
+    assert torch.__version__ == "2.14.1+cu130"
+    assert torchvision.__version__ == "0.29.1+cu130"
+    assert torch.version.cuda == "13.0"
+
+
+def test_required_training_host_is_the_verified_ada_gpu() -> None:
+    """Fail closed on the training host without burdening portable unit-test runners."""
+    if os.environ.get("PONTINHO_REQUIRE_CUDA_HOST") != "1":
+        pytest.skip("set PONTINHO_REQUIRE_CUDA_HOST=1 on the designated training host")
+
+    assert torch.cuda.is_available()
+    assert torch.cuda.device_count() >= 1
+    assert torch.cuda.get_device_name(0) == "NVIDIA GeForce RTX 4070 Ti SUPER"
+    assert torch.cuda.get_device_capability(0) == (8, 9)
 
 
 def test_isolated_yolo_package_is_importable() -> None:

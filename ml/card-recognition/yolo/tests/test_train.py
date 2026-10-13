@@ -19,6 +19,7 @@ from pontinho_yolo.source import EXPORT_FORMAT, SOURCE_URL, SourceReceipt
 from pontinho_yolo.train import (
     TrainingError,
     TrainingReceipt,
+    finalize_user_stopped_candidate,
     load_train_config,
     train_candidate,
 )
@@ -233,6 +234,73 @@ def test_candidate_uses_explicit_deterministic_yolov8n_settings_only(
         "valid/images" in str(value) or "test/images" in str(value) for value in settings.values()
     )
     assert receipt.selected_checkpoint == "runs/deterministic-run/weights/best.pt"
+
+
+def test_user_approved_stop_is_finalized_only_from_complete_bound_checkpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, paths = _write_training_inputs(tmp_path)
+    config = load_train_config(config_path)
+    run = paths["runs"] / "user-stopped-run"
+    weights = run / "weights"
+    weights.mkdir(parents=True)
+    (weights / "best.pt").write_bytes(b"best epoch 2")
+    (weights / "last.pt").write_bytes(b"last epoch 3")
+    (run / "results.csv").write_text(
+        "epoch,metrics/precision(B),metrics/recall(B),metrics/mAP50(B),metrics/mAP50-95(B)\n"
+        "1,0.90,0.91,0.92,0.50\n"
+        "2,0.95,0.96,0.97,0.80\n"
+        "3,0.94,0.95,0.96,0.79\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(train_module, "_capture_environment", _gpu_environment)
+    monkeypatch.setattr(
+        train_module,
+        "_checkpoint_state",
+        lambda path: (1, 0.80) if path.name == "best.pt" else (2, 0.80),
+    )
+    monkeypatch.setattr(train_module, "YoloTrainer", _FakeTrainer)
+
+    receipt = finalize_user_stopped_candidate(config, "user-stopped-run")
+
+    assert receipt.selected_checkpoint_sha256 == _sha256(weights / "best.pt")
+    assert json.loads(paths["receipt"].read_text(encoding="utf-8"))["run_id"] == (
+        "user-stopped-run"
+    )
+    local = run / "training-receipt.json"
+    assert TrainingReceipt.from_dict(json.loads(local.read_text(encoding="utf-8"))) == receipt
+    stop = json.loads(
+        (paths["receipt"].parent / "training-stop-attestation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stop["reason"] == "user-approved-first-debug-candidate"
+    assert stop["completedEpochs"] == 3
+    assert stop["bestEpoch"] == 2
+    assert stop["bestMap50_95"] == 0.80
+    assert stop["bestCheckpointSha256"] == _sha256(weights / "best.pt")
+    assert stop["lastCheckpointSha256"] == _sha256(weights / "last.pt")
+
+
+def test_user_stop_finalization_rejects_checkpoint_epoch_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, paths = _write_training_inputs(tmp_path)
+    run = paths["runs"] / "mismatched-run"
+    weights = run / "weights"
+    weights.mkdir(parents=True)
+    (weights / "best.pt").write_bytes(b"best")
+    (weights / "last.pt").write_bytes(b"last")
+    (run / "results.csv").write_text(
+        "epoch,metrics/precision(B),metrics/recall(B),metrics/mAP50(B),metrics/mAP50-95(B)\n"
+        "1,0.9,0.9,0.9,0.8\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(train_module, "_capture_environment", _gpu_environment)
+    monkeypatch.setattr(train_module, "_checkpoint_state", lambda _path: (7, 0.8))
+
+    with pytest.raises(TrainingError, match="checkpoint epoch"):
+        finalize_user_stopped_candidate(load_train_config(config_path), "mismatched-run")
 
 
 def test_receipt_binds_config_dataset_weights_environment_and_lock(
@@ -493,6 +561,41 @@ def test_production_adapter_derives_architecture_from_loaded_checkpoint_metadata
             )
 
     ultralytics.YOLO = MetadataYOLO  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ultralytics", ultralytics)
+
+    trainer = train_module.YoloTrainer("yolov8n.pt", staged_weights)
+
+    assert trainer.architecture_identity == expected
+
+
+@pytest.mark.parametrize(
+    ("scale", "expected"),
+    [
+        ("n", "ultralytics:yolov8:detect:n"),
+        ("s", "ultralytics:yolov8:detect:s"),
+    ],
+)
+def test_production_adapter_accepts_official_checkpoint_metadata_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scale: str,
+    expected: str,
+) -> None:
+    """Ignoring model.yaml_file rejects official weights before architecture attestation."""
+    staged_weights = tmp_path / "yolov8n.pt"
+    staged_weights.write_bytes(b"official checkpoint bytes inspected by fake Ultralytics")
+    ultralytics = types.ModuleType("ultralytics")
+
+    class OfficialMetadataYOLO:
+        def __init__(self, path: str) -> None:
+            assert path == str(staged_weights)
+            self.task = "detect"
+            self.model = types.SimpleNamespace(
+                yaml={"nc": 80, "depth_multiple": 0.33, "width_multiple": 0.25},
+                yaml_file=f"yolov8{scale}.yaml",
+            )
+
+    ultralytics.YOLO = OfficialMetadataYOLO  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ultralytics", ultralytics)
 
     trainer = train_module.YoloTrainer("yolov8n.pt", staged_weights)

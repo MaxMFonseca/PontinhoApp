@@ -1,6 +1,11 @@
-# Pontinho two-stage card recognition model card
+# Pontinho card recognition model status
 
-**Release status: NOT_APPROVED / BLOCKED_TWO_STAGE_INPUTS.**
+**Release status: DEBUG_ONLY / NOT_APPROVED.**
+
+The two-stage design documented below is superseded for active debug development
+by the measured single-stage candidate in
+[`yolo/MODEL_CARD.md`](yolo/MODEL_CARD.md). It remains here as historical design
+evidence only and is not packaged or used as fallback.
 
 No reviewed two-stage candidate, selected thresholds, final quality metrics or
 Android latency measurements exist. No two-stage Android bundle has been

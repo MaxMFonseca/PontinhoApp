@@ -1,0 +1,56 @@
+{
+  "candidateSha256": "01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277",
+  "detections": [
+    {
+      "bounds": [
+        0.3935133218765259,
+        0.44780828058719635,
+        0.4580594301223755,
+        0.47972117364406586
+      ],
+      "confidence": 0.7890226244926453,
+      "label": "6H"
+    },
+    {
+      "bounds": [
+        0.395729199051857,
+        0.5328820049762726,
+        0.4634237140417099,
+        0.5740229785442352
+      ],
+      "confidence": 0.8181861639022827,
+      "label": "7H"
+    },
+    {
+      "bounds": [
+        0.4157669097185135,
+        0.5917357504367828,
+        0.4797136038541794,
+        0.6356037557125092
+      ],
+      "confidence": 0.8524124026298523,
+      "label": "4S"
+    },
+    {
+      "bounds": [
+        0.6194995939731598,
+        0.28547295928001404,
+        0.6849711835384369,
+        0.31773337721824646
+      ],
+      "confidence": 0.7843398451805115,
+      "label": "6H"
+    }
+  ],
+  "evidenceScope": "public-domain validation image; runtime parity only",
+  "imageFile": "task10-playing-cards-validation.jpg",
+  "license": "Public Domain",
+  "normalizedBoxTolerance": 0.001,
+  "schemaVersion": 1,
+  "sourceArchiveMember": "valid/images/901904560_jpg.rf.7cf3f7099059520a312a03b3a8e32674.jpg",
+  "sourceImageSha256": "8a04c771863a99daa32d229b3e07298a2d0d1549daa1dcf4e3a48bd0d679ab37",
+  "thresholds": {
+    "confidence": 0.65,
+    "iou": 0.3
+  }
+}

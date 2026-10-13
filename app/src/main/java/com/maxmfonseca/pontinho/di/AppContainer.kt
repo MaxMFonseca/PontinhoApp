@@ -29,8 +29,7 @@ interface AppContainer {
 
 class DefaultAppContainer internal constructor(
     applicationContext: Context,
-    // Stage 9 switches the asset reader from its legacy Triple to the verified Pair.
-    recognitionEngineFactory: CardRecognitionEngineFactory? = SingleStageCardRecognitionEngineFactory(),
+    recognitionEngineFactory: CardRecognitionEngineFactory? = singleStageRecognitionEngineFactory(),
 ) : AppContainer {
     private val database = Room.databaseBuilder(
         applicationContext,
@@ -49,20 +48,23 @@ class DefaultAppContainer internal constructor(
 
     override val cardRecognitionEngineProvider: CardRecognitionEngineProvider =
         VerifiedCardRecognitionEngineProvider(
-            readAssets = { Triple(
-                applicationContext.readOptionalAsset(DETECTOR_ASSET),
-                applicationContext.readOptionalAsset(CLASSIFIER_ASSET),
-                applicationContext.readOptionalAsset(RELEASE_ASSET),
-            ) },
+            readAssets = {
+                readSingleStageRecognitionAssets(applicationContext::readOptionalAsset)
+            },
             factory = recognitionEngineFactory,
         )
-
-    private companion object {
-        const val DETECTOR_ASSET = "card_detector.tflite"
-        const val CLASSIFIER_ASSET = "card_classifier.tflite"
-        const val RELEASE_ASSET = "card_recognition.release.json"
-    }
 }
+
+internal fun singleStageRecognitionEngineFactory(): CardRecognitionEngineFactory =
+    SingleStageCardRecognitionEngineFactory()
+
+internal fun readSingleStageRecognitionAssets(
+    readAsset: (String) -> ByteArray?,
+): Pair<ByteArray?, ByteArray?> =
+    readAsset(DETECTOR_ASSET) to readAsset(RELEASE_ASSET)
+
+private const val DETECTOR_ASSET = "card_detector.tflite"
+private const val RELEASE_ASSET = "card_recognition.release.json"
 
 private fun Context.readOptionalAsset(name: String): ByteArray? = try {
     assets.open(name).use { it.readBytes() }

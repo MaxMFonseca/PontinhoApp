@@ -11,6 +11,7 @@ import pytest
 from pontinho_yolo.labels import CARD_LABELS
 from pontinho_yolo.postprocess import (
     DecodeError,
+    IncompleteDetections,
     LetterboxGeometry,
     TooManyDetections,
     decode_yolo,
@@ -145,17 +146,73 @@ def test_decode_uses_deterministic_priority_then_returns_spatial_order() -> None
 
 
 def test_decode_rejects_boxes_touching_letterbox_padding() -> None:
-    """Clipping a partial box to source pixels would turn padding into a plausible card."""
+    """A partial candidate must invalidate the capture without losing complete detections."""
     geometry = LetterboxGeometry.for_source(640, 320)
     output = _output(
         (0, 100 / 640, 100 / 640, 60 / 640, 60 / 640, 0, 0.9),
         (1, 100 / 640, 200 / 640, 60 / 640, 60 / 640, 1, 0.8),
     )
 
-    detections = decode_yolo(output, geometry, confidence=0.1, iou=0.5, max_cards=10)
+    with pytest.raises(IncompleteDetections) as caught:
+        decode_yolo(output, geometry, confidence=0.1, iou=0.5, max_cards=10)
 
-    assert [(item.class_index, item.anchor_index) for item in detections] == [(1, 1)]
-    assert detections[0].box.as_tuple() == pytest.approx((70.0, 10.0, 130.0, 70.0))
+    assert caught.value.anchor_indexes == (0,)
+    assert [(item.class_index, item.anchor_index) for item in caught.value.detections] == [(1, 1)]
+    assert caught.value.detections[0].box.as_tuple() == pytest.approx((70.0, 10.0, 130.0, 70.0))
+
+
+def test_nms_suppresses_weaker_clipped_duplicate_before_incomplete_classification() -> None:
+    """A duplicate suppressed in model space must not invalidate an otherwise complete capture."""
+    output = _output(
+        (0, 64 / 640, 320 / 640, 128 / 640, 160 / 640, 4, 0.90),
+        (1, 57.6 / 640, 320 / 640, 128 / 640, 160 / 640, 4, 0.80),
+    )
+
+    detections = decode_yolo(
+        output,
+        LetterboxGeometry.for_source(640, 640),
+        confidence=0.1,
+        iou=0.5,
+        max_cards=10,
+    )
+
+    assert [(item.class_index, item.anchor_index) for item in detections] == [(4, 0)]
+    assert detections[0].box.as_tuple() == pytest.approx((0.0, 240.0, 128.0, 400.0))
+
+
+def test_surviving_clipped_candidate_invalidates_capture_after_nms() -> None:
+    """The stronger clipped duplicate survives NMS and therefore makes the capture incomplete."""
+    output = _output(
+        (0, 64 / 640, 320 / 640, 128 / 640, 160 / 640, 4, 0.80),
+        (1, 57.6 / 640, 320 / 640, 128 / 640, 160 / 640, 4, 0.90),
+    )
+
+    with pytest.raises(IncompleteDetections) as caught:
+        decode_yolo(
+            output,
+            LetterboxGeometry.for_source(640, 640),
+            confidence=0.1,
+            iou=0.5,
+            max_cards=10,
+        )
+
+    assert caught.value.anchor_indexes == (1,)
+    assert caught.value.detections == ()
+
+
+def test_decode_ignores_low_confidence_edge_noise() -> None:
+    """Noise below the selected threshold must remain a true zero-card result."""
+    output = _output((0, 0.05, 0.5, 0.2, 0.3, 0, 0.09))
+
+    detections = decode_yolo(
+        output,
+        LetterboxGeometry.for_source(640, 640),
+        confidence=0.1,
+        iou=0.5,
+        max_cards=10,
+    )
+
+    assert detections == ()
 
 
 def test_decode_clamps_tolerated_boundary_roundoff_to_source_bounds() -> None:
@@ -304,6 +361,17 @@ def test_android_golden_fixture_matches_python_decoder_contract() -> None:
                 )
             actual = caught.value.detections
             assert caught.value.count == case["expectedCount"]
+        elif case.get("expectedError") == "INCOMPLETE_DETECTIONS":
+            with pytest.raises(IncompleteDetections) as caught:
+                decode_yolo(
+                    output,
+                    geometry,
+                    case_settings["confidence"],
+                    case_settings["iou"],
+                    case_settings["maxCards"],
+                )
+            actual = caught.value.detections
+            assert list(caught.value.anchor_indexes) == case["expectedIncompleteAnchors"]
         else:
             actual = decode_yolo(
                 output,

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+import yaml
+
 from pontinho_yolo.evaluate import (
     EvaluationError,
     EvaluationReport,
@@ -110,21 +112,51 @@ class UltralyticsExporter:
             raise ExportError("INT8 calibration dataset config must be a regular file")
 
         from ultralytics import YOLO
+        from ultralytics.utils.export.tensorflow import tf_wrapper
 
         settings: dict[str, object] = {
-            "format": "tflite",
+            "format": "saved_model",
             "imgsz": 640,
             "batch": 1,
             "nms": False,
-            "int8": quantization == "int8",
+            "quantize": 8 if quantization == "int8" else None,
         }
+        calibration_cache: Path | None = None
         if quantization == "int8":
-            settings.update(data=str(self.dataset_config), split="train")
-        generated = Path(str(YOLO(str(checkpoint)).export(**settings)))
-        if generated.is_symlink() or not generated.is_file():
-            raise ExportError("Ultralytics did not return a regular TFLite file")
+            calibration_config = destination.with_suffix(".calibration.yaml")
+            calibration_cache = _write_training_calibration_config(
+                self.dataset_config, calibration_config
+            )
+            if calibration_cache.exists() or calibration_cache.is_symlink():
+                raise ExportError("calibration split contains an unexpected labels cache")
+            settings.update(data=str(calibration_config), fraction=0.02)
+        wrapper = YOLO(str(checkpoint))
+        tf_wrapper(wrapper.model)
+        try:
+            generated = Path(str(wrapper.export(**settings)))
+        finally:
+            if calibration_cache is not None and (
+                calibration_cache.exists() or calibration_cache.is_symlink()
+            ):
+                if calibration_cache.is_symlink() or not calibration_cache.is_file():
+                    raise ExportError("generated calibration cache is not a regular file")
+                calibration_cache.unlink()
+        if generated.is_symlink() or not generated.is_dir():
+            raise ExportError("Ultralytics did not return a regular SavedModel directory")
+        suffix = "_float32.tflite" if quantization == "fp32" else "_integer_quant.tflite"
+        candidates = tuple(
+            path
+            for path in generated.rglob(f"*{suffix}")
+            if path.is_file()
+            and not path.is_symlink()
+            and not path.name.endswith("_full_integer_quant.tflite")
+        )
+        if len(candidates) != 1:
+            raise ExportError(
+                f"Ultralytics produced {len(candidates)} matching {quantization} TFLite files"
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(generated, destination)
+        shutil.copyfile(candidates[0], destination)
         return destination
 
     def inspect(self, model: Path) -> TensorContract:
@@ -258,6 +290,7 @@ def export_candidate(
     dataset_audit_sha256: str,
     notices: Sequence[Path],
     status: str,
+    quantizations: tuple[str, ...] = ("fp32", "int8"),
 ) -> CandidateBundle:
     """Select on validation, evaluate the winner once on test, and publish atomically."""
     checkpoint = Path(checkpoint)
@@ -269,6 +302,8 @@ def export_candidate(
         raise ExportError("refusing to replace an existing candidate bundle")
     if status != "DEBUG_ONLY":
         raise ExportError("Stage 5 candidate status must be DEBUG_ONLY")
+    if quantizations not in {("fp32",), ("fp32", "int8")}:
+        raise ExportError("candidate export must evaluate fp32, optionally followed by int8")
     _validate_sha256(dataset_receipt_sha256, "dataset receipt SHA-256")
     _validate_sha256(dataset_audit_sha256, "dataset audit SHA-256")
     if selection.validation_report.partition != "validation":
@@ -288,7 +323,7 @@ def export_candidate(
         models: dict[str, Path] = {}
         reports: dict[str, EvaluationReport] = {}
         contracts: dict[str, TensorContract] = {}
-        for quantization in ("fp32", "int8"):
+        for quantization in quantizations:
             model = workspace / f"{quantization}.tflite"
             returned = Path(exporter.export(checkpoint, model, quantization=quantization))
             if returned != model or model.is_symlink() or not model.is_file():
@@ -319,14 +354,24 @@ def export_candidate(
             contracts[quantization] = contract
 
         fp32 = reports["fp32"]
-        int8 = reports["int8"]
-        quantization = (
-            "int8"
-            if int8.exact_detection_accuracy + 0.01 >= fp32.exact_detection_accuracy
-            and int8.exact_multiset_accuracy + 0.01 >= fp32.exact_multiset_accuracy
-            and int8.exact_total_accuracy + 0.01 >= fp32.exact_total_accuracy
-            else "fp32"
-        )
+        reference = selection.validation_report
+        if (
+            fp32.exact_detection_accuracy + 0.01 < reference.exact_detection_accuracy
+            or fp32.exact_multiset_accuracy + 0.01 < reference.exact_multiset_accuracy
+            or fp32.exact_total_accuracy + 0.01 < reference.exact_total_accuracy
+            or fp32.abstention_rate > reference.abstention_rate + 0.01
+        ):
+            raise ExportError("FP32 export regressed beyond the one-point parity budget")
+        quantization = "fp32"
+        if "int8" in reports:
+            int8 = reports["int8"]
+            if (
+                int8.exact_detection_accuracy + 0.01 >= fp32.exact_detection_accuracy
+                and int8.exact_multiset_accuracy + 0.01 >= fp32.exact_multiset_accuracy
+                and int8.exact_total_accuracy + 0.01 >= fp32.exact_total_accuracy
+                and int8.abstention_rate <= fp32.abstention_rate + 0.01
+            ):
+                quantization = "int8"
         selected = models[quantization]
         selected_hash = _hash_file(selected)
         if _hash_file(checkpoint) != checkpoint_sha256:
@@ -413,6 +458,43 @@ def _validate_validation_report(
         raise ExportError("candidate validation report used different thresholds")
     if report.candidate_sha256 != candidate_sha256:
         raise ExportError("candidate validation report is not bound to the candidate bytes")
+
+
+def _write_training_calibration_config(source: Path, destination: Path) -> Path:
+    """Derive a test-free config whose validation slot is the audited train split."""
+    source = Path(source)
+    destination = Path(destination)
+    try:
+        payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        raise ExportError(f"cannot read calibration dataset config: {error}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("train"), str):
+        raise ExportError("calibration dataset config must define a train split")
+    root_value = payload.get("path")
+    if root_value is None:
+        root = source.parent
+    elif isinstance(root_value, str):
+        root = Path(root_value)
+        if not root.is_absolute():
+            root = source.parent / root
+    else:
+        raise ExportError("calibration dataset path must be a string")
+    train = Path(payload["train"])
+    if not train.is_absolute():
+        train = root / train
+    train = train.resolve()
+    if train.name != "images":
+        raise ExportError("calibration train split must resolve to an images directory")
+    derived = {key: value for key, value in payload.items() if key not in {"path", "test"}}
+    train_value = train.as_posix()
+    derived["train"] = train_value
+    derived["val"] = train_value
+    destination.write_text(
+        yaml.safe_dump(derived, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return train.parent / "labels.cache"
 
 
 def _validated_notices(notices: Sequence[Path]) -> dict[str, Path]:
@@ -582,7 +664,14 @@ def _tensor_quantization(
         return None
     scales = quantization.ScaleAsNumpy()
     zero_points = quantization.ZeroPointAsNumpy()
-    if scales is None or zero_points is None or len(scales) == 0 or len(zero_points) == 0:
+    if (
+        scales is None
+        or zero_points is None
+        or isinstance(scales, int)
+        or isinstance(zero_points, int)
+        or len(scales) == 0
+        or len(zero_points) == 0
+    ):
         return None
     if len(scales) != len(zero_points):
         raise ExportError("tensor quantization scales and zero points differ")

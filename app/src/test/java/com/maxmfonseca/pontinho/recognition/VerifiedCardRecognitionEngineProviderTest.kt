@@ -14,6 +14,23 @@ import org.robolectric.RobolectricTestRunner
 class VerifiedCardRecognitionEngineProviderTest {
     private fun assets(): Pair<ByteArray?, ByteArray?> = YoloBundleFixture.model.copyOf() to YoloBundleFixture.bytes()
 
+    @Test fun `asset reader contract is the exact nullable model and release pair`() = runTest {
+        val reader: SingleStageRecognitionAssetReader = { null to null }
+        val provider = VerifiedCardRecognitionEngineProvider(
+            readAssets = reader,
+            factory = null,
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        advanceUntilIdle()
+
+        assertEquals(
+            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS),
+            provider.availability.value,
+        )
+        provider.close()
+    }
+
     @Test fun `production dispatcher verifies assets and constructs one detector off main`() = runBlocking {
         val main = android.os.Looper.getMainLooper().thread
         val provider = VerifiedCardRecognitionEngineProvider(
@@ -80,12 +97,11 @@ class VerifiedCardRecognitionEngineProviderTest {
         bitmap.recycle()
     }
 
-    @Test fun `absent malformed unapproved and legacy triples fail closed without construction`() = runTest {
-        val cases: List<Any?> = listOf(
-            null, Pair(null, null), Pair(YoloBundleFixture.model, null), Pair(null, YoloBundleFixture.bytes()),
+    @Test fun `missing malformed and unapproved typed pairs fail closed without construction`() = runTest {
+        val cases: List<Pair<ByteArray?, ByteArray?>> = listOf(
+            Pair(null, null), Pair(YoloBundleFixture.model, null), Pair(null, YoloBundleFixture.bytes()),
             Pair(YoloBundleFixture.model, "bad".toByteArray()),
             Pair(YoloBundleFixture.model, YoloBundleFixture.json().put("productionApproved", true).toString().encodeToByteArray()),
-            Triple(YoloBundleFixture.model, "classifier".encodeToByteArray(), YoloBundleFixture.bytes()),
         )
         val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         cases.forEach { source ->
@@ -129,6 +145,27 @@ class VerifiedCardRecognitionEngineProviderTest {
         advanceUntilIdle()
         assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED), provider.availability.value)
         provider.close()
+    }
+
+    @Test fun `factory failures fail closed and expose no engine`() = runTest {
+        val provider = VerifiedCardRecognitionEngineProvider(
+            readAssets = { assets() },
+            factory = { _, _ -> error("private factory detail") },
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        advanceUntilIdle()
+        val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+
+        val attempt = async { runCatching { provider.get().recognize(bitmap) } }
+        advanceUntilIdle()
+
+        assertTrue(attempt.await().exceptionOrNull() is CardRecognitionException.InferenceFailed)
+        assertEquals(
+            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
+            provider.availability.value,
+        )
+        provider.close()
+        bitmap.recycle()
     }
 
     private class Engine(metadata: YoloRecognitionMetadata) : CardRecognitionEngine {

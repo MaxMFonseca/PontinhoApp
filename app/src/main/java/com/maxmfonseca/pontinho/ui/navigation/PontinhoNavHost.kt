@@ -20,7 +20,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.navigation.NavBackStackEntry
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
-import com.maxmfonseca.pontinho.domain.recognition.RecognitionModelBundleMetadata
+import com.maxmfonseca.pontinho.domain.recognition.YoloRecognitionMetadata
 import com.maxmfonseca.pontinho.ui.about.CameraEducationScreen
 import com.maxmfonseca.pontinho.ui.about.ScannerEntryRoute
 import com.maxmfonseca.pontinho.ui.about.scannerEntryRoute
@@ -362,8 +362,8 @@ private fun ScannerDestination(container: AppContainer, nav: NavHostController, 
         }
     }
     val availability by container.cardRecognitionEngineProvider.availability.collectAsStateWithLifecycle()
-    val metadata = (availability as? RecognitionAvailability.Available)?.metadata as? RecognitionModelBundleMetadata
-    ScannerScreen(scanner, availability is RecognitionAvailability.Available, recognitionExperimental = metadata?.experimental == true)
+    val metadata = (availability as? RecognitionAvailability.Available)?.metadata as? YoloRecognitionMetadata
+    ScannerScreen(scanner, availability is RecognitionAvailability.Available, recognitionExperimental = metadata?.debugOnly == true)
 }
 
 private fun settingsFactory(container: AppContainer, context: Context) = viewModelFactory {

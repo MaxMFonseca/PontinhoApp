@@ -1,0 +1,648 @@
+{
+  "evidenceScope": "synthetic/public-dataset experimental evidence",
+  "gates": {
+    "physicalDeckGateExecuted": false,
+    "productionGatePassed": false,
+    "publicDatasetMetricGates": {
+      "exactMultisetAtLeast0.90": true,
+      "exactTotalAtLeast0.95": true,
+      "falsePositiveShareAtMost0.01": true,
+      "recallAtLeast0.97": true
+    },
+    "publicDatasetMetricGatesPassed": true
+  },
+  "productionApproved": false,
+  "report": {
+    "abstentionCount": 0,
+    "abstentionRate": 0.0,
+    "abstentionReasons": {},
+    "buckets": {
+      "1": {
+        "cardCount": 1,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "10": {
+        "cardCount": 10,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "2": {
+        "cardCount": 2,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "3": {
+        "cardCount": 3,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "4": {
+        "cardCount": 4,
+        "exactDetectionAccuracy": 1.0,
+        "exactMultisetAccuracy": 1.0,
+        "exactTotalAccuracy": 1.0,
+        "sceneCount": 1010,
+        "supported": true
+      },
+      "5": {
+        "cardCount": 5,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "6": {
+        "cardCount": 6,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "7": {
+        "cardCount": 7,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "8": {
+        "cardCount": 8,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      },
+      "9": {
+        "cardCount": 9,
+        "exactDetectionAccuracy": null,
+        "exactMultisetAccuracy": null,
+        "exactTotalAccuracy": null,
+        "sceneCount": 0,
+        "supported": false
+      }
+    },
+    "candidateSha256": "01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277",
+    "confusion": {
+      "10C": {
+        "10C": 77
+      },
+      "10D": {
+        "10D": 74
+      },
+      "10H": {
+        "10H": 54
+      },
+      "10S": {
+        "10S": 86
+      },
+      "2C": {
+        "2C": 86
+      },
+      "2D": {
+        "2D": 68
+      },
+      "2H": {
+        "2H": 85
+      },
+      "2S": {
+        "2S": 84
+      },
+      "3C": {
+        "3C": 73
+      },
+      "3D": {
+        "3D": 75
+      },
+      "3H": {
+        "3H": 88
+      },
+      "3S": {
+        "3S": 93
+      },
+      "4C": {
+        "4C": 67
+      },
+      "4D": {
+        "4D": 102
+      },
+      "4H": {
+        "4H": 86
+      },
+      "4S": {
+        "4S": 89
+      },
+      "5C": {
+        "5C": 94
+      },
+      "5D": {
+        "5D": 68
+      },
+      "5H": {
+        "5H": 65
+      },
+      "5S": {
+        "5S": 79
+      },
+      "6C": {
+        "6C": 68
+      },
+      "6D": {
+        "6D": 69
+      },
+      "6H": {
+        "6H": 83
+      },
+      "6S": {
+        "6S": 71
+      },
+      "7C": {
+        "7C": 53
+      },
+      "7D": {
+        "7D": 86
+      },
+      "7H": {
+        "7H": 75
+      },
+      "7S": {
+        "7S": 90
+      },
+      "8C": {
+        "8C": 65
+      },
+      "8D": {
+        "8D": 101
+      },
+      "8H": {
+        "8H": 86
+      },
+      "8S": {
+        "8S": 82
+      },
+      "9C": {
+        "9C": 61
+      },
+      "9D": {
+        "9D": 65
+      },
+      "9H": {
+        "9H": 77
+      },
+      "9S": {
+        "9S": 82
+      },
+      "AC": {
+        "AC": 69
+      },
+      "AD": {
+        "AD": 85
+      },
+      "AH": {
+        "AH": 68
+      },
+      "AS": {
+        "AS": 90
+      },
+      "JC": {
+        "JC": 69
+      },
+      "JD": {
+        "JD": 79
+      },
+      "JH": {
+        "JH": 61
+      },
+      "JS": {
+        "JS": 91
+      },
+      "KC": {
+        "KC": 68
+      },
+      "KD": {
+        "KD": 71
+      },
+      "KH": {
+        "KH": 81
+      },
+      "KS": {
+        "KS": 65
+      },
+      "QC": {
+        "QC": 75
+      },
+      "QD": {
+        "QD": 100
+      },
+      "QH": {
+        "QH": 81
+      },
+      "QS": {
+        "QS": 80
+      }
+    },
+    "datasetSha256": "10792068ae7e1e20c89926f232a2b00e5a443bf1179e7a18e49cb6032d06bdaf",
+    "exactCountAccuracy": 1.0,
+    "exactDetectionAccuracy": 1.0,
+    "exactMultisetAccuracy": 1.0,
+    "exactTotalAccuracy": 1.0,
+    "falseNegativeCount": 0,
+    "falsePositiveCount": 0,
+    "falsePositiveShare": 0.0,
+    "localizationIou": 0.5,
+    "partition": "test",
+    "perClass": {
+      "10C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 77
+      },
+      "10D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 74
+      },
+      "10H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 54
+      },
+      "10S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 86
+      },
+      "2C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 86
+      },
+      "2D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 68
+      },
+      "2H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 85
+      },
+      "2S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 84
+      },
+      "3C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 73
+      },
+      "3D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 75
+      },
+      "3H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 88
+      },
+      "3S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 93
+      },
+      "4C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 67
+      },
+      "4D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 102
+      },
+      "4H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 86
+      },
+      "4S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 89
+      },
+      "5C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 94
+      },
+      "5D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 68
+      },
+      "5H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 65
+      },
+      "5S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 79
+      },
+      "6C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 68
+      },
+      "6D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 69
+      },
+      "6H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 83
+      },
+      "6S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 71
+      },
+      "7C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 53
+      },
+      "7D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 86
+      },
+      "7H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 75
+      },
+      "7S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 90
+      },
+      "8C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 65
+      },
+      "8D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 101
+      },
+      "8H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 86
+      },
+      "8S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 82
+      },
+      "9C": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 61
+      },
+      "9D": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 65
+      },
+      "9H": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 77
+      },
+      "9S": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 82
+      },
+      "AC": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 69
+      },
+      "AD": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 85
+      },
+      "AH": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 68
+      },
+      "AS": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 90
+      },
+      "JC": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 69
+      },
+      "JD": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 79
+      },
+      "JH": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 61
+      },
+      "JS": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 91
+      },
+      "KC": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 68
+      },
+      "KD": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 71
+      },
+      "KH": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 81
+      },
+      "KS": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 65
+      },
+      "QC": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 75
+      },
+      "QD": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 100
+      },
+      "QH": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 81
+      },
+      "QS": {
+        "falseNegativeCount": 0,
+        "falsePositiveCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositiveCount": 80
+      }
+    },
+    "precision": 1.0,
+    "predictedCardCount": 4040,
+    "recall": 1.0,
+    "sceneCount": 1010,
+    "thresholds": {
+      "confidence": 0.65,
+      "iou": 0.3
+    },
+    "truePositiveCount": 4040,
+    "truthCardCount": 4040
+  },
+  "schemaVersion": 1
+}

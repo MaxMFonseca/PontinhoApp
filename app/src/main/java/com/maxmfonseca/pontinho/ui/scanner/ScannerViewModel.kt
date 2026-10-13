@@ -5,11 +5,13 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import com.maxmfonseca.pontinho.BuildConfig
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.rules.CardValueCalculator
 import com.maxmfonseca.pontinho.recognition.RecognitionImageException
+import com.maxmfonseca.pontinho.recognition.CardRecognitionException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +33,7 @@ class ScannerViewModel(
     private val repository: MatchRepository,
     private val loadImage: suspend (Uri) -> Bitmap,
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val diagnosticsEnabled: Boolean = BuildConfig.DEBUG,
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val snapshot = savedStateHandle.get<Bundle>(SNAPSHOT)
@@ -94,8 +97,10 @@ class ScannerViewModel(
                 ensureActive()
                 if (attempt != generation || closed) return@launch
                 // Enforce capture limits at this boundary too, including alternate engines.
-                if (result.candidates.isEmpty()) throw CardRecognitionFailure.NoCards()
-                if (result.candidates.size > 10) throw CardRecognitionFailure.TooManyCards(result.candidates.size)
+                if (result.candidates.isEmpty()) throw CardRecognitionFailure.NoCards(result.diagnostics)
+                if (result.candidates.size > 10) {
+                    throw CardRecognitionFailure.TooManyCards(result.candidates.size, result.diagnostics)
+                }
                 val cards = result.candidates.map {
                     ReviewCard(UUID.randomUUID().toString(), it.card, it.confidence, it.bounds,
                         it.warnings.toSet(), correctedByUser = false)
@@ -103,6 +108,7 @@ class ScannerViewModel(
                 transition(ScannerUiState(
                     phase = ScannerPhase.Review, source = source, cards = cards,
                     total = total(cards), modelVersion = result.modelVersion,
+                    diagnostics = visibleDiagnostics(result.diagnostics),
                 ))
             } catch (cancelled: CancellationException) {
                 if (attempt == generation && !closed) transition(ScannerUiState())
@@ -115,8 +121,19 @@ class ScannerViewModel(
                         is CardRecognitionFailure.TooManyCards -> ScannerMessage.TooManyCards
                         is CardRecognitionFailure.IncompleteCards -> ScannerMessage.IncompleteCards
                         is RecognitionImageException.SizeLimitExceeded -> ScannerMessage.ImageTooLarge
-                        else -> ScannerMessage.RecognitionFailed
+                        else -> if (engine.availability is RecognitionAvailability.Unavailable) {
+                            ScannerMessage.Unavailable
+                        } else {
+                            ScannerMessage.RecognitionFailed
+                        }
                     },
+                    diagnostics = visibleDiagnostics(
+                        when (failure) {
+                            is CardRecognitionFailure -> failure.diagnostics
+                            is CardRecognitionException.InferenceFailed -> failure.diagnostics
+                            else -> null
+                        },
+                    ),
                 ))
             } finally {
                 bitmap?.let { if (!it.isRecycled) it.recycle() }
@@ -136,6 +153,9 @@ class ScannerViewModel(
         ))
         return false
     }
+
+    private fun visibleDiagnostics(diagnostics: RecognitionDiagnostics?): RecognitionDiagnostics? =
+        diagnostics.takeIf { diagnosticsEnabled }
 
     fun addCard(card: Card.Suited) = edit { cards ->
         cards + ReviewCard(UUID.randomUUID().toString(), card, null, null, emptySet(), correctedByUser = true)

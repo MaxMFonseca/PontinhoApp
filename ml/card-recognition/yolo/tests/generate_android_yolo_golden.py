@@ -283,6 +283,26 @@ def build_fixture() -> dict:
                 ],
             },
             {
+                "id": "complete-box-suppresses-weaker-clipped-duplicate",
+                "geometry": geometry(640, 640),
+                "anchors": [
+                    anchor(0, [0.1, 0.5, 0.2, 0.25], 4, 0.9),
+                    anchor(1, [0.09, 0.5, 0.2, 0.25], 4, 0.8),
+                ],
+                "expected": [detection(0, 4, 0.9, [0.0, 0.375, 0.2, 0.625])],
+            },
+            {
+                "id": "surviving-clipped-duplicate-is-incomplete",
+                "geometry": geometry(640, 640),
+                "anchors": [
+                    anchor(0, [0.1, 0.5, 0.2, 0.25], 4, 0.8),
+                    anchor(1, [0.09, 0.5, 0.2, 0.25], 4, 0.9),
+                ],
+                "expected": [],
+                "expectedError": "INCOMPLETE_DETECTIONS",
+                "expectedIncompleteAnchors": [1],
+            },
+            {
                 "id": "portrait-padding-boundary",
                 "geometry": geometry(320, 640),
                 "anchors": [
@@ -294,6 +314,8 @@ def build_fixture() -> dict:
                     detection(0, 0, 0.91, [0.0, 0.0, 1.0, 1.0]),
                     detection(2, 2, 0.88, [0.125, 0.15625, 0.375, 0.46875]),
                 ],
+                "expectedError": "INCOMPLETE_DETECTIONS",
+                "expectedIncompleteAnchors": [1],
             },
             {
                 "id": "landscape-padding-boundary",
@@ -307,6 +329,8 @@ def build_fixture() -> dict:
                     detection(0, 36, 0.93, [0.0, 0.0, 1.0, 1.0]),
                     detection(2, 38, 0.86, [0.15625, 0.125, 0.46875, 0.375]),
                 ],
+                "expectedError": "INCOMPLETE_DETECTIONS",
+                "expectedIncompleteAnchors": [1],
             },
             {
                 "id": "duplicates-and-adjacent-cards",

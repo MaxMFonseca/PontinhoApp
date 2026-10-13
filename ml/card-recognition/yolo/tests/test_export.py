@@ -25,6 +25,7 @@ from pontinho_yolo.export import (
     ExportError,
     TensorContract,
     UltralyticsExporter,
+    _tensor_quantization,
     export_candidate,
     inspect_contract,
     inspect_tflite,
@@ -181,6 +182,7 @@ def _report(
     exact_multiset: float,
     exact_total: float,
     exact_detection: float | None = None,
+    abstention_rate: float = 0.0,
     candidate_sha256: str | None = None,
 ) -> EvaluationReport:
     return EvaluationReport(
@@ -203,7 +205,11 @@ def _report(
         exact_count_accuracy=1.0,
         exact_multiset_accuracy=exact_multiset,
         exact_total_accuracy=exact_total,
-        abstention_rate=0.0,
+        abstention_count=round(abstention_rate * 10),
+        abstention_rate=abstention_rate,
+        abstention_reasons=(
+            {"INCOMPLETE_CARDS": round(abstention_rate * 10)} if abstention_rate else {}
+        ),
         per_class={label: ClassMetrics.from_counts(0, 0, 0) for label in CARD_LABELS},
         confusion={},
         buckets={count: BucketMetrics.unsupported(count) for count in range(1, 11)},
@@ -311,18 +317,31 @@ def test_ultralytics_adapter_exports_raw_fp32_and_train_calibrated_int8_with_fak
         "train: train/images\nval: valid/images\ntest: test/images\n", encoding="utf-8"
     )
     calls: list[tuple[str, dict[str, object]]] = []
+    wrapped: list[object] = []
 
     class FakeYolo:
         def __init__(self, value: str) -> None:
             assert value == str(checkpoint)
+            self.model = object()
 
         def export(self, **settings: object) -> str:
             calls.append(("export", dict(settings)))
-            generated = tmp_path / f"generated-{len(calls)}.tflite"
-            generated.write_bytes(b"fake tflite")
+            if settings["quantize"] == 8:
+                cache = tmp_path / "train" / "labels.cache"
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_bytes(b"ultralytics generated cache")
+            generated = tmp_path / f"generated-{len(calls)}"
+            generated.mkdir()
+            suffix = "float32" if settings["quantize"] is None else "integer_quant"
+            (generated / f"best_{suffix}.tflite").write_bytes(b"fake tflite")
             return str(generated)
 
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYolo))
+    monkeypatch.setitem(
+        sys.modules,
+        "ultralytics.utils.export.tensorflow",
+        types.SimpleNamespace(tf_wrapper=lambda model: wrapped.append(model) or model),
+    )
     contract = TensorContract(
         input_shape=(1, 640, 640, 3),
         input_dtype="float32",
@@ -353,26 +372,31 @@ def test_ultralytics_adapter_exports_raw_fp32_and_train_calibrated_int8_with_fak
         (
             "export",
             {
-                "format": "tflite",
+                "format": "saved_model",
                 "imgsz": 640,
                 "batch": 1,
                 "nms": False,
-                "int8": False,
+                "quantize": None,
             },
         ),
         (
             "export",
             {
-                "format": "tflite",
+                "format": "saved_model",
                 "imgsz": 640,
                 "batch": 1,
                 "nms": False,
-                "int8": True,
-                "data": str(dataset),
-                "split": "train",
+                "quantize": 8,
+                "data": str(tmp_path / "int8.calibration.yaml"),
+                "fraction": 0.02,
             },
         ),
     ]
+    assert len(wrapped) == 2
+    calibration = (tmp_path / "int8.calibration.yaml").read_text(encoding="utf-8")
+    assert str((tmp_path / "train/images").resolve()).replace("\\", "/") in calibration
+    assert "test:" not in calibration
+    assert not (tmp_path / "train" / "labels.cache").exists()
     assert adapter.inspect(fp32) == contract
     assert adapter.evaluate_validation(fp32, _selection()).partition == "validation"
     assert evaluated == [fp32]
@@ -454,6 +478,7 @@ def test_serialized_tflite_accepts_graph_runtime_tensors_with_nonzero_empty_buff
     assert contract.weighted_compute_operator_count == 1
     assert contract.quantized_compute_operator_count == 1
     assert contract.quantized_compute_operator_codes == ("CONV_2D",)
+    assert contract.quantized_compute_coverage == 1.0
     assert contract.quantized_compute_coverage == 1.0
 
 
@@ -635,7 +660,13 @@ def test_tflite_inspector_attests_pinned_static_int8_compute_pattern(
     assert contract.weighted_compute_operator_count == 1
     assert contract.quantized_compute_operator_count == 1
     assert contract.quantized_compute_operator_codes == ("CONV_2D",)
-    assert contract.quantized_compute_coverage == 1.0
+
+
+def test_empty_flatbuffer_quantization_vectors_are_treated_as_absent() -> None:
+    quantization = types.SimpleNamespace(ScaleAsNumpy=lambda: 0, ZeroPointAsNumpy=lambda: 0)
+    tensor = types.SimpleNamespace(Quantization=lambda: quantization)
+
+    assert _tensor_quantization(tensor) is None
 
 
 def test_export_selects_int8_within_one_point_and_publishes_exact_bundle(tmp_path: Path) -> None:
@@ -729,6 +760,71 @@ def test_export_selects_int8_within_one_point_and_publishes_exact_bundle(tmp_pat
     assert bundle.holdout_receipt_sha256 == metadata["holdoutReceiptSha256"]
 
 
+def test_export_can_publish_explicit_fp32_only_time_bounded_candidate(tmp_path: Path) -> None:
+    exporter = FakeExporter(_report("validation", exact_multiset=1.0, exact_total=1.0))
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    notices = []
+    for name in ("LICENSE", "NOTICE.md"):
+        path = tmp_path / name
+        path.write_text(name, encoding="utf-8")
+        notices.append(path)
+
+    bundle = export_candidate(
+        checkpoint=checkpoint,
+        exporter=exporter,
+        selection=_selection(),
+        dataset_receipt_sha256="d" * 64,
+        dataset_audit_sha256="e" * 64,
+        notices=tuple(notices),
+        status="DEBUG_ONLY",
+        quantizations=("fp32",),
+    )
+
+    assert exporter.calls == [("best.pt", "fp32")]
+    assert bundle.quantization == "fp32"
+    assert bundle.model.read_bytes() == b"fp32-raw-yolo"
+
+
+def test_export_refuses_broken_fp32_parity_before_claiming_holdout(tmp_path: Path) -> None:
+    exporter = FakeExporter(_report("validation", exact_multiset=0.95, exact_total=0.98))
+    original = exporter.evaluate_validation
+
+    def broken_fp32(model: Path, selection: ThresholdSelection) -> EvaluationReport:
+        report = original(model, selection)
+        if model.stem == "fp32":
+            report = replace(
+                report,
+                exact_detection_accuracy=0.0,
+                exact_multiset_accuracy=0.0,
+                exact_total_accuracy=0.0,
+                abstention_rate=1.0,
+            )
+        return report
+
+    exporter.evaluate_validation = broken_fp32  # type: ignore[method-assign]
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    license_file = tmp_path / "LICENSE"
+    notice_file = tmp_path / "NOTICE.md"
+    license_file.write_text("AGPL", encoding="utf-8")
+    notice_file.write_text("dataset notice", encoding="utf-8")
+
+    with pytest.raises(ExportError, match="FP32 export regressed"):
+        export_candidate(
+            checkpoint=checkpoint,
+            exporter=exporter,
+            selection=_selection(),
+            dataset_receipt_sha256="d" * 64,
+            dataset_audit_sha256="e" * 64,
+            notices=(license_file, notice_file),
+            status="DEBUG_ONLY",
+        )
+
+    assert not evaluate_module.canonical_holdout_active_path().exists()
+    assert not evaluate_module.canonical_holdout_receipt_path().exists()
+
+
 def test_export_keeps_fp32_when_int8_loses_more_than_one_point(tmp_path: Path) -> None:
     """INT8 must not win merely because it is smaller when exact accuracy regresses."""
     exporter = FakeExporter(_report("validation", exact_multiset=0.939, exact_total=0.98))
@@ -762,6 +858,37 @@ def test_export_gates_int8_on_localization_aware_accuracy(tmp_path: Path) -> Non
             exact_multiset=0.95,
             exact_total=0.98,
             exact_detection=0.93,
+        )
+    )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    notices = []
+    for name in ("LICENSE", "NOTICE.md"):
+        path = tmp_path / name
+        path.write_text(name, encoding="utf-8")
+        notices.append(path)
+
+    bundle = export_candidate(
+        checkpoint=checkpoint,
+        exporter=exporter,
+        selection=_selection(),
+        dataset_receipt_sha256="d" * 64,
+        dataset_audit_sha256="e" * 64,
+        notices=tuple(notices),
+        status="DEBUG_ONLY",
+    )
+
+    assert bundle.quantization == "fp32"
+
+
+def test_export_gates_int8_on_whole_capture_abstention_rate(tmp_path: Path) -> None:
+    """Quantization must not win while causing materially more incomplete-capture abstentions."""
+    exporter = FakeExporter(
+        _report(
+            "validation",
+            exact_multiset=0.95,
+            exact_total=0.98,
+            abstention_rate=0.20,
         )
     )
     checkpoint = tmp_path / "best.pt"

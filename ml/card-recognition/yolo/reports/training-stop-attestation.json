@@ -1,0 +1,27 @@
+{
+  "bestCheckpointSha256": "695e860b6dc323ce12f582da2827ce2ed63b4a7279e5267474c5535a433c4712",
+  "bestEpoch": 21,
+  "bestMap50": 0.995,
+  "bestMap50_95": 0.81115,
+  "bestPrecision": 0.99933,
+  "bestRecall": 1.0,
+  "completedEpochs": 22,
+  "createdAt": "2026-10-16T18:54:53.377912Z",
+  "datasetTreeSha256": "10792068ae7e1e20c89926f232a2b00e5a443bf1179e7a18e49cb6032d06bdaf",
+  "dependencyLockSha256": "b815ec197e760cedcd6bc750502e6ea0c12dc873d144117c75901a324bbcc5dd",
+  "finalizationCommand": [
+    "python",
+    "-m",
+    "pontinho_yolo.train",
+    "--config",
+    "C:\\Users\\maxma\\OneDrive\\Documentos\\ChatGPT\\Pontinho\\ml\\card-recognition\\yolo\\config\\train.yaml",
+    "--run-id",
+    "playing-cards-v4-yolov8n-20261016",
+    "--finalize-user-stop"
+  ],
+  "lastCheckpointSha256": "eba9012f2b1287f8732e6fa21f52556f6d06e7892950aa5f3d93a11d962f9f48",
+  "lastCompletedEpoch": 22,
+  "reason": "user-approved-first-debug-candidate",
+  "runId": "playing-cards-v4-yolov8n-20261016",
+  "schemaVersion": 1
+}

@@ -13,13 +13,17 @@
 - Light/dark themes, reduced-motion preference, large-text layouts, localized screen-reader semantics, and non-drag reorder actions.
 - Offline Learn to Play, Settings, Language, Appearance and Accessibility, and About surfaces.
 
-The debug build is ready for hands-on testing of this manual scoring phase.
+The debug build is ready for hands-on testing of manual scoring and the
+experimental offline single-stage scanner. Its FP32 model is measured against
+the public dataset and remains debug-only pending physical-phone acceptance.
 
 ## Not implemented in this phase
 
-- Camera capture, photo picking, card recognition, and scan review.
+- Production-approved card recognition. Camera/photo/review flows exist in
+  debug, but physical-deck accuracy and device latency are still unmeasured.
 - Advertising, consent management, Google Mobile Ads integration, billing, promotional-code entitlement, and Remove Ads.
 - Backup export, restore validation, or database replacement.
 - Release signing, store listing assets, Play Console declarations, or publication.
 
-These capabilities are intentionally absent from production navigation. Their implementation and verification belong to follow-up plans.
+The scanner model is intentionally absent from the release APK. Advertising,
+backup and store-publication work remain follow-up plans.

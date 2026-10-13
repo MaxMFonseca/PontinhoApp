@@ -201,6 +201,36 @@ def test_class_correct_match_wins_before_wrong_class_confusion_association() -> 
     }
 
 
+def test_incomplete_scene_and_empty_scene_have_distinct_abstention_reasons() -> None:
+    """Incomplete captures emit nothing while remaining distinct from genuine NoCards."""
+    predictions, truth = _partitions(
+        "validation",
+        [
+            ("incomplete", _raw((4, 0.9, 32, 320, 128, 160)), ("2C",)),
+            ("empty", _raw(), ("2D",)),
+        ],
+    )
+
+    report = evaluate_predictions(predictions, truth, confidence=0.5, iou=0.5)
+
+    assert report.predicted_card_count == 0
+    assert report.true_positive_count == 0
+    assert report.false_positive_count == 0
+    assert report.false_negative_count == 2
+    assert report.abstention_count == 2
+    assert report.abstention_rate == pytest.approx(1.0)
+    assert report.abstention_reasons == {"INCOMPLETE_CARDS": 1, "NO_CARDS": 1}
+    assert report.confusion == {
+        "2C": {"__background__": 1},
+        "2D": {"__background__": 1},
+    }
+    assert report.to_dict()["abstentionCount"] == 2
+    assert report.to_dict()["abstentionReasons"] == {
+        "INCOMPLETE_CARDS": 1,
+        "NO_CARDS": 1,
+    }
+
+
 def test_threshold_selection_uses_validation_only_and_published_tie_break_order(
     tmp_path: Path,
 ) -> None:
@@ -305,6 +335,43 @@ def test_threshold_ranking_prioritizes_metrics_in_the_published_order(
     assert selection.iou == 0.30
 
 
+def test_threshold_selection_handles_incomplete_candidates_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    predictions, truth = _partitions(
+        "validation",
+        [("incomplete", _raw((4, 0.9, 32, 320, 128, 160)), ("2C",))],
+    )
+
+    observed = {}
+
+    def record_evaluation(
+        predictions: PredictionPartition,
+        truth: TruthPartition,
+        *,
+        confidence: float,
+        iou: float,
+        candidate_sha256: str | None = None,
+    ):
+        report = evaluate_predictions(
+            predictions,
+            truth,
+            confidence=confidence,
+            iou=iou,
+            candidate_sha256=candidate_sha256,
+        )
+        observed[(confidence, iou)] = report
+        return report
+
+    monkeypatch.setattr(evaluate_module, "evaluate_predictions", record_evaluation)
+    selection = select_thresholds(predictions, truth, checkpoint=_checkpoint(tmp_path))
+
+    assert selection.confidence == pytest.approx(0.90)
+    assert observed[(0.85, 0.30)].abstention_reasons == {"INCOMPLETE_CARDS": 1}
+    assert selection.validation_report.abstention_count == 1
+    assert selection.validation_report.abstention_reasons == {"NO_CARDS": 1}
+
+
 def test_holdout_is_claimed_before_read_and_cannot_be_opened_twice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -374,6 +441,41 @@ def test_holdout_is_claimed_before_read_and_cannot_be_opened_twice(
             invocation_sha256=INVOCATION_SHA256,
         )
     assert opens == 1
+
+
+def test_holdout_records_incomplete_capture_as_abstention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    validation_predictions, validation_truth = _partitions(
+        "validation",
+        [("validation", _raw((4, 0.9, 100, 100, 40, 60)), ("2C",))],
+    )
+    selection = select_thresholds(
+        validation_predictions, validation_truth, checkpoint=_checkpoint(tmp_path)
+    )
+    candidate_sha256 = "6" * 64
+    test_partitions = _partitions(
+        "test",
+        [("incomplete", _raw((4, 0.9, 32, 320, 128, 160)), ("2C",))],
+        source_model_sha256=candidate_sha256,
+    )
+    _install_repository(monkeypatch, tmp_path)
+
+    report = evaluate_holdout(
+        lambda: test_partitions,
+        selection=selection,
+        candidate_sha256=candidate_sha256,
+        dataset_receipt_sha256=RECEIPT_SHA256,
+        dataset_audit_sha256=AUDIT_SHA256,
+        invocation_sha256=INVOCATION_SHA256,
+    )
+
+    assert report.predicted_card_count == 0
+    assert report.false_negative_count == 1
+    assert report.abstention_count == 1
+    assert report.abstention_reasons == {"INCOMPLETE_CARDS": 1}
+    claim = json.loads(canonical_holdout_receipt_path().read_text(encoding="utf-8"))
+    assert claim["status"] == "completed"
 
 
 def test_failed_holdout_open_remains_burned_and_cannot_be_retried(

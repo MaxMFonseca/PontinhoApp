@@ -19,6 +19,7 @@ from pontinho_yolo.labels import CARD_LABELS
 from pontinho_yolo.postprocess import (
     Box,
     Detection,
+    IncompleteDetections,
     LetterboxGeometry,
     TooManyDetections,
     decode_yolo,
@@ -29,6 +30,8 @@ IOU_THRESHOLDS = tuple(round(index * 0.05, 2) for index in range(6, 15))
 _SHA256 = frozenset("0123456789abcdef")
 LOCALIZATION_IOU = 0.50
 BACKGROUND_LABEL = "__background__"
+INCOMPLETE_CARDS_ABSTENTION = "INCOMPLETE_CARDS"
+NO_CARDS_ABSTENTION = "NO_CARDS"
 _CLAIMED_HOLDOUT_PATHS: set[Path] = set()
 
 
@@ -215,7 +218,9 @@ class EvaluationReport:
     exact_count_accuracy: float
     exact_multiset_accuracy: float
     exact_total_accuracy: float
+    abstention_count: int
     abstention_rate: float
+    abstention_reasons: Mapping[str, int]
     per_class: Mapping[str, ClassMetrics]
     confusion: Mapping[str, Mapping[str, int]]
     buckets: Mapping[int, BucketMetrics]
@@ -240,7 +245,9 @@ class EvaluationReport:
             "exactCountAccuracy": self.exact_count_accuracy,
             "exactMultisetAccuracy": self.exact_multiset_accuracy,
             "exactTotalAccuracy": self.exact_total_accuracy,
+            "abstentionCount": self.abstention_count,
             "abstentionRate": self.abstention_rate,
+            "abstentionReasons": dict(sorted(self.abstention_reasons.items())),
             "perClass": {label: self.per_class[label].to_dict() for label in CARD_LABELS},
             "confusion": {
                 truth_label: dict(sorted(predicted.items()))
@@ -291,14 +298,20 @@ def evaluate_predictions(
 ) -> EvaluationReport:
     """Evaluate one partition with IoU-matched detections and separate hand metrics."""
     pairs = _validated_pairs(predictions, truth)
-    scene_results: list[tuple[int, bool, bool, bool, bool, int, int, int, bool]] = []
+    scene_results: list[tuple[int, bool, bool, bool, bool, int, int, int, str | None]] = []
     class_counts = {label: [0, 0, 0] for label in CARD_LABELS}
     confusion: dict[str, dict[str, int]] = {}
     for raw, expected in pairs:
+        abstention_reason = None
         try:
             detections = decode_yolo(raw.output, raw.geometry, confidence, iou, max_cards=10)
         except TooManyDetections as error:
             detections = error.detections
+        except IncompleteDetections:
+            detections = ()
+            abstention_reason = INCOMPLETE_CARDS_ABSTENTION
+        if not detections and abstention_reason is None:
+            abstention_reason = NO_CARDS_ABSTENTION
         predicted_labels = tuple(item.label for item in detections)
         expected_counter = Counter(expected.labels)
         predicted_counter = Counter(predicted_labels)
@@ -342,7 +355,7 @@ def evaluate_predictions(
                 true_positives,
                 false_positives,
                 false_negatives,
-                not predicted_labels,
+                abstention_reason,
             )
         )
 
@@ -351,6 +364,8 @@ def evaluate_predictions(
     true_positive_count = sum(item[5] for item in scene_results)
     false_positive_count = sum(item[6] for item in scene_results)
     false_negative_count = sum(item[7] for item in scene_results)
+    abstention_reasons = Counter(item[8] for item in scene_results if item[8] is not None)
+    abstention_count = sum(abstention_reasons.values())
     predicted_count = true_positive_count + false_positive_count
     buckets: dict[int, BucketMetrics] = {}
     for card_count in range(1, 11):
@@ -394,9 +409,9 @@ def evaluate_predictions(
         exact_total_accuracy=(
             sum(item[4] for item in scene_results) / scene_count if scene_count else 0.0
         ),
-        abstention_rate=(
-            sum(item[8] for item in scene_results) / scene_count if scene_count else 0.0
-        ),
+        abstention_count=abstention_count,
+        abstention_rate=abstention_count / scene_count if scene_count else 0.0,
+        abstention_reasons=dict(abstention_reasons),
         per_class={label: ClassMetrics.from_counts(*class_counts[label]) for label in CARD_LABELS},
         confusion=confusion,
         buckets=buckets,

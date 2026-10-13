@@ -1,0 +1,14 @@
+{
+  "candidateSha256": "01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277",
+  "datasetAuditSha256": "60261271beb9b325cb9808482b375376e5024facaad826cea01b061b2df2baf6",
+  "datasetReceiptSha256": "259e224e3dd6b40c12edb4143007d1efd65cce531d2f130159ddad3cf7eebd2e",
+  "evaluationSha256": "53584bc315a24908f9521c5be2d51870e479bff6a44e3707d652679deceb8432",
+  "invocationSha256": "e2a6db7c40da120747cd0d830581465f3bca2cb134ff9f35f0b584df78b8d81e",
+  "recordChecksumSha256": "87cdae7d975f03d1d8993d0164821e5ebd374aa8db44db0e086979fbd28397b1",
+  "repositoryCommonDirSha256": "91360761ba3b861162f7fc91944c6c686fff5ccff991d685cab39e26ca8f5278",
+  "schemaVersion": 3,
+  "selectionSha256": "6318b7d36e29f477d8faf488403ce41302e4941adbf37edbc77b9148aa27239b",
+  "sourceCheckpointSha256": "695e860b6dc323ce12f582da2827ce2ed63b4a7279e5267474c5535a433c4712",
+  "status": "completed",
+  "validationDatasetSha256": "10792068ae7e1e20c89926f232a2b00e5a443bf1179e7a18e49cb6032d06bdaf"
+}

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import re
@@ -227,11 +229,15 @@ def _architecture_identity(model: object) -> str:
     metadata = getattr(internal_model, "yaml", None)
     if not isinstance(metadata, dict):
         raise TrainingError("loaded base model does not expose Ultralytics architecture metadata")
-    scale = metadata.get("scale")
     yaml_file = metadata.get("yaml_file")
-    if not isinstance(scale, str) or not isinstance(yaml_file, str):
+    if not isinstance(yaml_file, str):
+        yaml_file = getattr(internal_model, "yaml_file", None)
+    if not isinstance(yaml_file, str):
         raise TrainingError("loaded base model architecture metadata is incomplete")
     match = re.fullmatch(r"yolov8([nslmx])\.yaml", Path(yaml_file).name.lower())
+    scale = metadata.get("scale")
+    if scale is None and match is not None:
+        scale = match.group(1)
     if task != "detect" or match is None or match.group(1) != scale:
         raise TrainingError("loaded base model architecture metadata is inconsistent")
     return f"ultralytics:yolov8:{task}:{scale}"
@@ -441,6 +447,169 @@ def train_candidate(config: TrainConfig, run_id: str) -> TrainingReceipt:
     _write_receipt(local_receipt, receipt, replace=False)
     _write_receipt(config.receipt, receipt, replace=True)
     return receipt
+
+
+def finalize_user_stopped_candidate(config: TrainConfig, run_id: str) -> TrainingReceipt:
+    """Attest a user-approved stop from complete epochs without resuming training."""
+    _validate_run_id(run_id)
+    environment = _capture_environment()
+    if environment.get("cuda_available") is not True:
+        raise TrainingError("CUDA GPU is required to finalize candidate training")
+    environment_hash = _hash_json(environment)
+    settings = _training_settings(config, run_id)
+    settings_hash = _hash_json(settings)
+    run_directory = config.runs / run_id
+    checkpoint = run_directory / "weights" / "best.pt"
+    last_checkpoint = run_directory / "weights" / "last.pt"
+    local_receipt = run_directory / "training-receipt.json"
+    results_path = run_directory / "results.csv"
+    stop_attestation = config.receipt.parent / "training-stop-attestation.json"
+
+    if local_receipt.exists() or config.receipt.exists() or stop_attestation.exists():
+        raise TrainingError("refusing to finalize a run that already has training evidence")
+    if run_directory.is_symlink() or not run_directory.is_dir():
+        raise TrainingError("user-stopped run directory must be a regular directory")
+    for path, description in (
+        (checkpoint, "selected checkpoint"),
+        (last_checkpoint, "last checkpoint"),
+        (results_path, "training results"),
+        (config.base_weights, "base weights"),
+    ):
+        _require_regular_file(path, description)
+
+    rows = _completed_training_rows(results_path, config.epochs)
+    best_row = max(rows, key=lambda row: row["map50_95"])
+    best_epoch_state, best_fitness = _checkpoint_state(checkpoint)
+    last_epoch_state, last_best_fitness = _checkpoint_state(last_checkpoint)
+    if best_epoch_state + 1 != best_row["epoch"]:
+        raise TrainingError("best checkpoint epoch differs from the results ledger")
+    if last_epoch_state + 1 != rows[-1]["epoch"]:
+        raise TrainingError("last checkpoint epoch differs from the results ledger")
+    if not math.isclose(best_fitness, best_row["map50_95"], abs_tol=1e-8):
+        raise TrainingError("best checkpoint fitness differs from the results ledger")
+    if not math.isclose(last_best_fitness, best_fitness, abs_tol=1e-8):
+        raise TrainingError("last checkpoint does not bind the validation-best fitness")
+
+    _verify_dataset(config)
+    _verify_snapshots(config)
+    base_weights_sha256 = _hash_file(config.base_weights)
+    architecture_identity = YoloTrainer(config.model, config.base_weights).architecture_identity
+    if architecture_identity != BASE_MODEL_ARCHITECTURE:
+        raise TrainingError("finalized checkpoint base architecture is not YOLOv8n detect")
+
+    receipt = TrainingReceipt(
+        schema_version=RECEIPT_SCHEMA_VERSION,
+        run_id=run_id,
+        created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        config_sha256=config.config_sha256,
+        dataset_config_sha256=config.dataset_config_sha256,
+        dataset_audit_sha256=config.dataset_audit_sha256,
+        source_receipt_file_sha256=config.source_receipt_file_sha256,
+        dataset_archive_sha256=config.dataset_archive_sha256,
+        dataset_tree_sha256=config.dataset_tree_sha256,
+        base_weights=config.base_weights.relative_to(config.project_root).as_posix(),
+        base_weights_sha256=base_weights_sha256,
+        base_model_architecture=architecture_identity,
+        selected_checkpoint=checkpoint.relative_to(config.project_root).as_posix(),
+        selected_checkpoint_sha256=_hash_file(checkpoint),
+        dependency_lock_sha256=config.dependency_lock_sha256,
+        environment=dict(environment),
+        environment_sha256=environment_hash,
+        training_settings=dict(settings),
+        training_settings_sha256=settings_hash,
+        command=_training_command(config, run_id),
+    )
+    attestation = {
+        "schemaVersion": 1,
+        "runId": run_id,
+        "createdAt": receipt.created_at,
+        "reason": "user-approved-first-debug-candidate",
+        "completedEpochs": len(rows),
+        "lastCompletedEpoch": rows[-1]["epoch"],
+        "bestEpoch": best_row["epoch"],
+        "bestPrecision": best_row["precision"],
+        "bestRecall": best_row["recall"],
+        "bestMap50": best_row["map50"],
+        "bestMap50_95": best_row["map50_95"],
+        "bestCheckpointSha256": receipt.selected_checkpoint_sha256,
+        "lastCheckpointSha256": _hash_file(last_checkpoint),
+        "datasetTreeSha256": config.dataset_tree_sha256,
+        "dependencyLockSha256": config.dependency_lock_sha256,
+        "finalizationCommand": [
+            "python",
+            "-m",
+            "pontinho_yolo.train",
+            "--config",
+            str(config.source),
+            "--run-id",
+            run_id,
+            "--finalize-user-stop",
+        ],
+    }
+    _write_json_record(stop_attestation, attestation)
+    _write_receipt(local_receipt, receipt, replace=False)
+    _write_receipt(config.receipt, receipt, replace=False)
+    return receipt
+
+
+def _completed_training_rows(path: Path, configured_epochs: int) -> list[dict[str, float | int]]:
+    try:
+        with path.open("r", encoding="utf-8", newline="") as stream:
+            raw_rows = list(csv.DictReader(stream))
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise TrainingError(f"cannot read training results: {error}") from error
+    required = (
+        "epoch",
+        "metrics/precision(B)",
+        "metrics/recall(B)",
+        "metrics/mAP50(B)",
+        "metrics/mAP50-95(B)",
+    )
+    if not raw_rows or len(raw_rows) >= configured_epochs:
+        raise TrainingError("user-stop finalization requires a strict partial epoch ledger")
+    parsed: list[dict[str, float | int]] = []
+    try:
+        for index, row in enumerate(raw_rows, start=1):
+            values = {
+                "epoch": int(row[required[0]]),
+                "precision": float(row[required[1]]),
+                "recall": float(row[required[2]]),
+                "map50": float(row[required[3]]),
+                "map50_95": float(row[required[4]]),
+            }
+            if values["epoch"] != index:
+                raise TrainingError("training results epochs are not complete and sequential")
+            if not all(
+                math.isfinite(float(values[key])) and 0.0 <= float(values[key]) <= 1.0
+                for key in ("precision", "recall", "map50", "map50_95")
+            ):
+                raise TrainingError("training results contain invalid validation metrics")
+            parsed.append(values)
+    except (KeyError, TypeError, ValueError) as error:
+        raise TrainingError("training results are missing required validation metrics") from error
+    return parsed
+
+
+def _checkpoint_state(path: Path) -> tuple[int, float]:
+    try:
+        import torch
+
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        epoch = payload["epoch"]
+        best_fitness = payload["best_fitness"]
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise TrainingError(f"cannot attest checkpoint training state: {path}") from error
+    if (
+        isinstance(epoch, bool)
+        or not isinstance(epoch, int)
+        or epoch < 0
+        or isinstance(best_fitness, bool)
+        or not isinstance(best_fitness, int | float)
+        or not math.isfinite(float(best_fitness))
+        or not 0.0 <= float(best_fitness) <= 1.0
+    ):
+        raise TrainingError(f"checkpoint training state is invalid: {path}")
+    return epoch, float(best_fitness)
 
 
 def _training_settings(config: TrainConfig, run_id: str) -> dict[str, object]:
@@ -707,17 +876,45 @@ def _write_receipt(path: Path, receipt: TrainingReceipt, *, replace: bool) -> No
             temporary.unlink()
 
 
+def _write_json_record(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.exists():
+            raise TrainingError(f"refusing to replace existing training evidence: {path}")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument(
+        "--finalize-user-stop",
+        action="store_true",
+        help="attest a user-approved stop from complete checkpointed epochs",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     """Train or verify one candidate from the command line."""
     args = _parse_args()
-    receipt = train_candidate(load_train_config(args.config), args.run_id)
+    config = load_train_config(args.config)
+    receipt = (
+        finalize_user_stopped_candidate(config, args.run_id)
+        if args.finalize_user_stop
+        else train_candidate(config, args.run_id)
+    )
     print(json.dumps(receipt.to_dict(), indent=2, sort_keys=True))
 
 

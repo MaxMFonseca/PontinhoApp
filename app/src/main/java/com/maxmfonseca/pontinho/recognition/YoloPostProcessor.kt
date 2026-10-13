@@ -34,6 +34,16 @@ data class RawYoloDetection(
     val anchorIndex: Int,
 )
 
+internal data class YoloPostprocessDiagnostics(
+    val rawCandidateCount: Int,
+    val maximumScore: Float,
+    val rejectedBelowConfidence: Int,
+    val rejectedByClassNms: Int,
+    val rejectedByPhysicalNms: Int,
+    val rejectedIncomplete: Int,
+    val finalDetections: List<RawYoloDetection>,
+)
+
 open class YoloDecodeException(message: String) : IllegalArgumentException(message)
 
 class TooManyYoloDetections(
@@ -42,6 +52,11 @@ class TooManyYoloDetections(
 ) : YoloDecodeException("detected ${detections.size} cards; maximum is $maximum") {
     val count: Int = detections.size
 }
+
+class IncompleteYoloDetections(
+    val anchorIndexes: List<Int>,
+    val detections: List<RawYoloDetection>,
+) : RuntimeException("detected ${anchorIndexes.size} incomplete card candidates")
 
 object YoloCardLabels {
     val values: List<String> = listOf(
@@ -72,6 +87,22 @@ object YoloPostProcessor {
         shape: IntArray,
         geometry: LetterboxGeometry,
         settings: YoloPostprocessSettings,
+    ): List<RawYoloDetection> = decodeInternal(output, shape, geometry, settings) {}
+
+    internal fun decodeWithDiagnostics(
+        output: FloatArray,
+        shape: IntArray,
+        geometry: LetterboxGeometry,
+        settings: YoloPostprocessSettings,
+        onDiagnostics: (YoloPostprocessDiagnostics) -> Unit = {},
+    ): List<RawYoloDetection> = decodeInternal(output, shape, geometry, settings, onDiagnostics)
+
+    private fun decodeInternal(
+        output: FloatArray,
+        shape: IntArray,
+        geometry: LetterboxGeometry,
+        settings: YoloPostprocessSettings,
+        onDiagnostics: (YoloPostprocessDiagnostics) -> Unit,
     ): List<RawYoloDetection> {
         geometry.validate(expectedInputSize = YOLO_INPUT_SIZE)
         if (!shape.contentEquals(intArrayOf(1, OUTPUT_CHANNELS, OUTPUT_ANCHORS))) {
@@ -90,14 +121,17 @@ object YoloPostProcessor {
         }
 
         val confidenceThreshold = settings.confidenceThreshold.toFloat()
+        var maximumScore = 0f
         val candidates = buildList {
             for (anchorIndex in 0 until OUTPUT_ANCHORS) {
                 var classIndex = 0
                 var confidence = output[index(4, anchorIndex)]
                 validateScore(confidence)
+                if (confidence > maximumScore) maximumScore = confidence
                 for (candidateClass in 1 until YoloCardLabels.values.size) {
                     val score = output[index(4 + candidateClass, anchorIndex)]
                     validateScore(score)
+                    if (score > maximumScore) maximumScore = score
                     if (score > confidence) {
                         classIndex = candidateClass
                         confidence = score
@@ -113,23 +147,31 @@ object YoloPostProcessor {
                 val centerY = output[index(1, anchorIndex)].toDouble() * geometry.inputHeight
                 val modelWidth = normalizedWidth * geometry.inputWidth
                 val modelHeight = normalizedHeight * geometry.inputHeight
-                val sourceBox = invertCompleteBox(
-                    Box(
-                        left = centerX - modelWidth / 2.0,
-                        top = centerY - modelHeight / 2.0,
-                        right = centerX + modelWidth / 2.0,
-                        bottom = centerY + modelHeight / 2.0,
-                    ),
-                    geometry,
-                ) ?: continue
-                add(Candidate(classIndex, confidence, sourceBox, anchorIndex))
+                val modelBox = Box(
+                    left = centerX - modelWidth / 2.0,
+                    top = centerY - modelHeight / 2.0,
+                    right = centerX + modelWidth / 2.0,
+                    bottom = centerY + modelHeight / 2.0,
+                )
+                add(Candidate(classIndex, confidence, modelBox, anchorIndex))
             }
         }
 
         val priority = candidates.sortedWith(priorityOrder)
         val classAware = nms(priority, settings.iouThreshold, classAware = true)
         val physical = nms(classAware, PHYSICAL_DUPLICATE_IOU, classAware = false)
-        val ordered = physical.sortedWith(spatialOrder).map { candidate ->
+        val incompleteAnchorIndexes = mutableListOf<Int>()
+        val complete = buildList {
+            physical.forEach { candidate ->
+                val sourceBox = invertCompleteBox(candidate.box, geometry)
+                if (sourceBox == null) {
+                    incompleteAnchorIndexes += candidate.anchorIndex
+                } else {
+                    add(candidate.copy(box = sourceBox))
+                }
+            }
+        }
+        val ordered = complete.sortedWith(spatialOrder).map { candidate ->
             RawYoloDetection(
                 classIndex = candidate.classIndex,
                 label = YoloCardLabels.values[candidate.classIndex],
@@ -140,6 +182,20 @@ object YoloPostProcessor {
                 bottom = (candidate.box.bottom / geometry.sourceHeight).toFloat(),
                 anchorIndex = candidate.anchorIndex,
             )
+        }
+        onDiagnostics(
+            YoloPostprocessDiagnostics(
+                rawCandidateCount = candidates.size,
+                maximumScore = maximumScore,
+                rejectedBelowConfidence = OUTPUT_ANCHORS - candidates.size,
+                rejectedByClassNms = candidates.size - classAware.size,
+                rejectedByPhysicalNms = classAware.size - physical.size,
+                rejectedIncomplete = incompleteAnchorIndexes.size,
+                finalDetections = ordered.toList(),
+            ),
+        )
+        if (incompleteAnchorIndexes.isNotEmpty()) {
+            throw IncompleteYoloDetections(incompleteAnchorIndexes.sorted(), ordered)
         }
         if (ordered.size > settings.maxCards) throw TooManyYoloDetections(ordered, settings.maxCards)
         return ordered

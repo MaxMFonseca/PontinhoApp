@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.scanner
 
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionDiagnostics
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionWarning
 import com.maxmfonseca.pontinho.domain.repository.PreparedRound
 import java.util.UUID
@@ -57,6 +58,7 @@ data class ScannerUiState(
     val awaitingInput: Boolean = false,
     val submissionStarted: Boolean = false,
     val saved: Boolean = false,
+    val diagnostics: RecognitionDiagnostics? = null,
 ) {
     val canEdit: Boolean get() = phase == ScannerPhase.Review && !submissionStarted && !saved
     val canConfirm: Boolean get() = !saved && cards.isNotEmpty() && !modelVersion.isNullOrBlank() &&

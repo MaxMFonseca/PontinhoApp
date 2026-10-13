@@ -60,9 +60,17 @@ android {
 }
 
 tasks.register("verifyOfflineScannerDependencies") {
+    dependsOn("assembleDebug", "assembleRelease")
     inputs.files(configurations.named("releaseRuntimeClasspath"))
+    val sdkDirectory = androidComponents.sdkComponents.sdkDirectory
+    val buildToolsVersion = android.buildToolsVersion
+    val debugApk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
+    val releaseApk = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk")
+    inputs.files(debugApk, releaseApk)
     doLast {
         val forbiddenArtifactPrefixes = setOf(
+            "ai-delivery-",
+            "asset-delivery-",
             "transport-api-",
             "transport-runtime-",
             "transport-backend-cct-",
@@ -73,22 +81,55 @@ tasks.register("verifyOfflineScannerDependencies") {
             "firebase-encoders-json-",
             "firebase-encoders-proto-",
             "play-services-measurement-",
+            "play-services-basement-",
+            "play-services-tasks-",
             "grpc-android-",
             "grpc-okhttp-",
             "okhttp-",
             "retrofit-",
             "volley-",
+            "work-runtime-",
             "httpclient-",
         )
         val artifacts = inputs.files.map { it.name }
-        check(artifacts.any { it == "litert-2.3.0.aar" }) {
-            "Offline scanner must contain exactly LiteRT 2.3.0"
+        val liteRtArtifacts = artifacts.filter { it.startsWith("litert-") }.toSet()
+        check(liteRtArtifacts == setOf("litert-2.3.0.aar", "litert-api-2.3.0.aar")) {
+            "Offline scanner LiteRT graph must be exactly the bundled runtime and API: ${liteRtArtifacts.sorted()}"
         }
         val offenders = artifacts
             .filter { name -> forbiddenArtifactPrefixes.any(name::startsWith) }
             .sorted()
         check(offenders.isEmpty()) {
             "Offline scanner contains networking/telemetry artifacts: ${offenders.joinToString()}"
+        }
+
+        val suffix = if (System.getProperty("os.name").startsWith("Windows")) ".exe" else ""
+        val aapt = sdkDirectory.get().file("build-tools/$buildToolsVersion/aapt$suffix").asFile
+        val forbiddenManifestTokens = setOf(
+            "android.permission.ACCESS_NETWORK_STATE",
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+            "android.permission.INTERNET",
+            "android.permission.RECEIVE_BOOT_COMPLETED",
+            "android.permission.WAKE_LOCK",
+            "androidx.work",
+            "com.google.android.play",
+            "com.google.android.gms",
+        )
+        listOf(debugApk.get().asFile, releaseApk.get().asFile).forEach { apk ->
+            val process = ProcessBuilder(
+                aapt.absolutePath,
+                "dump",
+                "xmltree",
+                apk.absolutePath,
+                "AndroidManifest.xml",
+            ).redirectErrorStream(true).start()
+            val manifest = process.inputStream.bufferedReader().use { it.readText() }
+            check(process.waitFor() == 0) { manifest }
+            val manifestOffenders = forbiddenManifestTokens.filter(manifest::contains)
+            check(manifestOffenders.isEmpty()) {
+                "Offline APK ${apk.name} contains delivery/network components: ${manifestOffenders.joinToString()}"
+            }
         }
     }
 }
@@ -142,7 +183,10 @@ dependencies {
     implementation(libs.androidx.camera.view) {
         exclude(group = "androidx.camera", module = "camera-video")
     }
-    implementation(libs.litert)
+    implementation(libs.litert) {
+        // Model delivery is intentionally out of scope: the verified interpreter/model are bundled.
+        exclude(group = "com.google.android.play", module = "ai-delivery")
+    }
 
     ksp(libs.androidx.room.compiler)
 

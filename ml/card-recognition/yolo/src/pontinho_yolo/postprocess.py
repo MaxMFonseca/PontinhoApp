@@ -30,6 +30,19 @@ class TooManyDetections(DecodeError):
         super().__init__(f"detected {self.count} cards; maximum is {maximum}")
 
 
+class IncompleteDetections(RuntimeError):
+    """Raised when an otherwise viable card crosses the captured source bounds."""
+
+    def __init__(
+        self,
+        anchor_indexes: tuple[int, ...],
+        detections: tuple[Detection, ...],
+    ) -> None:
+        self.anchor_indexes = anchor_indexes
+        self.detections = detections
+        super().__init__(f"detected {len(anchor_indexes)} incomplete card candidates")
+
+
 @dataclass(frozen=True)
 class Box:
     """One source-pixel axis-aligned box."""
@@ -184,15 +197,12 @@ def decode_yolo(
             right=cx + width / 2.0,
             bottom=cy + height / 2.0,
         )
-        source_box = _invert_complete_box(model_box, geometry)
-        if source_box is None:
-            continue
         candidates.append(
             Detection(
                 class_index=class_index,
                 label=CARD_LABELS[class_index],
                 confidence=score,
-                box=source_box,
+                box=model_box,
                 anchor_index=anchor_index,
             )
         )
@@ -200,7 +210,25 @@ def decode_yolo(
     priority = sorted(candidates, key=_priority_key)
     class_aware = _nms(priority, iou, class_aware=True)
     physical = _nms(class_aware, PHYSICAL_DUPLICATE_IOU, class_aware=False)
-    ordered = tuple(sorted(physical, key=_spatial_key))
+    complete: list[Detection] = []
+    incomplete_anchor_indexes: list[int] = []
+    for candidate in physical:
+        source_box = _invert_complete_box(candidate.box, geometry)
+        if source_box is None:
+            incomplete_anchor_indexes.append(candidate.anchor_index)
+        else:
+            complete.append(
+                Detection(
+                    class_index=candidate.class_index,
+                    label=candidate.label,
+                    confidence=candidate.confidence,
+                    box=source_box,
+                    anchor_index=candidate.anchor_index,
+                )
+            )
+    ordered = tuple(sorted(complete, key=_spatial_key))
+    if incomplete_anchor_indexes:
+        raise IncompleteDetections(tuple(sorted(incomplete_anchor_indexes)), ordered)
     if len(ordered) > max_cards:
         raise TooManyDetections(ordered, max_cards)
     return ordered

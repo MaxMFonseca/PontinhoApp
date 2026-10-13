@@ -47,6 +47,36 @@ class ScannerScreenTest {
         compose.onNodeWithTag("scanner_experimental").assertDoesNotExist()
     }
 
+    @Test fun debugDiagnosticsExpandAndExposeCopyableJsonOnReviewAndError() {
+        val diagnostics = RecognitionDiagnostics(
+            sourceWidth = 1920, sourceHeight = 1080, letterboxScale = 1.0 / 3.0,
+            padLeft = 0, padTop = 140, padRight = 0, padBottom = 140,
+            rawCandidateCount = 0, maximumScore = .24f,
+            confidenceThreshold = .25, iouThreshold = .45,
+            rejectedBelowConfidence = 8400, rejectedByClassNms = 0,
+            rejectedByPhysicalNms = 0, rejectedIncomplete = 0,
+            finalBoxes = emptyList(), durationMillis = 25,
+        )
+        var state by mutableStateOf(review().copy(diagnostics = diagnostics))
+        compose.setContent { ScannerScreen(state) }
+
+        compose.onNodeWithTag("scanner_diagnostics_toggle").assertExists().performClick()
+        compose.onNodeWithTag("scanner_diagnostics_json")
+            .assertTextContains("\"maximumScore\":0.24", substring = true)
+            .assertTextContains("\"belowConfidence\":8400", substring = true)
+        compose.onNodeWithTag("scanner_diagnostics_copy").assertIsEnabled()
+
+        compose.runOnIdle {
+            state = ScannerUiState(
+                phase = ScannerPhase.Error,
+                recovery = ScannerRecovery.Capture,
+                message = ScannerMessage.NoCards,
+                diagnostics = diagnostics,
+            )
+        }
+        compose.onNodeWithTag("scanner_diagnostics_toggle").assertExists()
+    }
+
     @Test fun portugueseCaptureLimitsAndRecoveryAreLocalized() = localizedRecovery(
         "pt-BR", listOf("no máximo 10", "separadas", "inteiras", "reflexos", "duas fotos"),
         listOf("Nenhuma carta", "Mais de 10 cartas", "cortadas", "resolução menor"),

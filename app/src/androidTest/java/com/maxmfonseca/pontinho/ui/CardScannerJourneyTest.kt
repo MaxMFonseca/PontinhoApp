@@ -22,8 +22,8 @@ import com.maxmfonseca.pontinho.di.AppContainer
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.*
 import com.maxmfonseca.pontinho.domain.repository.*
-import com.maxmfonseca.pontinho.recognition.AssetGatedCardRecognitionEngineFactory
-import com.maxmfonseca.pontinho.recognition.RecognitionAssetVerifier
+import com.maxmfonseca.pontinho.recognition.SingleStageCardRecognitionEngineFactory
+import com.maxmfonseca.pontinho.recognition.VerifiedCardRecognitionEngineProvider
 import com.maxmfonseca.pontinho.settings.*
 import com.maxmfonseca.pontinho.ui.match.MatchViewModel
 import com.maxmfonseca.pontinho.ui.navigation.Destination
@@ -59,8 +59,8 @@ class CardScannerJourneyTest {
 
     @After fun close() { database.close() }
 
-    @Test fun shippedAssetsFailClosedAndManualScoreStillCommits() = runBlocking<Unit> {
-        // This is the same provider installed by the application in release, with no override.
+    @Test fun legacyShippedAssetsFailClosedUntilTask9PairWiringAndManualScoreStillCommits() = runBlocking<Unit> {
+        // Stage 9 owns replacing the current legacy Triple reader with the verified Pair.
         val engine = context.container.cardRecognitionEngineProvider.get()
         context.container.cardRecognitionEngineProvider.availability.first { it !is RecognitionAvailability.Checking }
         assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS), engine.availability)
@@ -68,10 +68,18 @@ class CardScannerJourneyTest {
     }
 
     @Test fun malformedReleasePairFailsClosedAndManualScoreStillCommits() = runBlocking<Unit> {
-        val engine = AssetGatedCardRecognitionEngineFactory(RecognitionAssetVerifier(), null)
-            .create(byteArrayOf(1, 2, 3), byteArrayOf(4, 5, 6), "{malformed".toByteArray())
-        assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.INVALID_ASSETS), engine.availability)
-        unavailableJourney(engine)
+        val provider = VerifiedCardRecognitionEngineProvider(
+            readAssets = { byteArrayOf(1, 2, 3) to "{malformed".toByteArray() },
+            factory = SingleStageCardRecognitionEngineFactory(),
+        )
+        try {
+            val engine = provider.get()
+            provider.availability.first { it !is RecognitionAvailability.Checking }
+            assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.INVALID_ASSETS), engine.availability)
+            unavailableJourney(engine)
+        } finally {
+            provider.close()
+        }
     }
 
     @Test fun noCardsRetriesCaptureAndManualScoreStillCommits() = runBlocking<Unit> {

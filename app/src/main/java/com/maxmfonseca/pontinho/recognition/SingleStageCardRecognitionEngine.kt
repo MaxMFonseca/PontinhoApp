@@ -1,6 +1,7 @@
 package com.maxmfonseca.pontinho.recognition
 
 import android.graphics.Bitmap
+import com.maxmfonseca.pontinho.BuildConfig
 import com.maxmfonseca.pontinho.domain.model.Card
 import com.maxmfonseca.pontinho.domain.model.Rank
 import com.maxmfonseca.pontinho.domain.model.Suit
@@ -11,6 +12,8 @@ import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionResult
 import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
 import com.maxmfonseca.pontinho.domain.recognition.RecognizedCard
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionDiagnosticBox
+import com.maxmfonseca.pontinho.domain.recognition.RecognitionDiagnostics
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionWarning
 import com.maxmfonseca.pontinho.domain.recognition.YoloRecognitionMetadata
 import kotlinx.coroutines.CancellationException
@@ -27,10 +30,12 @@ import kotlinx.coroutines.withContext
 class SingleStageCardRecognitionEngineFactory internal constructor(
     private val runnerFactory: (ByteArray, YoloRecognitionMetadata) -> YoloRunner,
     private val dispatcher: CoroutineDispatcher,
+    private val diagnosticsEnabled: Boolean = BuildConfig.DEBUG,
 ) : CardRecognitionEngineFactory {
     constructor() : this(
         runnerFactory = LiteRtYoloRunner::create,
         dispatcher = Dispatchers.Default,
+        diagnosticsEnabled = BuildConfig.DEBUG,
     )
 
     override fun create(model: ByteArray, metadata: YoloRecognitionMetadata): CardRecognitionEngine =
@@ -38,6 +43,7 @@ class SingleStageCardRecognitionEngineFactory internal constructor(
             runner = runnerFactory(model.copyOf(), metadata),
             metadata = metadata,
             dispatcher = dispatcher,
+            diagnosticsEnabled = diagnosticsEnabled,
         )
 }
 
@@ -50,6 +56,7 @@ internal class SingleStageCardRecognitionEngine(
     private val metadata: YoloRecognitionMetadata,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val diagnosticsEnabled: Boolean = BuildConfig.DEBUG,
     private val prepare: (Bitmap) -> PreparedYoloImage = {
         YoloLetterbox.prepare(it, metadata.inputWidth)
     },
@@ -77,8 +84,9 @@ internal class SingleStageCardRecognitionEngine(
                     context.ensureActive()
                     val output = runner.run(input)
                     context.ensureActive()
+                    var postprocessDiagnostics: YoloPostprocessDiagnostics? = null
                     val detections = try {
-                        YoloPostProcessor.decode(
+                        YoloPostProcessor.decodeWithDiagnostics(
                             output = output.values,
                             shape = output.shape,
                             geometry = input.geometry,
@@ -87,17 +95,31 @@ internal class SingleStageCardRecognitionEngine(
                                 iouThreshold = metadata.iouThreshold,
                                 maxCards = metadata.maxCards,
                             ),
+                            onDiagnostics = { postprocessDiagnostics = it },
+                        )
+                    } catch (_: IncompleteYoloDetections) {
+                        throw CardRecognitionFailure.IncompleteCards(
+                            diagnostics(input, requireNotNull(postprocessDiagnostics), elapsedMillis(start)),
                         )
                     } catch (tooMany: TooManyYoloDetections) {
-                        throw CardRecognitionFailure.TooManyCards(tooMany.count)
+                        throw CardRecognitionFailure.TooManyCards(
+                            tooMany.count,
+                            diagnostics(input, requireNotNull(postprocessDiagnostics), elapsedMillis(start)),
+                        )
                     }
-                    if (detections.isEmpty()) throw CardRecognitionFailure.NoCards()
+                    if (detections.isEmpty()) {
+                        throw CardRecognitionFailure.NoCards(
+                            diagnostics(input, requireNotNull(postprocessDiagnostics), elapsedMillis(start)),
+                        )
+                    }
                     val cards = detections.map(::recognizedCard)
                     context.ensureActive()
+                    val durationMillis = elapsedMillis(start)
                     CardRecognitionResult(
                         candidates = cards,
-                        durationMillis = (nanoTime() - start).coerceAtLeast(0) / 1_000_000,
+                        durationMillis = durationMillis,
                         modelVersion = metadata.modelVersion,
+                        diagnostics = diagnostics(input, requireNotNull(postprocessDiagnostics), durationMillis),
                     )
                 } finally {
                     synchronized(stateLock) {
@@ -139,6 +161,45 @@ internal class SingleStageCardRecognitionEngine(
             closeCompletion.completeExceptionally(failure)
             throw failure
         }
+    }
+
+    private fun elapsedMillis(start: Long): Long = (nanoTime() - start).coerceAtLeast(0) / 1_000_000
+
+    private fun diagnostics(
+        input: PreparedYoloImage,
+        postprocess: YoloPostprocessDiagnostics,
+        durationMillis: Long,
+    ): RecognitionDiagnostics? {
+        if (!diagnosticsEnabled) return null
+        val geometry = input.geometry
+        return RecognitionDiagnostics(
+            sourceWidth = geometry.sourceWidth,
+            sourceHeight = geometry.sourceHeight,
+            letterboxScale = geometry.scale,
+            padLeft = geometry.padX.toInt(),
+            padTop = geometry.padY.toInt(),
+            padRight = geometry.padRight,
+            padBottom = geometry.padBottom,
+            rawCandidateCount = postprocess.rawCandidateCount,
+            maximumScore = postprocess.maximumScore,
+            confidenceThreshold = metadata.confidenceThreshold,
+            iouThreshold = metadata.iouThreshold,
+            rejectedBelowConfidence = postprocess.rejectedBelowConfidence,
+            rejectedByClassNms = postprocess.rejectedByClassNms,
+            rejectedByPhysicalNms = postprocess.rejectedByPhysicalNms,
+            rejectedIncomplete = postprocess.rejectedIncomplete,
+            finalBoxes = postprocess.finalDetections.map { detection ->
+                RecognitionDiagnosticBox(
+                    classIndex = detection.classIndex,
+                    confidence = detection.confidence,
+                    left = detection.left,
+                    top = detection.top,
+                    right = detection.right,
+                    bottom = detection.bottom,
+                )
+            },
+            durationMillis = durationMillis,
+        )
     }
 
     private fun recognizedCard(detection: RawYoloDetection): RecognizedCard {

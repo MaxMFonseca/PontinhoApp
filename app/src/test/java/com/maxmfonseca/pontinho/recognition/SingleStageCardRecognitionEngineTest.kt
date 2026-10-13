@@ -11,7 +11,9 @@ import com.maxmfonseca.pontinho.domain.recognition.YoloRecognitionMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -67,6 +69,38 @@ class SingleStageCardRecognitionEngineTest {
     }
 
     @Test
+    fun `mixed complete and clipped candidates reject the whole capture as incomplete`() {
+        val failure = assertThrows(CardRecognitionFailure.IncompleteCards::class.java) {
+            runBlocking {
+                engine(output(
+                    detection(anchor = 0, left = .20f),
+                    detection(anchor = 1, left = -.05f),
+                )).recognize(bitmap())
+            }
+        }
+
+        assertEquals("Potentially truncated cards require a new capture", failure.message)
+    }
+
+    @Test
+    fun `only clipped candidates are incomplete rather than no cards`() {
+        assertThrows(CardRecognitionFailure.IncompleteCards::class.java) {
+            runBlocking {
+                engine(output(detection(left = -.05f))).recognize(bitmap())
+            }
+        }
+    }
+
+    @Test
+    fun `low confidence clipped noise remains no cards`() {
+        assertThrows(CardRecognitionFailure.NoCards::class.java) {
+            runBlocking {
+                engine(output(detection(score = .2f, left = -.05f))).recognize(bitmap())
+            }
+        }
+    }
+
+    @Test
     fun `malformed raw tensor is hidden behind inference failure`() {
         val engine = engine(YoloTensorOutput(FloatArray(1), intArrayOf(1, 1, 1)))
 
@@ -81,6 +115,58 @@ class SingleStageCardRecognitionEngineTest {
         val engine = engine(output(detection()), nanoTime = times::removeFirst)
 
         assertEquals(123L, engine.recognize(bitmap()).durationMillis)
+    }
+
+    @Test
+    fun `debug diagnostics report geometry scores rejections final boxes and duration`() = runBlocking {
+        val times = ArrayDeque(listOf(1_000_000_000L, 1_042_000_000L))
+        val result = engine(
+            output(
+                detection(anchor = 0, score = .9f),
+                detection(anchor = 1, score = .8f, left = .11f),
+                detection(anchor = 2, score = .2f, left = .7f),
+            ),
+            nanoTime = times::removeFirst,
+            diagnosticsEnabled = true,
+        ).recognize(bitmap())
+
+        val diagnostics = requireNotNull(result.diagnostics)
+        assertEquals(100, diagnostics.sourceWidth)
+        assertEquals(100, diagnostics.sourceHeight)
+        assertEquals(6.4, diagnostics.letterboxScale, 0.0)
+        assertEquals(2, diagnostics.rawCandidateCount)
+        assertEquals(.9f, diagnostics.maximumScore, 0f)
+        assertEquals(8398, diagnostics.rejectedBelowConfidence)
+        assertEquals(1, diagnostics.rejectedByClassNms)
+        assertEquals(0, diagnostics.rejectedByPhysicalNms)
+        assertEquals(0, diagnostics.rejectedIncomplete)
+        assertEquals(1, diagnostics.finalBoxes.size)
+        assertEquals(42L, diagnostics.durationMillis)
+    }
+
+    @Test
+    fun `zero final detections preserve maximum raw score and rejection diagnostics`() {
+        val failure = assertThrows(CardRecognitionFailure.NoCards::class.java) {
+            runBlocking {
+                engine(
+                    output(detection(score = .2f)),
+                    diagnosticsEnabled = true,
+                ).recognize(bitmap())
+            }
+        }
+
+        val diagnostics = requireNotNull(failure.diagnostics)
+        assertEquals(0, diagnostics.rawCandidateCount)
+        assertEquals(.2f, diagnostics.maximumScore, 0f)
+        assertEquals(8400, diagnostics.rejectedBelowConfidence)
+        assertTrue(diagnostics.finalBoxes.isEmpty())
+    }
+
+    @Test
+    fun `diagnostics are absent when collection is disabled`() = runBlocking {
+        val result = engine(output(detection()), diagnosticsEnabled = false).recognize(bitmap())
+
+        assertNull(result.diagnostics)
     }
 
     @Test
@@ -101,11 +187,13 @@ class SingleStageCardRecognitionEngineTest {
     private fun engine(
         output: YoloTensorOutput,
         nanoTime: () -> Long = { 0L },
+        diagnosticsEnabled: Boolean = false,
     ) = SingleStageCardRecognitionEngine(
         runner = FakeRunner(output),
         metadata = metadata(),
         dispatcher = Dispatchers.Unconfined,
         nanoTime = nanoTime,
+        diagnosticsEnabled = diagnosticsEnabled,
         prepare = { prepared() },
     )
 

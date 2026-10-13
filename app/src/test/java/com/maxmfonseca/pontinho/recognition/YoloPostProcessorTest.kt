@@ -3,6 +3,7 @@ package com.maxmfonseca.pontinho.recognition
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -38,6 +39,22 @@ class YoloPostProcessorTest {
                     assertEquals(case.getString("id"), case.getInt("expectedCount"), error.count)
                     assertDetections(case, error.detections)
                 }
+                "INCOMPLETE_DETECTIONS" -> {
+                    val error = assertThrows(case.getString("id"), IncompleteYoloDetections::class.java) {
+                        YoloPostProcessor.decode(
+                            output,
+                            intArrayOf(1, 56, 8400),
+                            geometry,
+                            YoloGoldenFixture.settings(case),
+                        )
+                    }
+                    assertEquals(
+                        case.getString("id"),
+                        case.getJSONArray("expectedIncompleteAnchors").toIntList(),
+                        error.anchorIndexes,
+                    )
+                    assertDetections(case, error.detections)
+                }
                 else -> assertDetections(
                     case,
                     YoloPostProcessor.decode(
@@ -65,6 +82,101 @@ class YoloPostProcessorTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun `otherwise viable clipped candidates are reported without losing complete detections`() {
+        val output = FloatArray(56 * 8400)
+        fun candidate(anchor: Int, centerX: Float, score: Float) {
+            output[anchor] = centerX
+            output[8400 + anchor] = .5f
+            output[2 * 8400 + anchor] = .2f
+            output[3 * 8400 + anchor] = .3f
+            output[4 * 8400 + anchor] = score
+        }
+        candidate(anchor = 0, centerX = .5f, score = .9f)
+        candidate(anchor = 7, centerX = .05f, score = .8f)
+
+        val failure = assertThrows(IncompleteYoloDetections::class.java) {
+            YoloPostProcessor.decode(
+                output,
+                intArrayOf(1, 56, 8400),
+                LetterboxGeometry.forSource(640, 640),
+                YoloGoldenFixture.settings(),
+            )
+        }
+
+        assertEquals(listOf(7), failure.anchorIndexes)
+        assertEquals(listOf(0), failure.detections.map { it.anchorIndex })
+    }
+
+    @Test
+    fun `nms suppresses weaker clipped duplicate before incomplete classification`() {
+        val output = FloatArray(56 * 8400)
+        fun candidate(anchor: Int, centerX: Float, score: Float) {
+            output[anchor] = centerX
+            output[8400 + anchor] = .5f
+            output[2 * 8400 + anchor] = .2f
+            output[3 * 8400 + anchor] = .25f
+            output[4 * 8400 + anchor] = score
+        }
+        candidate(anchor = 0, centerX = .1f, score = .9f)
+        candidate(anchor = 1, centerX = .09f, score = .8f)
+
+        val detections = YoloPostProcessor.decode(
+            output,
+            intArrayOf(1, 56, 8400),
+            LetterboxGeometry.forSource(640, 640),
+            YoloGoldenFixture.settings(),
+        )
+
+        assertEquals(listOf(0), detections.map { it.anchorIndex })
+    }
+
+    @Test
+    fun `surviving clipped candidate invalidates capture after nms`() {
+        val output = FloatArray(56 * 8400)
+        fun candidate(anchor: Int, centerX: Float, score: Float) {
+            output[anchor] = centerX
+            output[8400 + anchor] = .5f
+            output[2 * 8400 + anchor] = .2f
+            output[3 * 8400 + anchor] = .25f
+            output[4 * 8400 + anchor] = score
+        }
+        candidate(anchor = 0, centerX = .1f, score = .8f)
+        candidate(anchor = 1, centerX = .09f, score = .9f)
+
+        val failure = assertThrows(IncompleteYoloDetections::class.java) {
+            YoloPostProcessor.decode(
+                output,
+                intArrayOf(1, 56, 8400),
+                LetterboxGeometry.forSource(640, 640),
+                YoloGoldenFixture.settings(),
+            )
+        }
+
+        assertEquals(listOf(1), failure.anchorIndexes)
+        assertTrue(failure.detections.isEmpty())
+    }
+
+    @Test
+    fun `low confidence edge noise is not reported as an incomplete card`() {
+        val output = FloatArray(56 * 8400).apply {
+            this[0] = .05f
+            this[8400] = .5f
+            this[2 * 8400] = .2f
+            this[3 * 8400] = .3f
+            this[4 * 8400] = .2f
+        }
+
+        val detections = YoloPostProcessor.decode(
+            output,
+            intArrayOf(1, 56, 8400),
+            LetterboxGeometry.forSource(640, 640),
+            YoloGoldenFixture.settings(),
+        )
+
+        assertTrue(detections.isEmpty())
     }
 
     @Test

@@ -34,10 +34,100 @@ data class CardRecognitionResult(
     val candidates: List<RecognizedCard>,
     val durationMillis: Long,
     val modelVersion: String,
+    val diagnostics: RecognitionDiagnostics? = null,
 ) {
     init {
         require(durationMillis >= 0)
         require(modelVersion.isNotBlank())
+    }
+}
+
+/** Numeric-only debug evidence. It deliberately has no image, path, URI, EXIF, or user fields. */
+data class RecognitionDiagnostics(
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+    val letterboxScale: Double,
+    val padLeft: Int,
+    val padTop: Int,
+    val padRight: Int,
+    val padBottom: Int,
+    val rawCandidateCount: Int,
+    val maximumScore: Float,
+    val confidenceThreshold: Double,
+    val iouThreshold: Double,
+    val rejectedBelowConfidence: Int,
+    val rejectedByClassNms: Int,
+    val rejectedByPhysicalNms: Int,
+    val rejectedIncomplete: Int,
+    val finalBoxes: List<RecognitionDiagnosticBox>,
+    val durationMillis: Long,
+) {
+    init {
+        require(sourceWidth > 0 && sourceHeight > 0)
+        require(letterboxScale.isFinite() && letterboxScale > 0.0)
+        require(listOf(padLeft, padTop, padRight, padBottom).all { it >= 0 })
+        require(rawCandidateCount >= 0)
+        require(maximumScore.isFinite() && maximumScore in 0f..1f)
+        require(confidenceThreshold.isFinite() && confidenceThreshold in 0.0..1.0)
+        require(iouThreshold.isFinite() && iouThreshold in 0.0..1.0)
+        require(
+            listOf(
+                rejectedBelowConfidence,
+                rejectedByClassNms,
+                rejectedByPhysicalNms,
+                rejectedIncomplete,
+            ).all { it >= 0 },
+        )
+        require(durationMillis >= 0)
+    }
+
+    /** Stable compact JSON whose values are numbers or numeric arrays only. */
+    fun toJson(): String = buildString {
+        append("{\"sourceWidth\":").append(sourceWidth)
+        append(",\"sourceHeight\":").append(sourceHeight)
+        append(",\"letterboxScale\":").append(letterboxScale)
+        append(",\"padding\":{")
+        append("\"left\":").append(padLeft)
+        append(",\"top\":").append(padTop)
+        append(",\"right\":").append(padRight)
+        append(",\"bottom\":").append(padBottom).append('}')
+        append(",\"rawCandidateCount\":").append(rawCandidateCount)
+        append(",\"maximumScore\":").append(maximumScore)
+        append(",\"confidenceThreshold\":").append(confidenceThreshold)
+        append(",\"iouThreshold\":").append(iouThreshold)
+        append(",\"rejected\":{")
+        append("\"belowConfidence\":").append(rejectedBelowConfidence)
+        append(",\"classNms\":").append(rejectedByClassNms)
+        append(",\"physicalNms\":").append(rejectedByPhysicalNms)
+        append(",\"incomplete\":").append(rejectedIncomplete).append('}')
+        append(",\"finalBoxes\":[")
+        finalBoxes.forEachIndexed { index, box ->
+            if (index > 0) append(',')
+            append('[').append(box.classIndex)
+            append(',').append(box.confidence)
+            append(',').append(box.left)
+            append(',').append(box.top)
+            append(',').append(box.right)
+            append(',').append(box.bottom).append(']')
+        }
+        append("]")
+        append(",\"durationMillis\":").append(durationMillis).append('}')
+    }
+}
+
+data class RecognitionDiagnosticBox(
+    val classIndex: Int,
+    val confidence: Float,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+) {
+    init {
+        require(classIndex in 0..51)
+        require(confidence.isFinite() && confidence in 0f..1f)
+        require(listOf(left, top, right, bottom).all { it.isFinite() && it in 0f..1f })
+        require(left < right && top < bottom)
     }
 }
 

@@ -7,12 +7,15 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+internal typealias SingleStageRecognitionAssetReader =
+    suspend () -> Pair<ByteArray?, ByteArray?>
+
 /** Asset I/O/hash verification runs off-main; querying availability never creates a native detector.
  * One provider-owned initialization is started only by recognition. Cancelling a screen cancels its
  * await/inference, not the reusable detector. Closing the provider also disposes a late native result.
  */
 class VerifiedCardRecognitionEngineProvider internal constructor(
-    private val readAssets: suspend () -> Any?,
+    private val readAssets: SingleStageRecognitionAssetReader,
     private val factory: CardRecognitionEngineFactory?,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : CardRecognitionEngineProvider {
@@ -23,12 +26,9 @@ class VerifiedCardRecognitionEngineProvider internal constructor(
     private val state = MutableStateFlow<RecognitionAvailability>(RecognitionAvailability.Checking)
     override val availability = state.asStateFlow()
     private val verified = scope.async {
-        val sources = try { readAssets() }
+        val (modelSource, releaseSource) = try { readAssets() }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { null }
-        val pair = sources as? Pair<*, *>
-        val modelSource = pair?.first as? ByteArray
-        val releaseSource = pair?.second as? ByteArray
+        catch (_: Exception) { null to null }
         // Own immutable snapshots through verification and native construction.
         val model = modelSource?.copyOf()
         val result = RecognitionAssetVerifier(allowExperimental = BuildConfig.DEBUG)

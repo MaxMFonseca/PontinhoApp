@@ -98,6 +98,7 @@ fun ScannerScreen(
                 }
             }
         }
+        RecognitionDiagnosticsPanel(state)
         Action(R.string.scanner_manual, "scanner_manual", !saving, actions.onManual)
         Action(R.string.cancel, "scanner_cancel", !saving, actions.onCancel)
     }

@@ -1,0 +1,53 @@
+{
+  "base_model_architecture": "ultralytics:yolov8:detect:n",
+  "base_weights": "checkpoints/yolov8n.pt",
+  "base_weights_sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+  "command": [
+    "python",
+    "-m",
+    "pontinho_yolo.train",
+    "--config",
+    "C:\\Users\\maxma\\OneDrive\\Documentos\\ChatGPT\\Pontinho\\ml\\card-recognition\\yolo\\config\\train.yaml",
+    "--run-id",
+    "playing-cards-v4-yolov8n-20261016"
+  ],
+  "config_sha256": "fe3e776340517c60f720a885235e4e7ce3f56828671238124a85233902860c3f",
+  "created_at": "2026-10-16T18:54:53.377912Z",
+  "dataset_archive_sha256": "461d1392bb70a0cd2fdb3b4d7c682e0544792b33e64e9fe79e0084e03bc19a74",
+  "dataset_audit_sha256": "60261271beb9b325cb9808482b375376e5024facaad826cea01b061b2df2baf6",
+  "dataset_config_sha256": "7f8ef3708bfce20712b7ace8534a0fbb911b70cf371117df8a39948d1529b650",
+  "dataset_tree_sha256": "10792068ae7e1e20c89926f232a2b00e5a443bf1179e7a18e49cb6032d06bdaf",
+  "dependency_lock_sha256": "b815ec197e760cedcd6bc750502e6ea0c12dc873d144117c75901a324bbcc5dd",
+  "environment": {
+    "cuda_available": true,
+    "cuda_device": 0,
+    "cuda_device_name": "NVIDIA GeForce RTX 4070 Ti SUPER",
+    "cuda_version": "13.0",
+    "machine": "AMD64",
+    "platform": "Windows-10-10.0.26100-SP0",
+    "python": "3.11.17",
+    "torch": "2.14.1+cu130",
+    "ultralytics": "8.4.177"
+  },
+  "environment_sha256": "d2f8f7ebf0f6ffab8731fcf72c4483f54dde611b7206d668693ce5bc844d4c2e",
+  "run_id": "playing-cards-v4-yolov8n-20261016",
+  "schema_version": 2,
+  "selected_checkpoint": "runs/playing-cards-v4-yolov8n-20261016/weights/best.pt",
+  "selected_checkpoint_sha256": "695e860b6dc323ce12f582da2827ce2ed63b4a7279e5267474c5535a433c4712",
+  "source_receipt_file_sha256": "259e224e3dd6b40c12edb4143007d1efd65cce531d2f130159ddad3cf7eebd2e",
+  "training_settings": {
+    "batch": 16,
+    "data": "C:\\Users\\maxma\\OneDrive\\Documentos\\ChatGPT\\Pontinho\\ml\\card-recognition\\yolo\\config\\dataset.yaml",
+    "deterministic": true,
+    "device": 0,
+    "epochs": 100,
+    "exist_ok": false,
+    "imgsz": 640,
+    "name": "playing-cards-v4-yolov8n-20261016",
+    "patience": 20,
+    "project": "C:\\Users\\maxma\\OneDrive\\Documentos\\ChatGPT\\Pontinho\\ml\\card-recognition\\yolo\\runs",
+    "resume": false,
+    "seed": 1337
+  },
+  "training_settings_sha256": "6ec983dc888166875e6a895de487ea23f7e5ed2a059728e2c8b5e8f27e7fcc31"
+}

@@ -2,4 +2,6 @@
 <resources>
     <bool name="allow_experimental_card_model">true</bool>
     <string name="scanner_title">Conferir cartas (beta experimental)</string>
+    <string name="scanner_diagnostics">Diagnóstico da leitura</string>
+    <string name="scanner_diagnostics_copy">Copiar JSON</string>
 </resources>
