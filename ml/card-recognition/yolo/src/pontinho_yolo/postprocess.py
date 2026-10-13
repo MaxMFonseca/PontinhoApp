@@ -13,6 +13,8 @@ INPUT_SIZE = 640
 OUTPUT_SHAPE = (1, 56, 8400)
 OUTPUT_BOX_COORDINATE_UNITS = "normalized-input-dimensions"
 PHYSICAL_DUPLICATE_IOU = 0.95
+CONTAINED_DUPLICATE_MIN_COVERAGE = 0.80
+CONTAINED_DUPLICATE_MAX_AREA_RATIO = 0.50
 BOUNDARY_EPSILON_PIXELS = 1e-4
 
 
@@ -209,7 +211,9 @@ def decode_yolo(
 
     priority = sorted(candidates, key=_priority_key)
     class_aware = _nms(priority, iou, class_aware=True)
-    physical = _nms(class_aware, PHYSICAL_DUPLICATE_IOU, class_aware=False)
+    physical = _suppress_contained_duplicates(
+        _nms(class_aware, PHYSICAL_DUPLICATE_IOU, class_aware=False)
+    )
     complete: list[Detection] = []
     incomplete_anchor_indexes: list[int] = []
     for candidate in physical:
@@ -226,7 +230,8 @@ def decode_yolo(
                     anchor_index=candidate.anchor_index,
                 )
             )
-    ordered = tuple(sorted(complete, key=_spatial_key))
+    consolidated = _consolidate_corner_indexes(complete)
+    ordered = tuple(sorted(consolidated, key=_spatial_key))
     if incomplete_anchor_indexes:
         raise IncompleteDetections(tuple(sorted(incomplete_anchor_indexes)), ordered)
     if len(ordered) > max_cards:
@@ -307,11 +312,46 @@ def _nms(candidates: list[Detection], threshold: float, *, class_aware: bool) ->
     return kept
 
 
+def _suppress_contained_duplicates(candidates: list[Detection]) -> list[Detection]:
+    """Remove small detections of artwork inside a detected physical card."""
+    return [
+        candidate
+        for candidate in candidates
+        if not any(
+            other is not candidate and _is_contained_duplicate(candidate.box, other.box)
+            for other in candidates
+        )
+    ]
+
+
+def _consolidate_corner_indexes(candidates: list[Detection]) -> list[Detection]:
+    """Convert the model's two printed-corner observations into physical cards."""
+    by_class: dict[int, list[Detection]] = {}
+    for candidate in candidates:
+        by_class.setdefault(candidate.class_index, []).append(candidate)
+    return [
+        candidate
+        for observations in by_class.values()
+        for candidate in observations[: (len(observations) + 1) // 2]
+    ]
+
+
+def _is_contained_duplicate(inner: Box, outer: Box) -> bool:
+    if inner.area <= 0.0 or inner.area > outer.area * CONTAINED_DUPLICATE_MAX_AREA_RATIO:
+        return False
+    intersection = _intersection_area(inner, outer)
+    return intersection / inner.area >= CONTAINED_DUPLICATE_MIN_COVERAGE
+
+
 def _intersection_over_union(first: Box, second: Box) -> float:
+    intersection = _intersection_area(first, second)
+    union = first.area + second.area - intersection
+    return intersection / union if union > 0.0 else 0.0
+
+
+def _intersection_area(first: Box, second: Box) -> float:
     left = max(first.left, second.left)
     top = max(first.top, second.top)
     right = min(first.right, second.right)
     bottom = min(first.bottom, second.bottom)
-    intersection = max(0.0, right - left) * max(0.0, bottom - top)
-    union = first.area + second.area - intersection
-    return intersection / union if union > 0.0 else 0.0
+    return max(0.0, right - left) * max(0.0, bottom - top)

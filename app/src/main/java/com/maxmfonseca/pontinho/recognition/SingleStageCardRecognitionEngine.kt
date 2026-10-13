@@ -187,6 +187,7 @@ internal class SingleStageCardRecognitionEngine(
             rejectedBelowConfidence = postprocess.rejectedBelowConfidence,
             rejectedByClassNms = postprocess.rejectedByClassNms,
             rejectedByPhysicalNms = postprocess.rejectedByPhysicalNms,
+            rejectedByIndexPairing = postprocess.rejectedByIndexPairing,
             rejectedIncomplete = postprocess.rejectedIncomplete,
             finalBoxes = postprocess.finalDetections.map { detection ->
                 RecognitionDiagnosticBox(

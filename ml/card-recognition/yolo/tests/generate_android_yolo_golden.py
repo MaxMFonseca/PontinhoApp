@@ -312,7 +312,6 @@ def build_fixture() -> dict:
                 ],
                 "expected": [
                     detection(0, 0, 0.91, [0.0, 0.0, 1.0, 1.0]),
-                    detection(2, 2, 0.88, [0.125, 0.15625, 0.375, 0.46875]),
                 ],
                 "expectedError": "INCOMPLETE_DETECTIONS",
                 "expectedIncompleteAnchors": [1],
@@ -327,7 +326,6 @@ def build_fixture() -> dict:
                 ],
                 "expected": [
                     detection(0, 36, 0.93, [0.0, 0.0, 1.0, 1.0]),
-                    detection(2, 38, 0.86, [0.15625, 0.125, 0.46875, 0.375]),
                 ],
                 "expectedError": "INCOMPLETE_DETECTIONS",
                 "expectedIncompleteAnchors": [1],
@@ -385,13 +383,13 @@ def build_fixture() -> dict:
                 "id": "deterministic-priority-and-spatial-order",
                 "geometry": geometry(640, 640),
                 "anchors": [
-                    anchor(7, [500 / 640, 100 / 640, 40 / 640, 60 / 640], 4, 0.8),
+                    anchor(7, [500 / 640, 100 / 640, 40 / 640, 60 / 640], 6, 0.8),
                     anchor(2, [100 / 640, 100 / 640, 40 / 640, 60 / 640], 5, 0.8),
                     anchor(3, [100 / 640, 100 / 640, 40 / 640, 60 / 640], 4, 0.8),
                 ],
                 "expected": [
                     detection(3, 4, 0.8, [0.125, 0.109375, 0.1875, 0.203125]),
-                    detection(7, 4, 0.8, [0.75, 0.109375, 0.8125, 0.203125]),
+                    detection(7, 6, 0.8, [0.75, 0.109375, 0.8125, 0.203125]),
                 ],
             },
             {

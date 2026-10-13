@@ -10,6 +10,7 @@ import com.maxmfonseca.pontinho.domain.recognition.RecognitionWarning
 import com.maxmfonseca.pontinho.domain.recognition.YoloRecognitionMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -142,6 +143,33 @@ class SingleStageCardRecognitionEngineTest {
         assertEquals(0, diagnostics.rejectedIncomplete)
         assertEquals(1, diagnostics.finalBoxes.size)
         assertEquals(42L, diagnostics.durationMillis)
+    }
+
+    @Test
+    fun `real capture pairs printed corner indexes and reports the consolidation`() = runBlocking {
+        val result = engine(
+            output(
+                detection(0, 41, .8098032f, .22280036f, .37777644f, .14517079f, .05305886f),
+                detection(1, 4, .7882842f, .2859738f, .8047967f, .16541775f, .06699705f),
+                detection(2, 41, .8121048f, .66277957f, .1803369f, .11032659f, .04684334f),
+                detection(3, 4, .7137592f, .7532467f, .5183308f, .1182901f, .0444844f),
+            ),
+            diagnosticsEnabled = true,
+        ).recognize(bitmap())
+
+        assertEquals(
+            listOf(
+                Card.Suited(Rank.TWO, Suit.CLUBS),
+                Card.Suited(Rank.JACK, Suit.DIAMONDS),
+            ),
+            result.candidates.map { it.card },
+        )
+        assertEquals(
+            2,
+            JSONObject(requireNotNull(result.diagnostics).toJson())
+                .getJSONObject("rejected")
+                .getInt("indexPairing"),
+        )
     }
 
     @Test

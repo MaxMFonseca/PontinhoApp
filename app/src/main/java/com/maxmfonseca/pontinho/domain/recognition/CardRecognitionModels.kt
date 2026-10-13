@@ -58,6 +58,7 @@ data class RecognitionDiagnostics(
     val rejectedBelowConfidence: Int,
     val rejectedByClassNms: Int,
     val rejectedByPhysicalNms: Int,
+    val rejectedByIndexPairing: Int,
     val rejectedIncomplete: Int,
     val finalBoxes: List<RecognitionDiagnosticBox>,
     val durationMillis: Long,
@@ -75,6 +76,7 @@ data class RecognitionDiagnostics(
                 rejectedBelowConfidence,
                 rejectedByClassNms,
                 rejectedByPhysicalNms,
+                rejectedByIndexPairing,
                 rejectedIncomplete,
             ).all { it >= 0 },
         )
@@ -99,6 +101,7 @@ data class RecognitionDiagnostics(
         append("\"belowConfidence\":").append(rejectedBelowConfidence)
         append(",\"classNms\":").append(rejectedByClassNms)
         append(",\"physicalNms\":").append(rejectedByPhysicalNms)
+        append(",\"indexPairing\":").append(rejectedByIndexPairing)
         append(",\"incomplete\":").append(rejectedIncomplete).append('}')
         append(",\"finalBoxes\":[")
         finalBoxes.forEachIndexed { index, box ->

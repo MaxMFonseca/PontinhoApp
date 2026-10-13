@@ -54,7 +54,7 @@ class ScannerScreenTest {
             rawCandidateCount = 0, maximumScore = .24f,
             confidenceThreshold = .25, iouThreshold = .45,
             rejectedBelowConfidence = 8400, rejectedByClassNms = 0,
-            rejectedByPhysicalNms = 0, rejectedIncomplete = 0,
+            rejectedByPhysicalNms = 0, rejectedByIndexPairing = 0, rejectedIncomplete = 0,
             finalBoxes = emptyList(), durationMillis = 25,
         )
         var state by mutableStateOf(review().copy(diagnostics = diagnostics))

@@ -746,18 +746,6 @@
             1.0,
             1.0
           ]
-        },
-        {
-          "anchorIndex": 2,
-          "classIndex": 2,
-          "label": "10H",
-          "confidence": 0.88,
-          "normalizedBox": [
-            0.125,
-            0.15625,
-            0.375,
-            0.46875
-          ]
         }
       ],
       "expectedError": "INCOMPLETE_DETECTIONS",
@@ -829,18 +817,6 @@
             0.0,
             1.0,
             1.0
-          ]
-        },
-        {
-          "anchorIndex": 2,
-          "classIndex": 38,
-          "label": "AH",
-          "confidence": 0.86,
-          "normalizedBox": [
-            0.15625,
-            0.125,
-            0.46875,
-            0.375
           ]
         }
       ],
@@ -1105,7 +1081,7 @@
             0.09375
           ],
           "scores": {
-            "4": 0.8
+            "6": 0.8
           }
         },
         {
@@ -1148,8 +1124,8 @@
         },
         {
           "anchorIndex": 7,
-          "classIndex": 4,
-          "label": "2C",
+          "classIndex": 6,
+          "label": "2H",
           "confidence": 0.8,
           "normalizedBox": [
             0.75,

@@ -255,6 +255,7 @@ class ScannerDiagnosticsTest {
             rejectedBelowConfidence = 4,
             rejectedByClassNms = 1,
             rejectedByPhysicalNms = 0,
+            rejectedByIndexPairing = 0,
             rejectedIncomplete = 1,
             finalBoxes = listOf(RecognitionDiagnosticBox(7, .83f, .1f, .2f, .3f, .4f)),
             durationMillis = 37,

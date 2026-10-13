@@ -126,10 +126,81 @@ def test_physical_duplicate_suppression_keeps_adjacent_different_cards() -> None
     assert [(item.class_index, item.anchor_index) for item in detections] == [(2, 0), (8, 1)]
 
 
+def test_contained_symbol_detection_keeps_the_whole_card_even_with_lower_confidence() -> None:
+    """Removing containment suppression would count a card and its printed symbol twice."""
+    output = _output(
+        (0, 160 / 640, 160 / 640, 120 / 640, 180 / 640, 2, 0.80),
+        (1, 130 / 640, 115 / 640, 36 / 640, 48 / 640, 8, 0.95),
+    )
+
+    detections = decode_yolo(
+        output,
+        LetterboxGeometry.for_source(640, 640),
+        confidence=0.1,
+        iou=0.5,
+        max_cards=10,
+    )
+
+    assert [(item.class_index, item.anchor_index) for item in detections] == [(2, 0)]
+
+
+@pytest.mark.parametrize(
+    ("corner_detections", "expected_cards"),
+    [(1, 1), (2, 1), (3, 2), (4, 2), (5, 3), (6, 3)],
+)
+def test_corner_index_multiplicity_becomes_the_expected_duplicate_deck_card_count(
+    corner_detections: int,
+    expected_cards: int,
+) -> None:
+    """Treating each printed corner as a card would double every complete face-up card."""
+    rows = tuple(
+        (
+            anchor,
+            (50 + anchor * 90) / 640,
+            (100 + (anchor % 2) * 300) / 640,
+            40 / 640,
+            30 / 640,
+            2,
+            0.95 - anchor * 0.01,
+        )
+        for anchor in range(corner_detections)
+    )
+
+    detections = decode_yolo(
+        _output(*rows),
+        LetterboxGeometry.for_source(640, 640),
+        confidence=0.1,
+        iou=0.5,
+        max_cards=10,
+    )
+
+    assert len(detections) == expected_cards
+
+
+def test_real_debug_capture_pairs_two_corner_indexes_for_each_label() -> None:
+    """The reported JD/JD/2C/2C capture must produce one JD and one 2C."""
+    output = _output(
+        (0, 0.29538575, 0.40430588, 0.14517079, 0.05305886, 41, 0.8098032),
+        (1, 0.36868268, 0.8382952, 0.16541775, 0.06699705, 4, 0.7882842),
+        (2, 0.71794283, 0.20375857, 0.11032659, 0.04684334, 41, 0.8121048),
+        (3, 0.81239176, 0.540573, 0.1182901, 0.0444844, 4, 0.7137592),
+    )
+
+    detections = decode_yolo(
+        output,
+        LetterboxGeometry.for_source(640, 640),
+        confidence=0.65,
+        iou=0.3,
+        max_cards=10,
+    )
+
+    assert [(item.class_index, item.anchor_index) for item in detections] == [(4, 1), (41, 2)]
+
+
 def test_decode_uses_deterministic_priority_then_returns_spatial_order() -> None:
     """Tensor traversal order must not decide a confidence/box tie or final card order."""
     output = _output(
-        (7, 500 / 640, 100 / 640, 40 / 640, 60 / 640, 4, 0.80),
+        (7, 500 / 640, 100 / 640, 40 / 640, 60 / 640, 6, 0.80),
         (2, 100 / 640, 100 / 640, 40 / 640, 60 / 640, 5, 0.80),
         (3, 100 / 640, 100 / 640, 40 / 640, 60 / 640, 4, 0.80),
     )
@@ -142,7 +213,7 @@ def test_decode_uses_deterministic_priority_then_returns_spatial_order() -> None
         max_cards=10,
     )
 
-    assert [(item.class_index, item.anchor_index) for item in detections] == [(4, 3), (4, 7)]
+    assert [(item.class_index, item.anchor_index) for item in detections] == [(4, 3), (6, 7)]
 
 
 def test_decode_rejects_boxes_touching_letterbox_padding() -> None:

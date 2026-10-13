@@ -180,6 +180,39 @@ class YoloPostProcessorTest {
     }
 
     @Test
+    fun `contained symbols and paired identical corner indexes collapse`() {
+        val output = FloatArray(56 * 8400)
+        fun candidate(
+            anchor: Int,
+            centerX: Float,
+            centerY: Float,
+            width: Float,
+            height: Float,
+            classIndex: Int,
+            score: Float,
+        ) {
+            output[anchor] = centerX
+            output[8400 + anchor] = centerY
+            output[2 * 8400 + anchor] = width
+            output[3 * 8400 + anchor] = height
+            output[(4 + classIndex) * 8400 + anchor] = score
+        }
+        candidate(0, 100f / 640, 180f / 640, 100f / 640, 150f / 640, 2, .80f)
+        candidate(1, 75f / 640, 145f / 640, 30f / 640, 40f / 640, 8, .95f)
+        candidate(2, 300f / 640, 180f / 640, 100f / 640, 150f / 640, 2, .80f)
+        candidate(3, 275f / 640, 145f / 640, 30f / 640, 40f / 640, 2, .95f)
+
+        val detections = YoloPostProcessor.decode(
+            output,
+            intArrayOf(1, 56, 8400),
+            LetterboxGeometry.forSource(640, 640),
+            YoloGoldenFixture.settings(),
+        )
+
+        assertEquals(listOf(0), detections.map { it.anchorIndex })
+    }
+
+    @Test
     fun `malformed shape scores extents geometry and settings fail closed`() {
         val validGeometry = LetterboxGeometry.forSource(640, 640)
         val settings = YoloGoldenFixture.settings()

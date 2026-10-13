@@ -40,6 +40,7 @@ internal data class YoloPostprocessDiagnostics(
     val rejectedBelowConfidence: Int,
     val rejectedByClassNms: Int,
     val rejectedByPhysicalNms: Int,
+    val rejectedByIndexPairing: Int,
     val rejectedIncomplete: Int,
     val finalDetections: List<RawYoloDetection>,
 )
@@ -80,6 +81,8 @@ object YoloPostProcessor {
     private const val OUTPUT_CHANNELS = 56
     private const val OUTPUT_ANCHORS = 8400
     private const val PHYSICAL_DUPLICATE_IOU = 0.95
+    private const val CONTAINED_DUPLICATE_MIN_COVERAGE = 0.80
+    private const val CONTAINED_DUPLICATE_MAX_AREA_RATIO = 0.50
     private const val BOUNDARY_EPSILON_PIXELS = 1e-4
 
     fun decode(
@@ -159,7 +162,9 @@ object YoloPostProcessor {
 
         val priority = candidates.sortedWith(priorityOrder)
         val classAware = nms(priority, settings.iouThreshold, classAware = true)
-        val physical = nms(classAware, PHYSICAL_DUPLICATE_IOU, classAware = false)
+        val physical = suppressContainedDuplicates(
+            nms(classAware, PHYSICAL_DUPLICATE_IOU, classAware = false),
+        )
         val incompleteAnchorIndexes = mutableListOf<Int>()
         val complete = buildList {
             physical.forEach { candidate ->
@@ -171,7 +176,8 @@ object YoloPostProcessor {
                 }
             }
         }
-        val ordered = complete.sortedWith(spatialOrder).map { candidate ->
+        val consolidated = consolidateCornerIndexes(complete)
+        val ordered = consolidated.sortedWith(spatialOrder).map { candidate ->
             RawYoloDetection(
                 classIndex = candidate.classIndex,
                 label = YoloCardLabels.values[candidate.classIndex],
@@ -190,6 +196,7 @@ object YoloPostProcessor {
                 rejectedBelowConfidence = OUTPUT_ANCHORS - candidates.size,
                 rejectedByClassNms = candidates.size - classAware.size,
                 rejectedByPhysicalNms = classAware.size - physical.size,
+                rejectedByIndexPairing = complete.size - consolidated.size,
                 rejectedIncomplete = incompleteAnchorIndexes.size,
                 finalDetections = ordered.toList(),
             ),
@@ -255,12 +262,33 @@ object YoloPostProcessor {
             }
         }
 
+    private fun suppressContainedDuplicates(candidates: List<Candidate>): List<Candidate> =
+        candidates.filter { candidate ->
+            candidates.none { other ->
+                other !== candidate && isContainedDuplicate(candidate.box, other.box)
+            }
+        }
+
+    private fun consolidateCornerIndexes(candidates: List<Candidate>): List<Candidate> =
+        candidates.groupBy { it.classIndex }.values.flatMap { observations ->
+            observations.take((observations.size + 1) / 2)
+        }
+
+    private fun isContainedDuplicate(inner: Box, outer: Box): Boolean {
+        if (inner.area <= 0.0 || inner.area > outer.area * CONTAINED_DUPLICATE_MAX_AREA_RATIO) return false
+        return intersectionArea(inner, outer) / inner.area >= CONTAINED_DUPLICATE_MIN_COVERAGE
+    }
+
     private fun intersectionOverUnion(first: Box, second: Box): Double {
-        val intersectionWidth = max(0.0, min(first.right, second.right) - max(first.left, second.left))
-        val intersectionHeight = max(0.0, min(first.bottom, second.bottom) - max(first.top, second.top))
-        val intersection = intersectionWidth * intersectionHeight
+        val intersection = intersectionArea(first, second)
         val union = first.area + second.area - intersection
         return if (union > 0.0) intersection / union else 0.0
+    }
+
+    private fun intersectionArea(first: Box, second: Box): Double {
+        val intersectionWidth = max(0.0, min(first.right, second.right) - max(first.left, second.left))
+        val intersectionHeight = max(0.0, min(first.bottom, second.bottom) - max(first.top, second.top))
+        return intersectionWidth * intersectionHeight
     }
 
     private data class Box(
