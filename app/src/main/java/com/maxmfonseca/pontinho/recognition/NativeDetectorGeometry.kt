@@ -2,6 +2,15 @@ package com.maxmfonseca.pontinho.recognition
 
 import android.graphics.RectF
 
+/** Legacy geometry fixture value retained only by its focused helper tests. */
+internal data class RawCardBox(
+    val confidence: Float,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+)
+
 internal const val NATIVE_BOX_POLICY = "mediapipe-integer-interior-1px-v1"
 
 /** Native has already clamped/truncated origin and extent independently. Never infer that

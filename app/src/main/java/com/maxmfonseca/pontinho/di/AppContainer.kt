@@ -14,7 +14,7 @@ import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngineProvider
 import com.maxmfonseca.pontinho.recognition.UnavailableCardRecognitionEngineProvider
 import com.maxmfonseca.pontinho.recognition.VerifiedCardRecognitionEngineProvider
-import com.maxmfonseca.pontinho.recognition.TwoStageCardRecognitionEngineFactory
+import com.maxmfonseca.pontinho.recognition.SingleStageCardRecognitionEngineFactory
 import com.maxmfonseca.pontinho.settings.DataStorePreferencesRepository
 import com.maxmfonseca.pontinho.settings.PreferencesRepository
 import java.io.IOException
@@ -29,7 +29,8 @@ interface AppContainer {
 
 class DefaultAppContainer internal constructor(
     applicationContext: Context,
-    recognitionEngineFactory: CardRecognitionEngineFactory? = TwoStageCardRecognitionEngineFactory(applicationContext),
+    // Stage 9 switches the asset reader from its legacy Triple to the verified Pair.
+    recognitionEngineFactory: CardRecognitionEngineFactory? = SingleStageCardRecognitionEngineFactory(),
 ) : AppContainer {
     private val database = Room.databaseBuilder(
         applicationContext,

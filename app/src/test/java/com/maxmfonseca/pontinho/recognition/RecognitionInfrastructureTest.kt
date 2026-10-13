@@ -1,7 +1,6 @@
 package com.maxmfonseca.pontinho.recognition
 
 import android.graphics.Bitmap
-import androidx.test.core.app.ApplicationProvider
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionEngine
 import com.maxmfonseca.pontinho.domain.recognition.CardRecognitionResult
 import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
@@ -12,16 +11,12 @@ import com.maxmfonseca.pontinho.domain.recognition.RecognitionUnavailableReason
 import com.maxmfonseca.pontinho.domain.model.Card
 import com.maxmfonseca.pontinho.domain.model.Rank
 import com.maxmfonseca.pontinho.domain.model.Suit
-import com.google.mediapipe.tasks.core.logging.TasksStatsLoggerFactory
-import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -29,35 +24,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 class RecognitionInfrastructureTest {
-    @Test
-    fun `real MediaPipe logger factory exercises every event path through the offline transport`() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-
-        val logger = TasksStatsLoggerFactory.create(context, "ObjectDetector", "IMAGE")
-
-        logger.logSessionStart()
-        logger.recordCpuInputArrival(1L)
-        logger.recordInvocationEnd(1L)
-        logger.logInitError()
-        logger.logSessionEnd()
-    }
-
-    @Test
-    fun `real ObjectDetector reaches model validation through the offline logger linkage`() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val invalidModel = ByteBuffer.allocateDirect(8).apply {
-            putLong(0x504f4e54494e484fL)
-            rewind()
-        }
-
-        val error = runCatching {
-            ObjectDetector.createFromBuffer(context, invalidModel)
-        }.exceptionOrNull()
-
-        assertTrue(error != null)
-        assertTrue(generateSequence(error) { it.cause }.none { it is NoClassDefFoundError })
-    }
-
     @Test
     fun `provider rejects every get after close`() {
         val provider = ProcessLifetimeCardRecognitionEngineProvider { FakeEngine() }

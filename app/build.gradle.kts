@@ -66,15 +66,25 @@ tasks.register("verifyOfflineScannerDependencies") {
             "transport-api-",
             "transport-runtime-",
             "transport-backend-cct-",
+            "tasks-vision-",
+            "tasks-core-",
+            "firebase-analytics-",
+            "firebase-crashlytics-",
             "firebase-encoders-json-",
             "firebase-encoders-proto-",
+            "play-services-measurement-",
+            "grpc-android-",
+            "grpc-okhttp-",
             "okhttp-",
             "retrofit-",
             "volley-",
             "httpclient-",
         )
-        val offenders = inputs.files
-            .map { it.name }
+        val artifacts = inputs.files.map { it.name }
+        check(artifacts.any { it == "litert-2.3.0.aar" }) {
+            "Offline scanner must contain exactly LiteRT 2.3.0"
+        }
+        val offenders = artifacts
             .filter { name -> forbiddenArtifactPrefixes.any(name::startsWith) }
             .sorted()
         check(offenders.isEmpty()) {
@@ -132,9 +142,7 @@ dependencies {
     implementation(libs.androidx.camera.view) {
         exclude(group = "androidx.camera", module = "camera-video")
     }
-    implementation(libs.mediapipe.tasks.vision) {
-        exclude(group = "com.google.android.datatransport")
-    }
+    implementation(libs.litert)
 
     ksp(libs.androidx.room.compiler)
 

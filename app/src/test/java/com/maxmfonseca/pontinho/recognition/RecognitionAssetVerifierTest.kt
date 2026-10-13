@@ -97,6 +97,9 @@ class RecognitionAssetVerifierTest {
         reject(YoloBundleFixture.json().apply {
             getJSONObject("model").getJSONObject("internalQuantization").put("operatorCodes", JSONArray(listOf("ADD")))
         })
+        reject(YoloBundleFixture.json().apply {
+            getJSONObject("model").getJSONObject("internalQuantization").put("operatorCodes", JSONArray())
+        })
     }
 
     @Test fun `thresholds hashes and numeric values reject invalid or non finite values`() {
@@ -114,6 +117,23 @@ class RecognitionAssetVerifierTest {
             assertInvalid(YoloBundleFixture.model, text.encodeToByteArray(), true)
     }
 
+    @Test fun `thresholds are valid in their exact runtime numeric representations`() {
+        assertAvailable(rawMetadata("confidence", "3e-1")).also { metadata ->
+            assertEquals(.30f, metadata.confidenceThreshold.toFloat(), 0f)
+        }
+        assertAvailable(rawMetadata("iou", "4.5e-1"))
+        assertAvailable(rawMetadata("physicalDuplicateIou", "9.5e-1"))
+
+        assertInvalid(YoloBundleFixture.model, rawMetadata("confidence", "1e-1000"), true)
+        assertInvalid(YoloBundleFixture.model, rawMetadata("confidence", "0.99999999"), true)
+        assertInvalid(YoloBundleFixture.model, rawMetadata("iou", "1e-1000"), true)
+        assertInvalid(
+            YoloBundleFixture.model,
+            rawMetadata("iou", "0.999999999999999999999999999999999999"),
+            true,
+        )
+    }
+
     @Test fun `debug candidates require an explicit debug gate and no release status is invented`() {
         assertTrue(verify() is RecognitionAvailability.Unavailable)
         if (BuildConfig.DEBUG) assertTrue(verify(allowDebugOnly = true) is RecognitionAvailability.Available)
@@ -128,6 +148,23 @@ class RecognitionAssetVerifierTest {
         RecognitionAssetVerifier(allowExperimental = allowDebugOnly)
             .verify(YoloBundleFixture.model, json.toString().encodeToByteArray())
     private fun reject(json: JSONObject) = assertTrue(json.toString(), verify(json, true) is RecognitionAvailability.Unavailable)
+    private fun assertAvailable(release: ByteArray): YoloRecognitionMetadata {
+        val available = RecognitionAssetVerifier(allowExperimental = true)
+            .verify(YoloBundleFixture.model, release) as RecognitionAvailability.Available
+        return available.metadata as YoloRecognitionMetadata
+    }
+    private fun rawMetadata(field: String, number: String): ByteArray {
+        val original = when (field) {
+            "confidence" -> "0.3"
+            "iou" -> "0.45"
+            "physicalDuplicateIou" -> "0.95"
+            else -> error("Unknown numeric field: $field")
+        }
+        return YoloBundleFixture.bytes().decodeToString()
+            .replace("\"$field\":$original", "\"$field\":$number")
+            .also { check("\"$field\":$number" in it) }
+            .encodeToByteArray()
+    }
     private fun assertInvalid(model: ByteArray?, release: ByteArray?, allowDebugOnly: Boolean) = assertTrue(
         RecognitionAssetVerifier(allowExperimental = allowDebugOnly).verify(model, release) is RecognitionAvailability.Unavailable,
     )

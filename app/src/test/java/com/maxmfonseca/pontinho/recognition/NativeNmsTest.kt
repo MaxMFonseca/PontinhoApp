@@ -1,16 +1,11 @@
 package com.maxmfonseca.pontinho.recognition
 
-import android.graphics.Bitmap
 import android.graphics.RectF
-import com.maxmfonseca.pontinho.domain.recognition.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import kotlin.math.roundToInt
 
 @RunWith(RobolectricTestRunner::class)
 class NativeNmsTest {
@@ -40,36 +35,4 @@ class NativeNmsTest {
         }
     }
 
-    @Test fun `engine NMS agrees with shared goldens regardless of original resolution`() = runBlocking {
-        val cases = cases()
-        for (i in 0 until cases.length()) {
-            val case = cases.getJSONObject(i)
-            if (case.optBoolean("invalid") || case.optBoolean("helperOnly")) continue
-            val boxes = case.getJSONArray("boxes")
-            val raw = (0 until boxes.length()).map { index ->
-                val item = boxes.getJSONObject(index); val b = item.getJSONArray("bounds")
-                nativeCardBox(item.getDouble("score").toFloat(), RectF(b.getInt(0).toFloat(), b.getInt(1).toFloat(), b.getInt(2).toFloat(), b.getInt(3).toFloat()), 320, 320)
-            }
-            val expected = case.getJSONArray("expected").let { indices -> (0 until indices.length()).map { index ->
-                boxes.getJSONObject(indices.getInt(index)).getJSONArray("bounds").let { b -> (0..3).map(b::getInt) }
-            } }
-            for ((width, height) in listOf(320 to 320, 1000 to 500, 3000 to 2000)) {
-                val source = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val metadata = BundleFixture.legacyMetadata().copy(iouThreshold = case.getDouble("threshold").toFloat())
-                val engine = TwoStageCardRecognitionEngine(object : CardDetectorRunner {
-                    override fun detect(bitmap: Bitmap) = raw
-                    override fun close() = Unit
-                }, object : CardClassifierRunner {
-                    override fun classify(bitmap: Bitmap) = RawCardClassification(FloatArray(52).apply { this[0] = 1f })
-                    override fun close() = Unit
-                }, metadata, Dispatchers.Unconfined)
-                try {
-                    val result = engine.recognize(source)
-                    assertEquals(case.getString("id"), expected, result.candidates.map { card ->
-                        listOf(card.bounds.left, card.bounds.top, card.bounds.right, card.bounds.bottom).map { (it * 320).roundToInt() }
-                    })
-                } finally { engine.close(); source.recycle() }
-            }
-        }
-    }
 }

@@ -71,8 +71,8 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
             require(labels == YoloCardLabels.values)
             val thresholds = root.objectField("thresholds")
             thresholds.exact(THRESHOLD_FIELDS)
-            val confidence = thresholds.exclusiveUnit("confidence")
-            val iou = thresholds.exclusiveUnit("iou")
+            val confidence = thresholds.exclusiveUnitFloat("confidence")
+            val iou = thresholds.exclusiveUnitDouble("iou")
             require(thresholds.string("comparison") == "strict-greater-than")
             require(thresholds.string("selectedOn") == "validation")
             thresholds.hash("selectionSha256")
@@ -109,13 +109,6 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
         }
     }
 
-    /** Legacy callers compile until Stage 8 removes them, but no classifier bundle is admitted. */
-    fun verify(detector: ByteArray?, classifier: ByteArray?, releaseJson: ByteArray?): RecognitionAvailability =
-        unavailable(
-            if (detector == null || classifier == null || releaseJson == null) RecognitionUnavailableReason.MISSING_ASSETS
-            else RecognitionUnavailableReason.INVALID_ASSETS,
-        )
-
     private fun internalQuantization(value: Map<String, JsonValue>, variant: String) {
         value.exact(INTERNAL_QUANTIZATION_FIELDS)
         val int8Tensors = value.int("int8TensorCount")
@@ -132,6 +125,7 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
         if (variant == "int8") {
             require(int8Tensors > 0 && weighted > 0 && quantized > 0)
             require(coverage >= BigDecimal("0.8"))
+            require(codes.isNotEmpty())
         } else {
             require(int8Tensors == 0 && quantized == 0 && coverage.compareTo(BigDecimal.ZERO) == 0 && codes.isEmpty())
         }
@@ -141,7 +135,7 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
         value.exact(NMS_FIELDS)
         require(value.boolean("classAwareFirst"))
         require(value.boolean("physicalDuplicateSuppression"))
-        require(value.finite("physicalDuplicateIou").compareTo(BigDecimal("0.95")) == 0)
+        require(value.exclusiveUnitDouble("physicalDuplicateIou").compareTo(BigDecimal("0.95")) == 0)
         require(value.string("tieBreak") == "score-desc-box-class-anchor")
         require(value.string("finalOrder") == "left-top-right-bottom-class-score-anchor")
     }
@@ -214,8 +208,13 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
         number.toBigDecimal().intValueExact()
     }
     private fun Map<String, JsonValue>.hash(name: String) = string(name).also { require(it.matches(SHA256)) }
-    private fun Map<String, JsonValue>.exclusiveUnit(name: String) = finite(name).also {
-        require(it > BigDecimal.ZERO && it < BigDecimal.ONE)
+    private fun Map<String, JsonValue>.exclusiveUnitFloat(name: String) = number(name).also {
+        val runtimeValue = it.toFloat()
+        require(runtimeValue.isFinite() && runtimeValue > 0f && runtimeValue < 1f)
+    }
+    private fun Map<String, JsonValue>.exclusiveUnitDouble(name: String) = number(name).also {
+        val runtimeValue = it.toDouble()
+        require(runtimeValue.isFinite() && runtimeValue > 0.0 && runtimeValue < 1.0)
     }
 
     private sealed interface JsonValue
@@ -262,36 +261,6 @@ class ProcessLifetimeCardRecognitionEngineProvider internal constructor(
             if (closed) return
             closed = true
             instance?.close()
-        }
-    }
-}
-
-class AssetGatedCardRecognitionEngineFactory internal constructor(
-    private val verifier: RecognitionAssetVerifier,
-    private val delegate: ((ByteArray, ByteArray, RecognitionModelBundleMetadata) -> CardRecognitionEngine)?,
-) {
-    fun create(modelSource: ByteArray?, releaseSource: ByteArray?): CardRecognitionEngine {
-        val availability = verifier.verify(modelSource?.copyOf(), releaseSource?.copyOf())
-        if (availability !is RecognitionAvailability.Available || modelSource == null) return UnavailableCardRecognitionEngine(availability)
-        return UnavailableCardRecognitionEngine(
-            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
-        )
-    }
-
-    fun create(detectorModel: ByteArray?, classifierModel: ByteArray?, releaseJson: ByteArray?): CardRecognitionEngine {
-        val availability = verifier.verify(detectorModel, classifierModel, releaseJson)
-        if (availability !is RecognitionAvailability.Available || detectorModel == null || classifierModel == null) {
-            return UnavailableCardRecognitionEngine(availability)
-        }
-        val legacy = delegate ?: return UnavailableCardRecognitionEngine(
-            RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED),
-        )
-        return try {
-            legacy(detectorModel.copyOf(), classifierModel.copyOf(), availability.metadata as RecognitionModelBundleMetadata)
-        } catch (fatal: VirtualMachineError) {
-            throw fatal
-        } catch (_: Throwable) {
-            UnavailableCardRecognitionEngine(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.ENGINE_NOT_INSTALLED))
         }
     }
 }
