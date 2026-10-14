@@ -17,6 +17,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
+import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.repository.RoomMatchRepository
 import com.maxmfonseca.pontinho.domain.model.*
@@ -251,13 +252,23 @@ class ScannerScreenTest {
 
     @Test fun duplicateCardsHaveIndependentAccessibleEditsAndExplicitConfirmation() {
         var confirmed = 0; var cancelled = 0; var removed: String? = null
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val name = context.getString(R.string.scanner_card_name, "2", context.getString(R.string.scanner_hearts))
+        val firstDescription = context.getString(R.string.scanner_card_description, 1, name)
         compose.setContent { ScannerScreen(review(), actions = ScannerActions(
             onConfirm = { confirmed++ }, onCancel = { cancelled++ }, onRemove = { removed = it })) }
         compose.onNodeWithTag("scanner_card_first").assertExists()
         compose.onNodeWithTag("scanner_card_second").assertExists()
         compose.onNodeWithTag("scanner_warning_first").assertExists()
-        compose.onNodeWithTag("scanner_card_description_first").assert(
-            SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
+        compose.onNodeWithTag("scanner_card_description_first")
+            .assertContentDescriptionEquals(firstDescription)
+        compose.onAllNodesWithContentDescription(firstDescription).assertCountEquals(1)
+        compose.onAllNodesWithContentDescription(name).assertCountEquals(0)
+        compose.onAllNodesWithText("♥").assertCountEquals(0)
+        compose.onNodeWithTag("scanner_edit_first")
+            .assertContentDescriptionEquals(context.getString(R.string.scanner_edit_description, 1, name))
+        compose.onNodeWithTag("scanner_remove_first")
+            .assertContentDescriptionEquals(context.getString(R.string.scanner_remove_description, 1, name))
         compose.runOnIdle { assertEquals(0, confirmed) }
         compose.onNodeWithTag("scanner_remove_second").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("second", removed) }

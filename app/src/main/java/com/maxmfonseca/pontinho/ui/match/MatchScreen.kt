@@ -51,6 +51,8 @@ fun MatchScreen(
     onDeleteScore: () -> Unit = {},
     onSelectIndicatorColor: (CardColor) -> Unit = {},
     onCamera: () -> Unit = {},
+    onEditJoker: (Int) -> Unit = {},
+    onRemoveIndicator: () -> Unit = {},
 ) {
     val historyScroll = rememberScrollState()
     val textMeasurer = rememberTextMeasurer()
@@ -80,17 +82,19 @@ fun MatchScreen(
         } else if (state.isMissing) {
             Text(stringResource(R.string.match_missing), Modifier.padding(24.dp))
         } else {
-            if (state.isFinished) Text(stringResource(R.string.match_finished),
-                Modifier.align(Alignment.CenterHorizontally).padding(8.dp), style = MaterialTheme.typography.titleMedium)
-            if (state.isCorrectingRound) Text(stringResource(R.string.match_correcting_round, state.roundNumber), Modifier.padding(horizontal = 16.dp))
+            val status = when (state.phase) {
+                MatchPhase.NOT_STARTED -> R.string.match_round_not_started
+                MatchPhase.COUNTING -> R.string.match_round_counting
+                MatchPhase.EDITING -> R.string.match_round_editing
+                MatchPhase.FINISHED -> R.string.match_finished
+            }
+            Text(stringResource(status, state.roundNumber),
+                Modifier.align(Alignment.CenterHorizontally).padding(horizontal = 16.dp, vertical = 8.dp).testTag("match_status"),
+                style = MaterialTheme.typography.titleSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            JokerHistoryRow(state.jokers, state.roundNumber, onEditJoker,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp))
             if (state.pausedRoundNumbers.isNotEmpty()) Text(stringResource(R.string.match_paused_rounds,
                 state.pausedRoundNumbers.joinToString()), Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
-            (state.scoreDialog?.indicator ?: state.indicator)?.let {
-                val description = wildcardDescription(it)
-                Text(compactWildcardPreview(it), Modifier.align(Alignment.CenterHorizontally).padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clearAndSetSemantics { contentDescription = description },
-                    style = MaterialTheme.typography.bodyMedium)
-            }
             if (state.hasError && state.scoreDialog == null && state.picker == null) {
                 Text(stringResource(R.string.match_save_error), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
             }
@@ -151,10 +155,11 @@ fun MatchScreen(
     }
     state.picker?.let { picker ->
         JokerPicker(picker.selectedRank, picker.selectedColor, state.isSaving, state.hasError,
-            onSelectIndicatorRank, onSelectIndicatorColor, onConfirmIndicator, onDismissDialog)
+            onSelectIndicatorRank, onSelectIndicatorColor, onConfirmIndicator, onDismissDialog,
+            canRemove = picker.canRemove, onRemove = onRemoveIndicator)
     }
-    state.scoreDialog?.let { dialog ->
-        ScoreDialog(dialog.playerName, dialog.roundNumber, wildcardPreview(dialog.indicator), dialog.value,
+    state.scoreDialog?.takeIf { state.picker == null }?.let { dialog ->
+        ScoreDialog(dialog.playerName, dialog.roundNumber, dialog.indicator?.let { wildcardPreview(it) }, dialog.value,
             onScoreChange, { onConfirmScore() }, onDismissDialog, onWentOut,
             onCamera = onCamera.takeIf { dialog.canScan },
             wentOutEnabled = dialog.wentOutEnabled && !state.isSaving,

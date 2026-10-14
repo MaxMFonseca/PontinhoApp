@@ -81,20 +81,40 @@ class PontinhoDatabaseTest {
         constraint { db.roundDao().insertScore(RoundScoreEntity("s", "m", "r", "c", 5, "MANUAL", 1, "cross")) }
     }
 
-    @Test fun exportedVersionOneReopensThroughRoomPreservingProjectionsAndObservationConstraints() = runBlocking {
+    @Test fun versionOneMigratesThroughVersionThree() = verifyMigration(1)
+
+    @Test fun versionTwoMigratesJokersToNullableVersionThree() = verifyMigration(2)
+
+    @Test fun nullableRoundIndicatorMapsToNull() = runBlocking {
+        seed()
+        db.openHelper.writableDatabase.execSQL("UPDATE participants SET eligibleFromRoundOrdinal=1")
+        db.openHelper.writableDatabase.execSQL("UPDATE rounds SET indicatorRank=NULL, indicatorColor=NULL")
+        assertNull(RoomMatchRepository(db).observeMatch(MatchId("m")).first()!!.rounds.single().indicator)
+    }
+
+    @Test fun partialRoundIndicatorMapsToNull() = runBlocking {
+        seed()
+        db.openHelper.writableDatabase.execSQL("UPDATE participants SET eligibleFromRoundOrdinal=1")
+        for ((rank, color) in listOf(null to "RED", "ACE" to null, "INVALID" to "RED", "ACE" to "INVALID")) {
+            db.openHelper.writableDatabase.execSQL("UPDATE rounds SET indicatorRank=?, indicatorColor=?", arrayOf(rank, color))
+            assertNull(RoomMatchRepository(db).observeMatch(MatchId("m")).first()!!.rounds.single().indicator)
+        }
+    }
+
+    private fun verifyMigration(version: Int) = runBlocking {
         db.close()
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val name = "migration-one-two-${System.nanoTime()}.db"
+        val name = "migration-$version-three-${System.nanoTime()}.db"
         context.deleteDatabase(name)
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(name)
-                .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(version) {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         val exported = InstrumentationRegistry.getInstrumentation().context.assets.open(
-                            "com.maxmfonseca.pontinho.data.local.PontinhoDatabase/1.json")
+                            "com.maxmfonseca.pontinho.data.local.PontinhoDatabase/$version.json")
                             .bufferedReader().use { JSONObject(it.readText()).getJSONObject("database") }
-                        assertEquals(1, exported.getInt("version"))
+                        assertEquals(version, exported.getInt("version"))
                         val entities = exported.getJSONArray("entities")
                         for (index in 0 until entities.length()) {
                             val entity = entities.getJSONObject(index)
@@ -112,21 +132,34 @@ class PontinhoDatabaseTest {
                 .build(),
         )
         val legacy = helper.writableDatabase
-        assertEquals(1, legacy.version)
+        assertEquals(version, legacy.version)
         legacy.execSQL("INSERT INTO players VALUES ('player1','Ana','ana',1,1,NULL),('player2','Bruno','bruno',1,1,NULL)")
         legacy.execSQL("INSERT INTO matches VALUES ('m','2026-10-13','America/Sao_Paulo',1,11,'ACTIVE',NULL,'p1',0,0,NULL,NULL)")
         legacy.execSQL("INSERT INTO participants VALUES ('p1','m','player1','Ana',0,1,1,17),('p2','m','player2','Bruno',1,1,1,0)")
         legacy.execSQL("INSERT INTO rounds VALUES ('r','m',1,'ACE','RED','p1',2,'p2','INFERRED','COMPLETE',NULL,1,11,'p2',0,NULL)")
-        legacy.execSQL("INSERT INTO scores VALUES ('manual','m','r','p1',17,'MANUAL',10,'token-manual')")
-        legacy.execSQL("INSERT INTO scores VALUES ('winner','m','r','p2',0,'AUTO_WINNER',11,NULL)")
-        legacy.execSQL("INSERT INTO submissions VALUES ('token-manual','m','r','p1',17)")
+        legacy.execSQL("INSERT INTO scores (id,matchId,roundId,participantId,points,origin,submittedAt,submissionToken) VALUES ('manual','m','r','p1',17,'MANUAL',10,'token-manual')")
+        legacy.execSQL("INSERT INTO scores (id,matchId,roundId,participantId,points,origin,submittedAt,submissionToken) VALUES ('winner','m','r','p2',0,'AUTO_WINNER',11,NULL)")
+        legacy.execSQL("INSERT INTO submissions (token,matchId,roundId,participantId,points) VALUES ('token-manual','m','r','p1',17)")
+        fun rows(database: SupportSQLiteDatabase, table: String): List<List<String?>> =
+            database.query("SELECT * FROM $table").use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) add((0 until cursor.columnCount).map {
+                        if (cursor.isNull(it)) null else cursor.getString(it)
+                    })
+                }
+            }
+        val originalRounds = rows(legacy, "rounds")
+        if (version == 2) legacy.execSQL("INSERT INTO card_observations VALUES ('existing','manual',1,'TWO','CLUBS',NULL,1,NULL,NULL,NULL,NULL)")
 
         helper.close()
-        // Room performs the actual 1 -> 2 upgrade and validates every table, index and FK.
+        // Room performs the real upgrade and validates every table, index and FK.
         db = Room.databaseBuilder(context, PontinhoDatabase::class.java, name)
-            .addMigrations(MIGRATION_1_2).build()
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         val migrated = db.openHelper.writableDatabase
-        assertEquals(2, migrated.version)
+        assertEquals(3, migrated.version)
+        assertEquals(originalRounds, rows(migrated, "rounds"))
+        migrated.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+        if (version == 2) assertEquals("existing", rows(migrated, "card_observations").single().first())
         val repository = RoomMatchRepository(db)
         val snapshot = requireNotNull(repository.observeMatch(MatchId("m")).first())
         assertEquals(listOf("Ana", "Bruno"), snapshot.participants.map { it.displayName })
@@ -138,6 +171,8 @@ class PontinhoDatabaseTest {
         assertEquals(RoundEntryOrigin.EXPLICIT, round.draft.entries.getValue(ParticipantId("p1")).origin)
         assertEquals(RoundEntryOrigin.AUTOMATIC_WINNER, round.draft.entries.getValue(ParticipantId("p2")).origin)
         assertEquals(snapshot, repository.observeHome().first().single().matches.single())
+        migrated.execSQL("UPDATE rounds SET indicatorRank=NULL, indicatorColor=NULL WHERE id='r'")
+        assertNull(repository.observeMatch(MatchId("m")).first()!!.rounds.single().indicator)
 
         migrated.query("SELECT id, matchId, roundId, participantId, points, origin, submittedAt, submissionToken, recognitionModelVersion FROM scores ORDER BY id").use { cursor ->
             assertTrue(cursor.moveToFirst())

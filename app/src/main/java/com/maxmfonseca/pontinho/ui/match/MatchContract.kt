@@ -5,10 +5,16 @@ import com.maxmfonseca.pontinho.ui.components.PlayerRoundHistory
 
 data class MatchPlayer(val id: ParticipantId, val name: String, val total: Int,
     val isDealer: Boolean, val history: List<PlayerRoundHistory>, val canAddScore: Boolean)
+enum class MatchPhase { NOT_STARTED, COUNTING, EDITING, FINISHED }
+data class RoundJokerUi(val roundId: RoundId?, val roundNumber: Int, val indicator: Indicator?)
+enum class PickerPurpose { EDIT, CAMERA }
 data class IndicatorPickerState(
-    val participantId: ParticipantId,
+    val roundId: RoundId,
+    val roundNumber: Int,
+    val purpose: PickerPurpose,
     val selectedRank: Rank? = null,
     val selectedColor: CardColor? = null,
+    val canRemove: Boolean = false,
 ) {
     val indicator: Indicator? get() = selectedRank?.let { jokerRank ->
         selectedColor?.let { Indicator(jokerRank.previous(), it) }
@@ -16,7 +22,7 @@ data class IndicatorPickerState(
 }
 data class MatchScoreDialogState(
     val participantId: ParticipantId, val playerName: String, val roundId: RoundId,
-    val roundNumber: Int, val indicator: Indicator, val wentOutEnabled: Boolean, val value: String = "",
+    val roundNumber: Int, val indicator: Indicator?, val wentOutEnabled: Boolean, val value: String = "",
     val isCorrection: Boolean = false, val readOnly: Boolean = false,
     val canScan: Boolean = false,
 ) {
@@ -27,6 +33,7 @@ data class MatchUiState(
     val isLoading: Boolean = true, val isMissing: Boolean = false,
     val players: List<MatchPlayer> = emptyList(), val roundNumber: Int = 1,
     val indicator: Indicator? = null, val isFinished: Boolean = false,
+    val phase: MatchPhase = MatchPhase.NOT_STARTED, val jokers: List<RoundJokerUi> = emptyList(),
     val isSaving: Boolean = false, val hasError: Boolean = false,
     val picker: IndicatorPickerState? = null, val scoreDialog: MatchScoreDialogState? = null,
     val canAddPlayer: Boolean = false, val canReorderPlayers: Boolean = false,

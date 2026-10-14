@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="match_round_not_started">Rodada %1$d não iniciada</string>
+    <string name="match_round_counting">Contando pontos da rodada %1$d</string>
+    <string name="match_round_editing">Editando rodada %1$d</string>
+    <string name="match_jokers">Coringas</string>
+    <string name="joker_round_empty">Rodada %1$d: coringa não definido</string>
+    <string name="joker_round_defined">Rodada %1$d: coringa %2$s %3$s</string>
+    <string name="joker_preview_card">Coringa: %1$s %2$s</string>
+    <string name="joker_remove">Remover coringa</string>
+    <string name="score_round">Rodada %1$d</string>
     <string name="app_name">Pontinho</string>
     <string name="match_back">Voltar</string>
     <string name="match_round_short">R%1$d</string>

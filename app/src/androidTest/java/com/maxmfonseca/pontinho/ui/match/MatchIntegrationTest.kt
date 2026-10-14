@@ -44,6 +44,37 @@ class MatchIntegrationTest {
     @Before fun setup() { db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PontinhoDatabase::class.java).build() }
     @After fun close() { stores.forEach { it.clear() }; db.close() }
 
+    @Test fun manualRoundCompletesWithoutEverSelectingAJoker() = runBlocking<Unit> {
+        val repository = RoomMatchRepository(db)
+        val id = repository.createMatch(CreateMatch("manual-no-joker", listOf("Ana", "Bruno", "Carla")
+            .map { CreateMatchPlayer(it, displayName = it) }))
+        val app = container(repository, scannerAvailable = true)
+        compose.setContent { PontinhoNavHost(app, startDestination = Destination.Match.createRoute(id.value)) }
+        awaitTag("player_action")
+        val participants = repository.observeMatch(id).first()!!.participants.map { it.id }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        listOf("17", "9").forEachIndexed { index, points ->
+            compose.onNode(hasTestTag("player_action") and hasAnyAncestor(hasTestTag("match_player_${participants[index].value}")))
+                .performScrollTo().performClick()
+            awaitTag("score_input")
+            compose.onNodeWithTag("joker_dialog").assertDoesNotExist()
+            compose.onNodeWithTag("score_camera").assertExists()
+            compose.onNodeWithTag("score_input").performTextInput(points)
+            compose.onNodeWithText(context.getString(R.string.confirm)).performScrollTo().performClick()
+            compose.waitUntil { compose.onAllNodesWithTag("score_input").fetchSemanticsNodes().isEmpty() }
+        }
+        val saved = repository.observeMatch(id).first()!!
+        val round = saved.rounds.single()
+        assertNull(round.indicator)
+        assertNull(saved.openRound)
+        assertEquals(participants[2], round.draft.designatedWinner)
+        assertEquals(listOf(17, 9, 0), participants.map { round.draft.entries.getValue(it).points })
+        assertEquals(listOf(17, 9, 0), participants.map { saved.totals.getValue(it) })
+        assertTrue(db.roundDao().allCardObservations().isEmpty())
+        compose.onNodeWithTag("joker_round_2").assertIsDisplayed()
+        compose.onNodeWithTag("joker_dialog").assertDoesNotExist()
+    }
+
     @Test fun restoredMatchWithoutScannerEntryReconcilesConsumedLaunchAndAllowsRetry() = runBlocking<Unit> {
         val repository = RoomMatchRepository(db)
         val id = repository.createMatch(CreateMatch("launch-recreation", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
@@ -61,7 +92,6 @@ class MatchIntegrationTest {
         compose.runOnIdle {
             model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             model.addScore(model.uiState.value.players[0].id)
-            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         compose.onNodeWithTag("score_input").performTextInput("17")
@@ -69,6 +99,7 @@ class MatchIntegrationTest {
         compose.runOnIdle { mounted = false }
         compose.waitForIdle()
         compose.runOnIdle { model.openScanner() }
+        selectCameraJoker(model)
         val request = withTimeout(5_000) { (model.events.first() as MatchEvent.OpenScanner).request }
         restoration.emulateSavedInstanceStateRestore()
         compose.runOnIdle { mounted = true }
@@ -122,10 +153,10 @@ class MatchIntegrationTest {
         compose.runOnIdle {
             model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             model.addScore(model.uiState.value.players[0].id)
-            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        selectCameraJoker(model)
         awaitTag("scanner_root")
         lateinit var scanner: ScannerViewModel
         val image = java.io.File.createTempFile("saved-recreation-", ".png", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir)
@@ -184,13 +215,13 @@ class MatchIntegrationTest {
         compose.runOnIdle {
             model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             model.addScore(model.uiState.value.players[0].id)
-            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         compose.onNodeWithTag("score_input").performTextInput("17")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val permissionBefore = context.checkSelfPermission(Manifest.permission.CAMERA)
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        selectCameraJoker(model)
         awaitTag("camera_education_root")
         assertEquals(permissionBefore, context.checkSelfPermission(Manifest.permission.CAMERA))
         restoration.emulateSavedInstanceStateRestore()
@@ -247,7 +278,6 @@ class MatchIntegrationTest {
         compose.runOnIdle {
             model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             model.addScore(model.uiState.value.players[0].id)
-            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         val participant = model.uiState.value.scoreDialog!!.participantId
@@ -261,6 +291,7 @@ class MatchIntegrationTest {
                 if (index == 1) compose.runOnIdle { model.editScore(participant, 1) }
                 compose.onNodeWithTag("score_camera").performScrollTo().performClick()
                 if (index == 0) {
+                    selectCameraJoker(model)
                     awaitTag("camera_education_root")
                     compose.onNodeWithTag("camera_education_continue").performScrollTo().performClick()
                 }
@@ -309,13 +340,13 @@ class MatchIntegrationTest {
         compose.runOnIdle {
             model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             model.addScore(model.uiState.value.players[0].id)
-            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         val player = model.uiState.value.players[1].id
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        selectCameraJoker(model)
         awaitTag("camera_education_root")
-        val other = repo.chooseIndicator(ChooseIndicator(id, Indicator(Rank.FIVE, CardColor.RED)))
+        val other = repo.prepareRound(PrepareRound(id, Indicator(Rank.FIVE, CardColor.RED)))
         repo.submitScore(SubmitScore(id, other.id, player, 7, "other", other))
         compose.onNodeWithTag("camera_education_continue").performScrollTo().performClick()
         compose.waitUntil { nav.currentDestination?.route == Destination.Match.route }
@@ -341,7 +372,6 @@ class MatchIntegrationTest {
         compose.runOnIdle {
             model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             model.addScore(model.uiState.value.players[0].id)
-            model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         compose.onNodeWithTag("score_camera").assertDoesNotExist()
@@ -613,7 +643,7 @@ class MatchIntegrationTest {
         val model = vm(id, repo)
         val ids = model.uiState.first { !it.isLoading }.players.map { it.id }
         suspend fun settled() = withTimeout(5_000) { model.uiState.first { !it.isSaving && it.scoreDialog == null && it.playerName == null } }
-        model.addScore(ids[0]); model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        model.addScore(ids[0])
         model.uiState.first { it.scoreDialog != null && !it.isSaving }
         model.updateScore("10"); model.confirmScore(); settled()
         assertTrue(model.uiState.value.canAddPlayer)
@@ -633,7 +663,7 @@ class MatchIntegrationTest {
         model.movePlayer(late.id, -1); settled()
         assertEquals(listOf(ids[0], ids[1], late.id, ids[2]), model.uiState.value.players.map { it.id })
         assertEquals(original, repo.observeMatch(id).first()!!.rounds.single())
-        model.addScore(late.id); model.selectIndicatorRank(Rank.KING); model.selectIndicatorColor(CardColor.RED); model.confirmIndicator()
+        model.addScore(late.id)
         model.uiState.first { it.scoreDialog != null && !it.isSaving }
         model.updateScore("7"); model.confirmScore(); settled()
         val later = repo.observeMatch(id).first()!!.openRound!!
@@ -668,7 +698,7 @@ class MatchIntegrationTest {
         val id = repo.createMatch(CreateMatch("finished-edit", listOf("Ana", "Bruno").mapIndexed { i, name -> CreateMatchPlayer("$i", displayName = name) }))
         val model = vm(id, repo)
         val ids = model.uiState.first { !it.isLoading }.players.map { it.id }
-        model.addScore(ids[0]); model.selectIndicatorRank(Rank.ACE); model.selectIndicatorColor(CardColor.BLACK); model.confirmIndicator()
+        model.addScore(ids[0])
         model.uiState.first { it.scoreDialog != null && !it.isSaving }
         model.updateScore("101"); model.confirmScore()
         withTimeout(5_000) { model.uiState.first { it.isFinished && !it.isSaving } }
@@ -699,11 +729,11 @@ class MatchIntegrationTest {
         val vm = vm(id, repository)
         val initial = vm.uiState.first { !it.isLoading }
         val ids = initial.players.map { it.id }
-        vm.addScore(ids[0]); vm.selectIndicatorRank(Rank.KING); vm.selectIndicatorColor(CardColor.RED); vm.confirmIndicator()
+        vm.addScore(ids[0])
         vm.uiState.first { it.scoreDialog != null && !it.isSaving }
         vm.dismissDialog()
         assertTrue(repository.observeMatch(id).first()!!.rounds.isEmpty())
-        vm.addScore(ids[0]); vm.selectIndicatorRank(Rank.KING); vm.selectIndicatorColor(CardColor.RED); vm.confirmIndicator()
+        vm.addScore(ids[0])
         vm.uiState.first { it.scoreDialog != null && !it.isSaving }
         vm.updateScore("0"); vm.confirmScore(); vm.confirmScore()
         vm.uiState.first { !it.isSaving && it.scoreDialog == null }
@@ -714,7 +744,7 @@ class MatchIntegrationTest {
         assertEquals(RoundStatusKind.PENDING, restored.uiState.value.players[0].history[0].status)
         restored.addScore(ids[1])
         assertNull(restored.uiState.value.picker)
-        assertEquals(Indicator(Rank.QUEEN, CardColor.RED), restored.uiState.value.scoreDialog!!.indicator)
+        assertNull(restored.uiState.value.scoreDialog!!.indicator)
         restored.wentOut()
         restored.uiState.first { !it.isSaving && it.scoreDialog == null }
         assertFalse(repository.observeMatch(id).first()!!.isFinished)
@@ -749,6 +779,15 @@ class MatchIntegrationTest {
         compose.runOnIdle { controller.navigate(Destination.Results.createRoute(special.value)) }
         compose.onNodeWithTag("results_root").assertIsDisplayed()
         compose.runOnIdle { assertEquals(special.value, controller.currentBackStackEntry!!.arguments!!.getString(Destination.Results.MATCH_ID)) }
+    }
+
+    private fun selectCameraJoker(model: MatchViewModel) {
+        compose.runOnIdle {
+            assertNotNull(model.uiState.value.picker)
+            model.selectIndicatorRank(Rank.ACE)
+            model.selectIndicatorColor(CardColor.BLACK)
+            model.confirmIndicator()
+        }
     }
 
     private fun vm(id: MatchId, repo: MatchRepository): MatchViewModel = MatchViewModel(id, repo, Dispatchers.Unconfined).also {

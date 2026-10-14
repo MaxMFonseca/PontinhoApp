@@ -183,7 +183,8 @@ fun PontinhoNavHost(
                 onConfirmPlayerName = matchViewModel::confirmPlayerName, onReorderPlayers = matchViewModel::reorderPlayers,
                 onEditScore = matchViewModel::editScore, onDeleteScore = matchViewModel::deleteScore,
                 onSelectIndicatorColor = matchViewModel::selectIndicatorColor,
-                onCamera = matchViewModel::openScanner)
+                onCamera = matchViewModel::openScanner,
+                onEditJoker = matchViewModel::editJoker, onRemoveIndicator = matchViewModel::removeIndicator)
         }
         composable(Destination.Scanner.route, arguments = Destination.Scanner.argumentNames.map { name ->
             navArgument(name) { type = NavType.StringType; if (name == "correction") { nullable = true; defaultValue = null } }

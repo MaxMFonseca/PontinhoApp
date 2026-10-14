@@ -71,7 +71,7 @@ class MatchLifecycleRepositoryTest {
         completeFirstRound(id)
         val completed = snapshot(id)
         repo.updateExplicitScore(UpdateExplicitScore(id, completed.rounds.single().id, completed.participants[0].id, 11))
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val prepared = repo.prepareRound(PrepareRound(id, indicator))
         submit(prepared, completed.participants[0].id, 4)
         val survivor = create()
         completeFirstRound(survivor)
@@ -129,7 +129,7 @@ class MatchLifecycleRepositoryTest {
             CreateMatchPlayer("draft-$it", displayName = "Player ${it + 1}")
         }))
         val participants = snapshot(id).participants
-        val round = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val round = repo.prepareRound(PrepareRound(id, indicator))
         val winner = points.indexOf(0)
         repo.designateWinner(DesignateWinner(id, round.id, participants[winner].id, round))
         points.forEachIndexed { index, score -> if (index != winner) submit(round, participants[index].id, score) }
@@ -140,7 +140,7 @@ class MatchLifecycleRepositoryTest {
     @Test fun joinOpenRoundUsesCurrentOrdinalWithoutBackfillingScores() = runBlocking {
         val id = create()
         completeFirstRound(id)
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val prepared = repo.prepareRound(PrepareRound(id, indicator))
         val original = snapshot(id).participants
         submit(prepared, original[0].id, 5)
         val before = snapshot(id)
@@ -170,7 +170,7 @@ class MatchLifecycleRepositoryTest {
     @Test fun joinAfterWinnerKeepsRoundOpenUntilNewPlayerScores() = runBlocking {
         val id = create()
         val original = snapshot(id).participants
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val prepared = repo.prepareRound(PrepareRound(id, indicator))
         repo.designateWinner(DesignateWinner(id, prepared.id, original[0].id, prepared))
 
         val joined = repo.addPlayerToMatch(AddPlayerToMatch(id, "winner-join", "Dora"))
@@ -202,7 +202,7 @@ class MatchLifecycleRepositoryTest {
         val id = create()
         completeFirstRound(id)
         val before = snapshot(id)
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, Indicator(Rank.FIVE, CardColor.BLACK)))
+        val prepared = repo.prepareRound(PrepareRound(id, Indicator(Rank.FIVE, CardColor.BLACK)))
         assertEquals(before, snapshot(id))
 
         val joined = repo.addPlayerToMatch(AddPlayerToMatch(id, "prepared-join", " Ana "))
@@ -237,7 +237,7 @@ class MatchLifecycleRepositoryTest {
         val id = create()
         completeFirstRound(id)
         val participants = snapshot(id).participants
-        val second = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val second = repo.prepareRound(PrepareRound(id, indicator))
         submit(second, participants[0].id, 5)
         submit(second, participants[1].id, 6)
         val completed = snapshot(id)
@@ -276,7 +276,7 @@ class MatchLifecycleRepositoryTest {
 
     private suspend fun completeFirstRound(id: MatchId) {
         val participants = snapshot(id).participants
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val prepared = repo.prepareRound(PrepareRound(id, indicator))
         submit(prepared, participants[0].id, 10)
         submit(prepared, participants[1].id, 20)
         assertEquals(RoundStatus.COMPLETE, snapshot(id).rounds.single().status)

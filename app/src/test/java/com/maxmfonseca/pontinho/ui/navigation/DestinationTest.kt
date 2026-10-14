@@ -10,6 +10,18 @@ import com.maxmfonseca.pontinho.ui.test.matchSnapshot
 import java.time.LocalDate
 
 class DestinationTest {
+    @Test fun staleChangedJokerInvalidatesScannerContext() {
+        val match = matchSnapshot("match", LocalDate.of(2026, 10, 14), 0, listOf("a" to "Ana", "b" to "Bruno"))
+        val player = match.participants.first().id
+        val round = RoundSnapshot(RoundId("round"), 1, Indicator(Rank.KING, CardColor.BLACK), player,
+            RoundDraft(match.participants.map { it.id }), java.time.Instant.EPOCH, null, RoundStatus.OPEN, false)
+        val context = ScannerContext("match", "round", player.value, 0, "KING", "BLACK", "token", null)
+        assertNotNull(context.resolve(match.copy(rounds = listOf(round))))
+        for (indicator in listOf(null, Indicator(Rank.ACE, CardColor.BLACK), Indicator(Rank.KING, CardColor.RED))) {
+            assertNull(context.resolve(match.copy(rounds = listOf(round.copy(indicator = indicator)))))
+        }
+    }
+
     @Test fun scannerEncodesOnlyScalarContextAndValidatesPreparedRound() {
         val match = matchSnapshot("m/a +%25", LocalDate.of(2026, 10, 14), 0, listOf("a" to "Ana", "b" to "Bruno"))
         val indicator = Indicator(Rank.KING, CardColor.BLACK)

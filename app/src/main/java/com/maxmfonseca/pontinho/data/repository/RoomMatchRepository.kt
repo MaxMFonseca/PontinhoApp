@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.local.entity.*
 import com.maxmfonseca.pontinho.data.local.mapper.toDomain
+import com.maxmfonseca.pontinho.data.local.mapper.indicatorOrNull
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.rules.*
@@ -172,11 +173,20 @@ class RoomMatchRepository(
         matches.updateMatch(match.copy(lastPlayedAt = clock.millis()))
     }
 
-    override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound = db.withTransaction {
+    override suspend fun prepareRound(command: PrepareRound): PreparedRound = db.withTransaction {
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
         val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
         PreparedRound(RoundId(uuid()), command.matchId, ordinal, command.indicator)
+    }
+
+    override suspend fun updateRoundIndicator(command: UpdateRoundIndicator) = db.withTransaction {
+        val match = requireMatch(command.matchId)
+        val round = ownedRound(match, command.roundId)
+        rounds.updateRound(round.copy(
+            indicatorRank = command.indicator?.rank?.name,
+            indicatorColor = command.indicator?.color?.name,
+        ))
     }
 
     override suspend fun designateWinner(command: DesignateWinner) = db.withTransaction {
@@ -486,20 +496,20 @@ class RoomMatchRepository(
             require(existing.status == "OPEN") { "Round is not open" }
             if (prepared != null) {
                 require(prepared.id == id && prepared.matchId.value == match.id && prepared.ordinal == existing.ordinal &&
-                    prepared.indicator.rank.name == existing.indicatorRank && prepared.indicator.color.name == existing.indicatorColor) {
+                    prepared.indicator?.rank?.name == existing.indicatorRank && prepared.indicator?.color?.name == existing.indicatorColor) {
                     "Prepared round does not match the persisted round"
                 }
             }
             return existing
         }
-        val preparation = requireNotNull(prepared) { "The first entry requires a prepared indicator" }
+        val preparation = requireNotNull(prepared) { "The first entry requires a prepared round" }
         require(preparation.id == id && preparation.matchId.value == match.id) { "Prepared round belongs to another command" }
         betweenRounds(match.id)
         val ordinal = (rounds.rounds(match.id).maxOfOrNull { it.ordinal } ?: 0) + 1
         require(preparation.ordinal == ordinal) { "Prepared round is stale" }
         val roster = matches.eligibleParticipants(match.id, ordinal)
         val round = RoundEntity(
-            id.value, match.id, ordinal, preparation.indicator.rank.name, preparation.indicator.color.name,
+            id.value, match.id, ordinal, preparation.indicator?.rank?.name, preparation.indicator?.color?.name,
             match.dealerParticipantId, roster.size, createdAt = clock.millis(),
         )
         // This insert shares the caller's transaction with the first score or designation.
@@ -550,7 +560,7 @@ class RoomMatchRepository(
         cards: List<com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard>,
         round: RoundEntity,
     ): Int {
-        val indicator = Indicator(Rank.valueOf(round.indicatorRank), CardColor.valueOf(round.indicatorColor))
+        val indicator = requireNotNull(round.indicatorOrNull()) { "Scanned scoring requires a round indicator" }
         return cards.fold(0) { total, confirmed ->
             Math.addExact(total, CardValueCalculator.value(confirmed.card, indicator))
         }
@@ -585,8 +595,8 @@ class RoomMatchRepository(
                 output.writeUtf8(prepared.id.value)
                 output.writeUtf8(prepared.matchId.value)
                 output.writeInt(prepared.ordinal)
-                output.writeUtf8(prepared.indicator.rank.name)
-                output.writeUtf8(prepared.indicator.color.name)
+                output.writeUtf8(prepared.indicator?.rank?.name.orEmpty())
+                output.writeUtf8(prepared.indicator?.color?.name.orEmpty())
             }
         }
         return MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray())

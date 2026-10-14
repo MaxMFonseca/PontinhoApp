@@ -192,7 +192,7 @@ class ModernVisualJourneyTest {
             "home" -> HomeScreen(HomeUiState(isLoading = false, dateCards = listOf(HomeDateCard(today, 2, 1, listOf("Julia", "Max")))), {}, {}, {}, onSettings = {})
             "setup" -> MatchSetupScreen(MatchSetupUiState(players = listOf(DraftPlayer("julia", null, "Julia"), DraftPlayer("max", null, "Max"))), {}, {}, {}, {}, { _, _ -> }, {}, {}, {}, {}, {}, {}, {})
             "match", "picker", "score" -> MatchScreen(MatchUiState(isLoading = false, players = players, canAddPlayer = true, canReorderPlayers = true,
-                picker = if (screen == "picker") IndicatorPickerState(participant, Rank.ACE, CardColor.RED) else null,
+                picker = if (screen == "picker") IndicatorPickerState(RoundId("round"), 1, PickerPurpose.EDIT, Rank.ACE, CardColor.RED) else null,
                 scoreDialog = if (screen == "score") MatchScoreDialogState(participant, "Julia", RoundId("round"), 1, Indicator(Rank.ACE, CardColor.RED), true, "33") else null),
                 {}, {}, {}, {}, {}, {}, {}, {}, {})
             "results" -> ResultsScreen(ResultsUiState(MatchId("match"), today, listOf(ResultPlayer(PlayerId("julia"), "Julia", 33, 1, true, false), ResultPlayer(PlayerId("max"), "Max", 110, 2, false, true)), isFinished = true, isLoading = false), {}, {}, {})

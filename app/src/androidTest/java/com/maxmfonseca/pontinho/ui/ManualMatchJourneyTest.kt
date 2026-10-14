@@ -178,7 +178,7 @@ class ManualMatchJourneyTest {
         val setupOrder = names.drop(1) + names.first()
         assertEquals(setupOrder, created.participants.map { it.displayName })
         repeat(20) { ordinal ->
-            val round = repository.chooseIndicator(ChooseIndicator(created.id, Indicator(Rank.ACE, CardColor.RED)))
+            val round = repository.prepareRound(PrepareRound(created.id, Indicator(Rank.ACE, CardColor.RED)))
             created.participants.dropLast(1).forEachIndexed { index, player ->
                 repository.submitScore(SubmitScore(created.id, round.id, player.id, 1, "stress-$ordinal-$index", round))
             }

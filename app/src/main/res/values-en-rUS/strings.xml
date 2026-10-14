@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="match_round_not_started">Round %1$d not started</string>
+    <string name="match_round_counting">Counting points for round %1$d</string>
+    <string name="match_round_editing">Editing round %1$d</string>
+    <string name="match_jokers">Jokers</string>
+    <string name="joker_round_empty">Round %1$d: joker not set</string>
+    <string name="joker_round_defined">Round %1$d: %3$s %2$s joker</string>
+    <string name="joker_preview_card">Joker: %2$s %1$s</string>
+    <string name="joker_remove">Remove joker</string>
+    <string name="score_round">Round %1$d</string>
     <string name="app_name">Pontinho</string>
     <string name="setup_reorder_error">Could not save the order. The previous order was restored.</string>
     <string name="match_late_player_help">Starts at zero points and joins the open round, if there is one. Between rounds, joins the next round. Earlier rounds appear in gray with a minus sign because this player did not participate; prior history stays unchanged.</string>

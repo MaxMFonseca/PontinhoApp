@@ -22,6 +22,286 @@ import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun manualScoreAndWentOutPrepareNullIndicatorWithoutPicker() = runTest {
+        for (wentOut in listOf(false, true)) {
+            val repo = ScoringRepository()
+            val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+            runCurrent(); vm.addScore(repo.ids[0]); advanceUntilIdle()
+            assertNull(vm.uiState.value.picker)
+            assertNull(vm.uiState.value.scoreDialog!!.indicator)
+            assertEquals(listOf(1), vm.uiState.value.jokers.map { it.roundNumber })
+            if (wentOut) vm.wentOut() else { vm.updateScore("17"); vm.confirmScore() }
+            advanceUntilIdle()
+            assertNull(repo.snapshot.value!!.openRound!!.indicator)
+            assertEquals(MatchPhase.COUNTING, vm.uiState.value.phase)
+            if (wentOut) assertEquals(repo.ids[0], repo.snapshot.value!!.openRound!!.draft.designatedWinner)
+            else assertEquals(17, repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[0]]!!.points)
+        }
+    }
+
+    @Test fun phaseMovesFromNotStartedToCountingAndEditing() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+        assertNull(vm.uiState.value.jokers.single().roundId)
+        vm.addScore(repo.ids[0]); advanceUntilIdle()
+        assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+        vm.updateScore("17"); vm.confirmScore(); advanceUntilIdle()
+        assertEquals(MatchPhase.COUNTING, vm.uiState.value.phase)
+        repo.snapshot.value = repo.snapshot.value!!.let { it.copy(rounds = it.rounds.map { r -> r.copy(isCorrection = true) }) }
+        runCurrent(); assertEquals(MatchPhase.EDITING, vm.uiState.value.phase)
+        repo.snapshot.value = repo.snapshot.value!!.copy(isFinished = true)
+        runCurrent(); assertEquals(MatchPhase.FINISHED, vm.uiState.value.phase)
+    }
+
+    @Test fun completedRoundDoesNotStartNextRoundUntilItsScoreOrWinnerIsCommitted() = runTest {
+        for (wentOut in listOf(false, true)) {
+            val repo = ScoringRepository()
+            val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+            runCurrent(); vm.addScore(repo.ids[0]); advanceUntilIdle()
+            vm.updateScore("7"); vm.confirmScore(); advanceUntilIdle()
+            vm.addScore(repo.ids[1]); vm.updateScore("9"); vm.confirmScore(); advanceUntilIdle()
+            val completed = repo.snapshot.value!!.rounds.single()
+            assertEquals(RoundStatus.COMPLETE, completed.status)
+            assertEquals(2, vm.uiState.value.roundNumber)
+            assertNull(repo.snapshot.value!!.openRound)
+            assertNull(vm.uiState.value.jokers.last().roundId)
+            assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+
+            vm.editJoker(2); advanceUntilIdle()
+            assertNotNull(vm.uiState.value.jokers.last().roundId)
+            assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+            vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.BLACK)
+            vm.confirmIndicator(); advanceUntilIdle()
+            assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.jokers.last().indicator)
+            assertNull(repo.snapshot.value!!.openRound)
+            assertEquals(listOf(completed), repo.snapshot.value!!.rounds)
+            assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+
+            vm.addScore(repo.ids[0]); advanceUntilIdle()
+            assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+            if (wentOut) vm.wentOut() else { vm.updateScore("11"); vm.confirmScore() }
+            advanceUntilIdle()
+            assertEquals(2, repo.snapshot.value!!.openRound!!.ordinal)
+            assertEquals(MatchPhase.COUNTING, vm.uiState.value.phase)
+            if (wentOut) {
+                assertTrue(repo.snapshot.value!!.openRound!!.draft.entries.isEmpty())
+                assertEquals(repo.ids[0], repo.snapshot.value!!.openRound!!.draft.designatedWinner)
+            } else assertEquals(11, repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[0]]!!.points)
+        }
+    }
+
+    @Test fun jokerSlotsContainHistoryPlusOneCurrentSlotInOrdinalOrder() = runTest {
+        val repo = ScoringRepository()
+        val first = repo.round(1, RoundDraft(repo.ids)).copy(status = RoundStatus.COMPLETE)
+        val second = repo.round(2, RoundDraft(repo.ids)).copy(status = RoundStatus.COMPLETE)
+        repo.snapshot.value = repo.snapshot.value!!.copy(rounds = listOf(second, first))
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertEquals(listOf(1, 2, 3), vm.uiState.value.jokers.map { it.roundNumber })
+        assertNull(vm.uiState.value.jokers.last().roundId)
+        vm.editJoker(3); advanceUntilIdle()
+        assertNotNull(vm.uiState.value.jokers.last().roundId)
+        vm.dismissDialog()
+        repo.snapshot.value = repo.snapshot.value!!.copy(rounds = listOf(second.copy(status = RoundStatus.PAUSED), first.copy(status = RoundStatus.OPEN, isCorrection = true)))
+        runCurrent(); assertEquals(listOf(1, 2), vm.uiState.value.jokers.map { it.roundNumber })
+    }
+
+    @Test fun cameraWithoutJokerOpensPickerAndConfirmationLaunchesScanner() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        runCurrent(); vm.addScore(repo.ids[0]); advanceUntilIdle(); vm.updateScore("23")
+        assertTrue(vm.uiState.value.scoreDialog!!.canScan)
+        vm.openScanner(); vm.openScanner(); advanceUntilIdle()
+        assertTrue(events.isEmpty())
+        assertEquals(PickerPurpose.CAMERA, vm.uiState.value.picker!!.purpose)
+        vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.RED); vm.confirmIndicator(); vm.confirmIndicator()
+        advanceUntilIdle()
+        assertEquals(Indicator(Rank.KING, CardColor.RED), (events.single() as MatchEvent.OpenScanner).request.indicator)
+        assertEquals("23", vm.uiState.value.scoreDialog!!.value)
+    }
+
+    @Test fun cameraPickerCancellationRestoresUnchangedScoreDialog() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        runCurrent(); vm.addScore(repo.ids[0]); advanceUntilIdle(); vm.updateScore("29")
+        val dialog = vm.uiState.value.scoreDialog
+        vm.openScanner(); vm.selectIndicatorRank(Rank.FIVE); vm.dismissDialog(); advanceUntilIdle()
+        assertNull(vm.uiState.value.picker)
+        assertEquals(dialog, vm.uiState.value.scoreDialog)
+        assertTrue(events.isEmpty())
+    }
+
+    @Test fun cameraPickerBlocksRetainedScoreUpdatesUntilClosed() = runTest {
+        assertCameraPickerBlocks(action = { it.updateScore("99") }) { repo, vm ->
+            assertEquals("99", vm.uiState.value.scoreDialog!!.value)
+            assertTrue(repo.snapshot.value!!.rounds.isEmpty())
+        }
+    }
+
+    @Test fun cameraPickerBlocksRetainedScoreConfirmationUntilClosed() = runTest {
+        assertCameraPickerBlocks(action = { it.confirmScore() }) { repo, vm ->
+            assertEquals(23, repo.snapshot.value!!.openRound!!.draft.entries[repo.ids[0]]!!.points)
+            assertNull(vm.uiState.value.scoreDialog)
+        }
+    }
+
+    @Test fun cameraPickerBlocksRetainedWinnerDesignationUntilClosed() = runTest {
+        assertCameraPickerBlocks(action = { it.wentOut() }) { repo, vm ->
+            assertEquals(repo.ids[0], repo.snapshot.value!!.openRound!!.draft.designatedWinner)
+            assertNull(vm.uiState.value.scoreDialog)
+        }
+    }
+
+    @Test fun cameraPickerBlocksRetainedCorrectionDeletionUntilClosed() = runTest {
+        assertCameraPickerBlocks(correction = true, action = { it.deleteScore() }) { repo, vm ->
+            assertTrue(repo.snapshot.value!!.openRound!!.draft.entries.isEmpty())
+            assertNull(vm.uiState.value.scoreDialog)
+        }
+    }
+
+    private suspend fun TestScope.assertCameraPickerBlocks(
+        correction: Boolean = false,
+        action: (MatchViewModel) -> Unit,
+        assertResumed: (ScoringRepository, MatchViewModel) -> Unit,
+    ) {
+        for (confirmPicker in listOf(false, true)) {
+            val repo = ScoringRepository()
+            if (correction) repo.snapshot.value = repo.snapshot.value!!.copy(rounds = listOf(
+                repo.round(1, RoundDraft(repo.ids, mapOf(repo.ids[0] to RoundEntry(7, RoundEntryOrigin.EXPLICIT)))).copy(indicator = null)))
+            val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+            runCurrent()
+            if (correction) vm.editScore(repo.ids[0], 1) else vm.addScore(repo.ids[0])
+            advanceUntilIdle(); vm.updateScore("23"); vm.openScanner()
+            val before = repo.snapshot.value
+            val dialog = vm.uiState.value.scoreDialog
+            val picker = vm.uiState.value.picker
+            assertEquals(PickerPurpose.CAMERA, picker!!.purpose)
+
+            action(vm); advanceUntilIdle()
+
+            assertEquals(before, repo.snapshot.value)
+            assertEquals(dialog, vm.uiState.value.scoreDialog)
+            assertEquals(picker, vm.uiState.value.picker)
+            if (confirmPicker) {
+                vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.BLACK); vm.confirmIndicator()
+                advanceUntilIdle()
+                val request = (vm.events.first() as MatchEvent.OpenScanner).request
+                vm.scannerCancelled(request.submissionToken)
+            } else vm.dismissDialog()
+            assertNull(vm.uiState.value.picker)
+            assertEquals("23", vm.uiState.value.scoreDialog!!.value)
+            action(vm); advanceUntilIdle()
+            assertResumed(repo, vm)
+        }
+    }
+
+    @Test fun cameraWithJokerLaunchesDirectly() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+        vm.openScanner(); advanceUntilIdle()
+        assertNull(vm.uiState.value.picker)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), (vm.events.first() as MatchEvent.OpenScanner).request.indicator)
+    }
+
+    @Test fun persistedCameraWaitsForCommittedIndicatorBeforeLaunching() = runTest {
+        val storage = ScoringRepository()
+        val round = storage.round(1, RoundDraft(storage.ids)).copy(indicator = null)
+        storage.snapshot.value = storage.snapshot.value!!.copy(rounds = listOf(round))
+        var recordedCommand: UpdateRoundIndicator? = null
+        val repo = object : MatchRepository by storage {
+            override suspend fun updateRoundIndicator(command: UpdateRoundIndicator) { recordedCommand = command }
+        }
+        val vm = MatchViewModel(storage.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), recognitionAvailable = { true })
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        runCurrent(); vm.addScore(storage.ids[0]); vm.updateScore("31"); vm.openScanner()
+        vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.BLACK); vm.confirmIndicator(); runCurrent()
+        assertNotNull(recordedCommand); assertTrue(vm.uiState.value.isSaving); assertTrue(events.isEmpty())
+        storage.updateRoundIndicator(recordedCommand!!); advanceUntilIdle()
+        val request = (events.single() as MatchEvent.OpenScanner).request
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), request.indicator)
+        assertEquals("31", vm.uiState.value.scoreDialog!!.value)
+        assertEquals(request, vm.validateScanner(com.maxmfonseca.pontinho.ui.navigation.ScannerContext.from(request)))
+    }
+
+    @Test fun completedRoundJokerCanChangeAndClearWithoutChangingScores() = runTest {
+        for (finished in listOf(false, true)) {
+            val repo = ScoringRepository()
+            val round = repo.round(1, RoundDraft(repo.ids, repo.ids.associateWith { RoundEntry(7, RoundEntryOrigin.EXPLICIT) })).copy(status = RoundStatus.COMPLETE)
+            val before = repo.snapshot.value!!.copy(rounds = listOf(round), isFinished = finished)
+            repo.snapshot.value = before
+            val vm = MatchViewModel(before.id, repo, StandardTestDispatcher(testScheduler))
+            runCurrent(); vm.editJoker(1)
+            assertTrue(vm.uiState.value.picker!!.canRemove)
+            assertEquals(PickerPurpose.EDIT, vm.uiState.value.picker!!.purpose)
+            vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.RED); vm.confirmIndicator(); advanceUntilIdle()
+            assertNull(vm.uiState.value.picker)
+            assertEquals(before.copy(rounds = listOf(round.copy(indicator = Indicator(Rank.KING, CardColor.RED)))), repo.snapshot.value)
+            vm.editJoker(1); vm.removeIndicator(); advanceUntilIdle()
+            assertEquals(before.copy(rounds = listOf(round.copy(indicator = null))), repo.snapshot.value)
+            assertNull(vm.uiState.value.scoreDialog)
+        }
+    }
+
+    @Test fun currentEmptySlotCanBeEditedBeforeScore() = runTest {
+        val repo = ScoringRepository()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); vm.editJoker(1); advanceUntilIdle()
+        assertFalse(vm.uiState.value.picker!!.canRemove)
+        vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.BLACK); vm.confirmIndicator(); advanceUntilIdle()
+        assertTrue(repo.snapshot.value!!.rounds.isEmpty())
+        assertEquals(MatchPhase.NOT_STARTED, vm.uiState.value.phase)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.jokers.single().indicator)
+        vm.editJoker(1); vm.removeIndicator(); advanceUntilIdle()
+        vm.addScore(repo.ids[0]); advanceUntilIdle()
+        assertNull(vm.uiState.value.scoreDialog!!.indicator)
+        assertNull(vm.uiState.value.picker)
+    }
+
+    @Test fun restoredNullIndicatorDialogKeepsTypedValueAndCameraAction() = runTest {
+        val repo = ScoringRepository()
+        val saved = SavedStateHandle()
+        val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler), saved, { true })
+        runCurrent(); vm.addScore(repo.ids[0]); advanceUntilIdle(); vm.updateScore("42")
+        val encoded = saved.get<List<String?>>("scoreDialog")!!
+        assertEquals("2", encoded.last())
+        assertNull(encoded[4]); assertNull(encoded[5])
+        val restored = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            SavedStateHandle(saved.keys().associateWith { saved.get<Any?>(it) }), { true })
+        runCurrent()
+        assertEquals("42", restored.uiState.value.scoreDialog!!.value)
+        assertNull(restored.uiState.value.scoreDialog!!.indicator)
+        assertTrue(restored.uiState.value.scoreDialog!!.canScan)
+        restored.openScanner()
+        assertEquals(PickerPurpose.CAMERA, restored.uiState.value.picker!!.purpose)
+    }
+
+    @Test fun legacyDialogRestoresAndPartialIndicatorPairIsRejected() = runTest {
+        val repo = ScoringRepository()
+        val legacy = listOf(repo.ids[0].value, "Ana", "r1", "1", "KING", "BLACK", "true", "19", "false", "false", "token", "1")
+        val restored = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+            SavedStateHandle(mapOf("scoreDialog" to legacy)), { true })
+        runCurrent()
+        assertEquals("19", restored.uiState.value.scoreDialog!!.value)
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), restored.uiState.value.scoreDialog!!.indicator)
+        restored.openScanner(); advanceUntilIdle()
+        assertEquals("token", (restored.events.first() as MatchEvent.OpenScanner).request.submissionToken)
+        for (pair in listOf("KING" to null, null to "BLACK")) {
+            val malformed = legacy.mapIndexed { index, value -> when (index) { 4 -> pair.first; 5 -> pair.second; else -> value } } + "2"
+            val rejected = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler),
+                SavedStateHandle(mapOf("scoreDialog" to malformed)), { true })
+            runCurrent()
+            assertNull(rejected.uiState.value.scoreDialog)
+        }
+    }
+
     @Test fun availabilityEmissionsBeforeRepositoryRestorePreserveSavedScannerContext() = runTest {
         val storage = ScoringRepository()
         val saved = SavedStateHandle()
@@ -308,9 +588,9 @@ class MatchViewModelTest {
         }
         assertEquals(2, vm.uiState.value.roundNumber)
         assertNull(vm.uiState.value.indicator)
-        vm.addScore(repo.ids[0])
-        assertNotNull(vm.uiState.value.picker)
-        assertNull(vm.uiState.value.scoreDialog)
+        vm.addScore(repo.ids[0]); advanceUntilIdle()
+        assertNull(vm.uiState.value.picker)
+        assertNull(vm.uiState.value.scoreDialog!!.indicator)
     }
 
     @Test fun preparedWildcardSurvivesFailedAndSuccessfulReorder() = runTest {
@@ -434,36 +714,36 @@ class MatchViewModelTest {
 
     @Test fun directlySelectedJokerIsConvertedToCompatibleIndicatorAndFailedConfirmKeepsSelectionForRetry() = runTest {
         val storage = ScoringRepository()
+        storage.snapshot.value = storage.snapshot.value!!.copy(rounds = listOf(storage.round(1, RoundDraft(storage.ids)).copy(indicator = null)))
         var choices = 0
         var fail = true
         val repository = object : MatchRepository by storage {
-            override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound {
+            override suspend fun updateRoundIndicator(command: UpdateRoundIndicator) {
                 choices++
                 if (fail) error("Unavailable")
-                return storage.chooseIndicator(command)
+                storage.updateRoundIndicator(command)
             }
         }
         val vm = MatchViewModel(storage.snapshot.value!!.id, repository, StandardTestDispatcher(testScheduler))
         runCurrent()
-        vm.addScore(storage.ids[0]); vm.selectIndicatorRank(Rank.ACE); vm.confirmIndicator(); advanceUntilIdle()
+        vm.editJoker(1); vm.selectIndicatorRank(Rank.ACE); vm.confirmIndicator(); advanceUntilIdle()
         assertNull(vm.uiState.value.picker!!.indicator)
         assertEquals(0, choices)
         vm.dismissDialog()
-        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
-        vm.addScore(storage.ids[0]); vm.selectIndicatorColor(CardColor.BLACK); vm.confirmIndicator(); advanceUntilIdle()
+        assertNull(storage.snapshot.value!!.openRound!!.indicator)
+        vm.editJoker(1); vm.selectIndicatorColor(CardColor.BLACK); vm.confirmIndicator(); advanceUntilIdle()
         assertNull(vm.uiState.value.picker!!.indicator)
         assertEquals(0, choices)
         vm.selectIndicatorRank(Rank.ACE); vm.confirmIndicator(); advanceUntilIdle()
         assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.picker!!.indicator)
         assertTrue(vm.uiState.value.hasError)
         assertEquals(1, choices)
-        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+        assertNull(storage.snapshot.value!!.openRound!!.indicator)
         fail = false
         vm.confirmIndicator(); advanceUntilIdle()
-        assertEquals(Indicator(Rank.KING, CardColor.BLACK), vm.uiState.value.scoreDialog!!.indicator)
-        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
-        vm.dismissDialog()
-        assertTrue(storage.snapshot.value!!.rounds.isEmpty())
+        assertEquals(Indicator(Rank.KING, CardColor.BLACK), storage.snapshot.value!!.openRound!!.indicator)
+        assertNull(vm.uiState.value.picker)
+        assertTrue(storage.snapshot.value!!.openRound!!.draft.entries.isEmpty())
     }
 
     @Test fun finalPermutationIsValidatedCommittedOnceAndFailureKeepsCommittedOrder() = runTest {
@@ -628,15 +908,16 @@ class MatchViewModelTest {
         val repo = ScoringRepository()
         val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))
         runCurrent()
-        vm.addScore(repo.ids[0])
-        assertEquals(repo.ids[0], vm.uiState.value.picker?.participantId)
+        vm.editJoker(1); advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.picker?.roundNumber)
         vm.dismissDialog()
         assertNull(vm.uiState.value.picker)
         assertTrue(repo.snapshot.value!!.rounds.isEmpty())
-        vm.addScore(repo.ids[0])
+        vm.editJoker(1)
         vm.selectIndicatorRank(Rank.KING); vm.selectIndicatorColor(CardColor.RED)
         vm.confirmIndicator()
         advanceUntilIdle()
+        vm.addScore(repo.ids[0])
         assertEquals(Indicator(Rank.QUEEN, CardColor.RED), vm.uiState.value.scoreDialog?.indicator)
         assertTrue(repo.snapshot.value!!.rounds.isEmpty())
         vm.dismissDialog()
@@ -757,10 +1038,11 @@ class MatchViewModelTest {
         vm.addScore(repo.ids[0]); assertNull(vm.uiState.value.picker)
     }
 
-    private fun prepare(vm: MatchViewModel, id: ParticipantId) {
-        vm.addScore(id)
+    private fun TestScope.prepare(vm: MatchViewModel, id: ParticipantId) {
+        vm.editJoker(vm.uiState.value.roundNumber); runCurrent()
         vm.selectIndicatorRank(Rank.ACE); vm.selectIndicatorColor(CardColor.BLACK)
-        vm.confirmIndicator()
+        vm.confirmIndicator(); runCurrent()
+        vm.addScore(id); runCurrent()
     }
 }
 
@@ -777,10 +1059,17 @@ private class ScoringRepository(
     override fun observeMatch(matchId: MatchId) = snapshot
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
     override fun observeDay(localDate: LocalDate) = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
-    override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound {
+    override suspend fun prepareRound(command: PrepareRound): PreparedRound {
         check(snapshot.value!!.rounds.none { it.status != RoundStatus.COMPLETE })
         val ordinal = snapshot.value!!.rounds.size + 1
         return PreparedRound(RoundId("r$ordinal"), command.matchId, ordinal, command.indicator)
+    }
+    override suspend fun updateRoundIndicator(command: UpdateRoundIndicator) {
+        val before = snapshot.value!!
+        require(before.id == command.matchId && before.rounds.any { it.id == command.roundId })
+        snapshot.value = before.copy(rounds = before.rounds.map {
+            if (it.id == command.roundId) it.copy(indicator = command.indicator) else it
+        })
     }
     fun round(ordinal: Int, draft: RoundDraft) = RoundSnapshot(RoundId("r$ordinal"), ordinal,
         Indicator(Rank.ACE, CardColor.BLACK), ids[0], draft, Instant.EPOCH, null, RoundStatus.OPEN, false)

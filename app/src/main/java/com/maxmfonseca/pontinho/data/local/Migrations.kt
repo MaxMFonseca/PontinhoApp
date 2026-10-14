@@ -31,3 +31,42 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         )
     }
 }
+
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE rounds_new (
+                id TEXT NOT NULL PRIMARY KEY,
+                matchId TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                indicatorRank TEXT,
+                indicatorColor TEXT,
+                dealerParticipantId TEXT NOT NULL,
+                eligibleParticipantCount INTEGER NOT NULL,
+                designatedWinnerParticipantId TEXT,
+                designationOrigin TEXT,
+                status TEXT NOT NULL,
+                openSlot INTEGER,
+                createdAt INTEGER NOT NULL,
+                completedAt INTEGER,
+                nextDealerParticipantId TEXT,
+                isCorrection INTEGER NOT NULL,
+                pauseOrder INTEGER,
+                FOREIGN KEY(matchId) REFERENCES matches(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                FOREIGN KEY(matchId, dealerParticipantId) REFERENCES participants(matchId, id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                FOREIGN KEY(matchId, designatedWinnerParticipantId) REFERENCES participants(matchId, id) ON UPDATE NO ACTION ON DELETE RESTRICT
+            )
+        """.trimIndent())
+        val columns = "id, matchId, ordinal, indicatorRank, indicatorColor, dealerParticipantId, " +
+            "eligibleParticipantCount, designatedWinnerParticipantId, designationOrigin, status, openSlot, " +
+            "createdAt, completedAt, nextDealerParticipantId, isCorrection, pauseOrder"
+        db.execSQL("INSERT INTO rounds_new ($columns) SELECT $columns FROM rounds")
+        db.execSQL("DROP TABLE rounds")
+        db.execSQL("ALTER TABLE rounds_new RENAME TO rounds")
+        db.execSQL("CREATE UNIQUE INDEX index_rounds_matchId_ordinal ON rounds(matchId, ordinal)")
+        db.execSQL("CREATE UNIQUE INDEX index_rounds_matchId_id ON rounds(matchId, id)")
+        db.execSQL("CREATE UNIQUE INDEX index_rounds_matchId_openSlot ON rounds(matchId, openSlot)")
+        db.execSQL("CREATE INDEX index_rounds_matchId_dealerParticipantId ON rounds(matchId, dealerParticipantId)")
+        db.execSQL("CREATE INDEX index_rounds_matchId_designatedWinnerParticipantId ON rounds(matchId, designatedWinnerParticipantId)")
+    }
+}

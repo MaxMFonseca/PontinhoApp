@@ -46,7 +46,7 @@ class RoomMatchRepositoryTest {
     private suspend fun snapshot(id: MatchId) = repo.observeMatch(id).first()!!
     private val preparations = mutableMapOf<RoundId, PreparedRound>()
     private suspend fun start(id: MatchId, chosenIndicator: Indicator = indicator): RoundId {
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, chosenIndicator))
+        val prepared = repo.prepareRound(PrepareRound(id, chosenIndicator))
         preparations[prepared.id] = prepared
         return prepared.id
     }
@@ -67,6 +67,63 @@ class RoomMatchRepositoryTest {
         corrected: Boolean = false,
         bounds: NormalizedRect? = NormalizedRect(.1f, .2f, .3f, .4f),
     ) = ConfirmedCard(Card.Suited(rank, suit), confidence, corrected, bounds)
+
+    @Test fun manualScoreCreatesRoundWithoutIndicator() = runBlocking {
+        val id = create()
+        val prepared = repo.prepareRound(PrepareRound(id))
+        assertTrue(snapshot(id).rounds.isEmpty())
+        repo.submitScore(SubmitScore(id, prepared.id, snapshot(id).participants[0].id, 17, "manual-no-joker", prepared))
+        val state = snapshot(id)
+        assertNull(state.rounds.single().indicator)
+        assertEquals(17, state.totals[state.participants[0].id])
+        assertNull(db.roundDao().get(prepared.id.value)!!.indicatorRank)
+        assertNull(db.roundDao().get(prepared.id.value)!!.indicatorColor)
+    }
+
+    @Test fun scannedScoreRejectsRoundWithoutIndicator() = runBlocking {
+        val id = create(3)
+        val prepared = repo.prepareRound(PrepareRound(id))
+        preparations[prepared.id] = prepared
+        val before = snapshot(id)
+        rejected { scan(id, prepared.id, 0, listOf(card(Rank.TEN, Suit.CLUBS)), "no-joker") }
+        assertEquals(before, snapshot(id))
+        assertNull(db.roundDao().submission("no-joker"))
+        submit(id, prepared.id, 0, 5)
+        val persisted = snapshot(id)
+        rejected { scan(id, prepared.id, 1, listOf(card(Rank.TEN, Suit.CLUBS)), "persisted-no-joker") }
+        rejected { repo.updateScannedScore(UpdateScannedScore(id, prepared.id, persisted.participants[0].id, listOf(card(Rank.TEN, Suit.CLUBS)), "cards-v1")) }
+        assertEquals(persisted, snapshot(id))
+        assertTrue(db.roundDao().allCardObservations().isEmpty())
+    }
+
+    @Test fun updatingCompletedAndFinishedRoundIndicatorChangesNoScoreOrOutcomeState() = runBlocking {
+        for (points in listOf(17, 101)) {
+            val id = create()
+            val round = start(id)
+            val cards = if (points == 17) listOf(card(Rank.TEN, Suit.CLUBS), card(Rank.SEVEN, Suit.HEARTS))
+                else List(9) { card(Rank.TEN, Suit.CLUBS) } + listOf(card(Rank.NINE, Suit.HEARTS), card(Rank.TWO, Suit.HEARTS))
+            scan(id, round, 0, cards, "metadata-$points")
+            val before = snapshot(id)
+            assertEquals(points, before.totals[before.participants[0].id])
+            val matchRow = db.matchDao().get(id.value)
+            val scoreRows = db.roundDao().scores(round.value)
+            val roundRow = db.roundDao().get(round.value)!!
+            val observations = db.roundDao().allCardObservations()
+            val corrections = db.matchDao().corrections(id.value)
+            val receipt = db.roundDao().submission("metadata-$points")
+            for (replacement in listOf(Indicator(Rank.FIVE, CardColor.BLACK), null)) {
+                repo.updateRoundIndicator(UpdateRoundIndicator(id, round, replacement))
+                val after = snapshot(id)
+                assertEquals(before.copy(rounds = before.rounds.map { it.copy(indicator = replacement) }), after)
+                assertEquals(matchRow, db.matchDao().get(id.value))
+                assertEquals(scoreRows, db.roundDao().scores(round.value))
+                assertEquals(observations, db.roundDao().allCardObservations())
+                assertEquals(corrections, db.matchDao().corrections(id.value))
+                assertEquals(receipt, db.roundDao().submission("metadata-$points"))
+                assertEquals(roundRow.copy(indicatorRank = replacement?.rank?.name, indicatorColor = replacement?.color?.name), db.roundDao().get(round.value))
+            }
+        }
+    }
 
     private suspend fun scan(
         matchId: MatchId,
@@ -206,7 +263,7 @@ class RoomMatchRepositoryTest {
             val matchId = cancellableRepo.createMatch(CreateMatch("scan-cancel-match", listOf(
                 CreateMatchPlayer("a", displayName = "Ana"), CreateMatchPlayer("b", displayName = "Bruno"),
             )))
-            val prepared = cancellableRepo.chooseIndicator(ChooseIndicator(matchId, indicator))
+            val prepared = cancellableRepo.prepareRound(PrepareRound(matchId, indicator))
             val before = cancellableRepo.observeMatch(matchId).first()!!
             val command = SubmitScannedScore(
                 matchId, prepared.id, before.participants[0].id,
@@ -1043,7 +1100,7 @@ class RoomMatchRepositoryTest {
         rejected { submit(id, stale, 0, 20, "stale-first") }
         assertEquals(completed, snapshot(id))
         assertNull(db.roundDao().submission("stale-first"))
-        val prepared = repo.chooseIndicator(ChooseIndicator(id, indicator))
+        val prepared = repo.prepareRound(PrepareRound(id, indicator))
         assertEquals(2, prepared.ordinal)
         assertEquals(1, snapshot(id).rounds.size)
     }

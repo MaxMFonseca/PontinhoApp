@@ -15,7 +15,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionWarning
-import com.maxmfonseca.pontinho.ui.match.rankLabel
+import com.maxmfonseca.pontinho.ui.components.CardFace
+import com.maxmfonseca.pontinho.ui.components.shortRankLabel
 
 data class ScannerActions(
     val onCapture: () -> Unit = {},
@@ -129,9 +130,16 @@ private fun CardReview(card: ReviewCard, position: Int, canEdit: Boolean, onEdit
     val description = stringResource(R.string.scanner_card_description, position, name)
     OutlinedCard(Modifier.fillMaxWidth().testTag("scanner_card_${card.id}")) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("$position. $name", style = MaterialTheme.typography.titleMedium,
+            Row(
                 modifier = Modifier.testTag("scanner_card_description_${card.id}")
-                    .clearAndSetSemantics { contentDescription = description })
+                    .clearAndSetSemantics { contentDescription = description },
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CardFace(card.card, name, Modifier.width(48.dp))
+                Text("$position. $name", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f))
+            }
             if (card.warnings.isNotEmpty()) {
                 Notice(if (RecognitionWarning.LOW_CONFIDENCE in card.warnings) R.string.scanner_low_confidence
                     else R.string.scanner_check_card, "scanner_warning_${card.id}")
@@ -178,7 +186,7 @@ private fun CardEditor(initial: Card.Suited?, onDismiss: () -> Unit, onConfirm: 
                     Rank.entries.forEach { option ->
                         val name = rankName(option)
                         FilterChip(selected = rank == option, onClick = { rank = option },
-                            label = { Text(rankLabel(option)) }, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            label = { Text(shortRankLabel(option)) }, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                                 .testTag("scanner_rank_${option.name}").semantics { contentDescription = name })
                     }
                 }

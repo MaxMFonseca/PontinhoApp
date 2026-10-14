@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.maxmfonseca.pontinho.PontinhoApplication
+import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.repository.RoomMatchRepository
 import com.maxmfonseca.pontinho.data.repository.RoomPlayerRepository
@@ -59,12 +60,98 @@ class CardScannerJourneyTest {
 
     @After fun close() { database.close() }
 
-    @Test fun legacyShippedAssetsFailClosedUntilTask9PairWiringAndManualScoreStillCommits() = runBlocking<Unit> {
-        // Stage 9 owns replacing the current legacy Triple reader with the verified Pair.
-        val engine = context.container.cardRecognitionEngineProvider.get()
-        context.container.cardRecognitionEngineProvider.availability.first { it !is RecognitionAvailability.Checking }
-        assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS), engine.availability)
-        unavailableJourney(engine)
+    @Test fun cameraSelectsJokerOnDemandAndCompletedRoundEditsPreserveSavedScoreAndTotal() = runBlocking<Unit> {
+        val id = createMatch()
+        showMatch(id, DebugRecognitionEngine())
+        val participants = repository.observeMatch(id).first()!!.participants.map { it.id }
+        compose.onNode(hasTestTag("player_action") and hasAnyAncestor(hasTestTag("match_player_${participants[0].value}")))
+            .performScrollTo().performClick()
+        awaitTag("score_input")
+        compose.onNodeWithTag("joker_dialog").assertDoesNotExist()
+        compose.runOnIdle { match = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java] }
+        assertNull(match.uiState.value.scoreDialog!!.indicator)
+        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("joker_dialog")
+        compose.onNodeWithTag("scanner_root").assertDoesNotExist()
+        selectJoker(Rank.ACE, CardColor.BLACK)
+        awaitTag("scanner_root")
+        val image = File.createTempFile("optional-joker-", ".png", context.cacheDir)
+        Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).let { bitmap ->
+            image.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+        try {
+            lateinit var scanner: ScannerViewModel
+            compose.runOnIdle {
+                scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
+                scanner.onPhotoSelected(Uri.fromFile(image))
+            }
+            compose.waitUntil { scanner.uiState.value.canConfirm }
+            assertEquals(4, scanner.uiState.value.total)
+            compose.onNodeWithTag("scanner_confirm").performScrollTo().performClick()
+            compose.waitUntil { match.uiState.value.scoreDialog == null && !match.uiState.value.isSaving }
+            awaitTag("match_root")
+            compose.runOnIdle { assertEquals(Destination.Match.route, nav.currentDestination!!.route) }
+            compose.onNode(hasTestTag("player_action") and hasAnyAncestor(hasTestTag("match_player_${participants[1].value}")))
+                .performScrollTo().performClick()
+            awaitTag("score_input")
+            compose.onNodeWithTag("score_input").performTextInput("9")
+            compose.onNodeWithText(context.getString(R.string.confirm)).performScrollTo().performClick()
+            compose.waitUntil { match.uiState.value.roundNumber == 2 && !match.uiState.value.isSaving }
+            val before = repository.observeMatch(id).first()!!
+            val completed = before.rounds.single()
+            val scores = database.roundDao().scores(completed.id.value)
+            val observations = database.roundDao().allCardObservations()
+            assertNull(before.openRound)
+            assertEquals(Indicator(Rank.KING, CardColor.BLACK), completed.indicator)
+            assertEquals(listOf(4, 9, 0), participants.map { before.totals.getValue(it) })
+            assertEquals("SCAN", scores.single { it.participantId == participants[0].value }.origin)
+            assertEquals(2, observations.size)
+
+            // The saved 2H + 2H would score differently if the edited joker recalculated it.
+            compose.onNodeWithTag("joker_round_1").performClick()
+            awaitTag("joker_dialog")
+            selectJoker(Rank.TWO, CardColor.RED)
+            compose.waitUntil { match.uiState.value.picker == null && !match.uiState.value.isSaving }
+            val edited = repository.observeMatch(id).first()!!
+            assertEquals(Indicator(Rank.ACE, CardColor.RED), edited.rounds.single().indicator)
+            assertEquals(before.copy(rounds = listOf(completed.copy(indicator = Indicator(Rank.ACE, CardColor.RED)))), edited)
+            assertEquals(scores, database.roundDao().scores(completed.id.value))
+            assertEquals(observations, database.roundDao().allCardObservations())
+
+            compose.onNodeWithTag("joker_round_1").performClick()
+            awaitTag("joker_remove")
+            compose.onNodeWithTag("joker_remove").performClick()
+            compose.waitUntil { match.uiState.value.picker == null && !match.uiState.value.isSaving }
+            val removed = repository.observeMatch(id).first()!!
+            assertEquals(before.copy(rounds = listOf(completed.copy(indicator = null))), removed)
+            assertEquals(4, removed.rounds.single().draft.entries.getValue(participants[0]).points)
+            assertEquals(listOf(4, 9, 0), participants.map { removed.totals.getValue(it) })
+            assertEquals(scores, database.roundDao().scores(completed.id.value))
+            assertEquals(observations, database.roundDao().allCardObservations())
+            compose.onNodeWithTag("joker_round_2").assertIsDisplayed()
+        } finally { assertTrue(image.delete() || !image.exists()) }
+    }
+
+    private fun selectJoker(rank: Rank, color: CardColor) {
+        compose.onNodeWithTag("indicator_rank_${rank.name}").performClick()
+        compose.onNodeWithTag("indicator_color_${color.name}").performClick()
+        compose.onNodeWithText(context.getString(R.string.confirm)).performClick()
+    }
+
+    @Test fun missingReleaseAssetsFailClosedAndManualScoreStillCommits() = runBlocking<Unit> {
+        val provider = VerifiedCardRecognitionEngineProvider(
+            readAssets = { null to null },
+            factory = SingleStageCardRecognitionEngineFactory(),
+        )
+        try {
+            val engine = provider.get()
+            provider.availability.first { it !is RecognitionAvailability.Checking }
+            assertEquals(RecognitionAvailability.Unavailable(RecognitionUnavailableReason.MISSING_ASSETS), engine.availability)
+            unavailableJourney(engine)
+        } finally {
+            provider.close()
+        }
     }
 
     @Test fun malformedReleasePairFailsClosedAndManualScoreStillCommits() = runBlocking<Unit> {
@@ -99,6 +186,8 @@ class CardScannerJourneyTest {
         showMatch(id, DebugRecognitionEngine(failure))
         openScore()
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("joker_dialog")
+        selectJoker(Rank.ACE, CardColor.BLACK)
         awaitTag("scanner_root")
         val image = File.createTempFile("failed-capture-", ".png", context.cacheDir)
         Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).let { bitmap ->
@@ -152,6 +241,8 @@ class CardScannerJourneyTest {
         openScore()
         val participant = match.uiState.value.scoreDialog!!.participantId
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        awaitTag("joker_dialog")
+        selectJoker(Rank.ACE, CardColor.BLACK)
         awaitTag("scanner_root")
         lateinit var scanner: ScannerViewModel
         // A generated cache image exercises the real decoder. This does not exercise the picker/camera.
@@ -222,8 +313,8 @@ class CardScannerJourneyTest {
     @Test fun parcelledReviewReconstructsDistinctViewModelAndRequiresExplicitConfirmation() = runBlocking<Unit> {
         val id = createMatch()
         val participant = repository.observeMatch(id).first()!!.participants.first().id
-        val prepared = repository.chooseIndicator(ChooseIndicator(id, Indicator(Rank.ACE, CardColor.BLACK)))
-        val request = ScanRequest(id, participant, prepared.id, prepared.indicator, prepared, submissionToken = "restored-review")
+        val prepared = repository.prepareRound(PrepareRound(id, Indicator(Rank.ACE, CardColor.BLACK)))
+        val request = ScanRequest(id, participant, prepared.id, requireNotNull(prepared.indicator), prepared, submissionToken = "restored-review")
         val handle = SavedStateHandle()
         val store = ViewModelStore()
         lateinit var original: ScannerViewModel
@@ -296,9 +387,6 @@ class CardScannerJourneyTest {
         compose.runOnIdle {
             match = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
             match.addScore(match.uiState.value.players.first().id)
-            match.selectIndicatorRank(Rank.ACE)
-            match.selectIndicatorColor(CardColor.BLACK)
-            match.confirmIndicator()
         }
         compose.waitUntil(5_000) { match.uiState.value.scoreDialog != null && !match.uiState.value.isSaving }
         awaitTag("score_input")

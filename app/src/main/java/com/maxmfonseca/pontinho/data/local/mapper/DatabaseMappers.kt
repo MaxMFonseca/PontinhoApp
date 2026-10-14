@@ -17,7 +17,7 @@ internal fun RoundEntity.toDomain(
 ) = RoundSnapshot(
     id = RoundId(id),
     ordinal = ordinal,
-    indicator = Indicator(Rank.valueOf(indicatorRank), CardColor.valueOf(indicatorColor)),
+    indicator = indicatorOrNull(),
     dealerParticipantId = ParticipantId(dealerParticipantId),
     draft = RoundDraft(
         eligibleParticipants = participants.filter { it.eligibleFromRoundOrdinal <= ordinal }.map { ParticipantId(it.id) },
@@ -34,3 +34,9 @@ internal fun RoundEntity.toDomain(
     status = RoundStatus.valueOf(status),
     isCorrection = isCorrection,
 )
+
+internal fun RoundEntity.indicatorOrNull(): Indicator? {
+    val rank = Rank.entries.firstOrNull { it.name == indicatorRank } ?: return null
+    val color = CardColor.entries.firstOrNull { it.name == indicatorColor } ?: return null
+    return Indicator(rank, color)
+}

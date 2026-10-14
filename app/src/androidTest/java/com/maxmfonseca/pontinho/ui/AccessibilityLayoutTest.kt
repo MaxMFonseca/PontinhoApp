@@ -160,6 +160,7 @@ class AccessibilityLayoutTest {
                         }
 
                         compose.onNodeWithTag("match_players").performScrollToIndex(0)
+                        compose.onNodeWithTag("joker_round_21").assertIsDisplayed()
                         val scenario = "$languageTag/$fontScale/$theme/reduced=$reducedMotion"
                         assertStressPlayer(0, scenario)
                         val history = compose.onNode(
@@ -257,6 +258,7 @@ class AccessibilityLayoutTest {
     private fun stressFixture(name: String) = MatchUiState(
         isLoading = false,
         roundNumber = 21,
+        jokers = (1..21).map { com.maxmfonseca.pontinho.ui.match.RoundJokerUi(null, it, null) },
         canAddPlayer = true, canReorderPlayers = true,
         players = (0 until 12).map { player ->
             MatchPlayer(

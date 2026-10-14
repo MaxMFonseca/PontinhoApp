@@ -43,7 +43,7 @@ import com.maxmfonseca.pontinho.R
 fun ScoreDialog(
     playerName: String,
     roundNumber: Int,
-    indicatorLabel: String,
+    indicatorLabel: String?,
     value: String,
     onValueChange: (String) -> Unit,
     onConfirm: (Int) -> Unit,
@@ -66,7 +66,8 @@ fun ScoreDialog(
         title = { Text(stringResource(R.string.score_dialog_title, playerName), style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.score_round_indicator, roundNumber, indicatorLabel))
+                Text(if (indicatorLabel == null) stringResource(R.string.score_round, roundNumber)
+                    else stringResource(R.string.score_round_indicator, roundNumber, indicatorLabel))
                 val input: @Composable (Modifier) -> Unit = { modifier ->
                     OutlinedTextField(
                         value = value,

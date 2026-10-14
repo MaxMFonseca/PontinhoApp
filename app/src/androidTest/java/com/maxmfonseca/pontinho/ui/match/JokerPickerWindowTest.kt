@@ -46,6 +46,8 @@ class JokerPickerWindowTest(private val landscape: Boolean, private val fontScal
         var error by mutableStateOf(false)
         var confirmations = 0
         var cancellations = 0
+        var canRemove by mutableStateOf(false)
+        var removals = 0
         compose.setContent {
             val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
                 setLocale(Locale.forLanguageTag(language))
@@ -53,12 +55,13 @@ class JokerPickerWindowTest(private val landscape: Boolean, private val fontScal
             CompositionLocalProvider(LocalContext provides context, LocalResources provides context.resources) {
                 PontinhoTheme(theme) {
                     JokerPicker(rank, color, false, error, { rank = it }, { color = it },
-                        { confirmations++; error = true }, { cancellations++ })
+                        { confirmations++; error = true }, { cancellations++ },
+                        canRemove = canRemove, onRemove = { removals++ })
                 }
             }
         }
         for (locale in listOf("pt-BR", "en-US")) for (mode in listOf(ThemePreference.LIGHT, ThemePreference.DARK)) {
-            compose.runOnIdle { language = locale; theme = mode; rank = null; color = null; error = false }
+            compose.runOnIdle { language = locale; theme = mode; rank = null; color = null; error = false; canRemove = false }
             val context = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
                 setLocale(Locale.forLanguageTag(locale))
             })
@@ -68,7 +71,8 @@ class JokerPickerWindowTest(private val landscape: Boolean, private val fontScal
             fun checkAndCapture(state: String) {
                 val label = "$scenario-$state"
                 val controls = (Rank.entries.map { "indicator_rank_${it.name}" } +
-                    CardColor.entries.map { "indicator_color_${it.name}" }).map { compose.onNodeWithTag(it) } + listOf(cancel, confirm)
+                    CardColor.entries.map { "indicator_color_${it.name}" }).map { compose.onNodeWithTag(it) } + listOf(cancel, confirm) +
+                    if (canRemove) listOf(compose.onNodeWithTag("joker_remove")) else emptyList()
                 controls.forEach { control ->
                     control.assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
                     assertFullyVisible(control.fetchSemanticsNode(), label)
@@ -84,6 +88,12 @@ class JokerPickerWindowTest(private val landscape: Boolean, private val fontScal
                     assertEquals("One-word action must stay intact at $label: $text", 1, layouts.single().lineCount)
                     val layout = layouts.single()
                     assertTextFits(layout, "$label: $text")
+                }
+                if (canRemove) {
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    compose.onNode(hasText(context.getString(R.string.joker_remove)) and !hasClickAction(), true)
+                        .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    assertTextFits(layouts.single(), "$label: remove joker")
                 }
                 compose.onNodeWithTag("joker_preview").assertIsDisplayed().also {
                     assertFullyVisible(it.fetchSemanticsNode(), label)
@@ -103,16 +113,22 @@ class JokerPickerWindowTest(private val landscape: Boolean, private val fontScal
                 shell("screencap -p /sdcard/Download/final-picker-$label.png")
             }
             confirm.assertIsNotEnabled()
+            compose.onNodeWithTag("joker_remove").assertDoesNotExist()
             checkAndCapture("empty")
             for (option in Rank.entries.map { "indicator_rank_${it.name}" } + CardColor.entries.map { "indicator_color_${it.name}" }) {
                 compose.onNodeWithTag(option).performTouchInput { click() }.assertIsSelected()
             }
-            // Nine gives two-digit tens; use the longer color name in each supported locale.
-            compose.onNodeWithTag("indicator_rank_NINE").performTouchInput { click() }.assertIsSelected()
+            // Exercise the two-digit rank and the longer color name in each supported locale.
+            compose.onNodeWithTag("indicator_rank_TEN").performTouchInput { click() }.assertIsSelected()
             val longestColor = if (locale == "pt-BR") CardColor.RED else CardColor.BLACK
             compose.onNodeWithTag("indicator_color_${longestColor.name}").performTouchInput { click() }.assertIsSelected()
             confirm.assertIsEnabled()
             checkAndCapture("selected")
+            compose.runOnIdle { canRemove = true }
+            checkAndCapture("existing")
+            val previousRemovals = removals
+            compose.onNodeWithTag("joker_remove").performTouchInput { click() }
+            compose.runOnIdle { assertEquals(previousRemovals + 1, removals) }
             val previousConfirmations = confirmations
             confirm.performTouchInput { click() }
             compose.runOnIdle { assertEquals(previousConfirmations + 1, confirmations) }

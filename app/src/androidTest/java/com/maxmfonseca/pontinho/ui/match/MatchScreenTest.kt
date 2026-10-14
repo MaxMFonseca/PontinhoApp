@@ -36,8 +36,118 @@ class MatchScreenTest {
     @get:Rule val compose = createComposeRule()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
+    @Test fun phaseIsOneLocalizedStatusWithoutRedundantCorrectionOrWildcardText() {
+        var language by mutableStateOf("pt-BR")
+        var phase by mutableStateOf(MatchPhase.NOT_STARTED)
+        compose.setContent {
+            val localized = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+                setLocale(Locale.forLanguageTag(language))
+            })
+            CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources) {
+                PontinhoTheme { Content(fixture(3).copy(roundNumber = 4, phase = phase,
+                    isFinished = phase == MatchPhase.FINISHED, isCorrectingRound = phase == MatchPhase.EDITING,
+                    indicator = Indicator(Rank.NINE, CardColor.RED))) }
+            }
+        }
+        val labels = mapOf(
+            "pt-BR" to listOf("Rodada 4 não iniciada", "Contando pontos da rodada 4", "Editando rodada 4", "Partida encerrada"),
+            "en-US" to listOf("Round 4 not started", "Counting points for round 4", "Editing round 4", "Match finished"),
+        )
+        for ((locale, expected) in labels) for ((index, value) in MatchPhase.entries.withIndex()) {
+            compose.runOnIdle { language = locale; phase = value }
+            compose.onNodeWithTag("match_status").assertTextEquals(expected[index]).assertIsDisplayed()
+            compose.onAllNodesWithText(expected[index]).assertCountEquals(1)
+            compose.onNodeWithText("10♥", substring = true).assertDoesNotExist()
+            compose.onNodeWithText(if (locale == "pt-BR") "Corrigindo a rodada 4" else "Correcting round 4").assertDoesNotExist()
+        }
+    }
+
+    @Test fun jokerHistoryCentersOneSlotAndScrollsTwelveToCurrentAtLargeFont() {
+        var count by mutableIntStateOf(1)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(context.resources.displayMetrics.density, 2f)) {
+                PontinhoTheme { Box(Modifier.size(320.dp, 568.dp)) {
+                    Content(fixture(3).copy(roundNumber = count, jokers = (1..count).map {
+                        RoundJokerUi(null, it, null)
+                    }))
+                } }
+            }
+        }
+        val scroll = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        compose.onNodeWithTag("joker_history").assert(scroll.not())
+        val first = compose.onNodeWithTag("joker_round_1").assertIsDisplayed()
+            .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).fetchSemanticsNode().boundsInRoot
+        val row = compose.onNodeWithTag("joker_history").fetchSemanticsNode().boundsInRoot
+        assertEquals(row.center.x, first.center.x, 1f)
+        for (rounds in listOf(12, 13)) {
+            compose.runOnIdle { count = rounds }
+            compose.onNodeWithTag("joker_history").assert(scroll)
+            val current = compose.onNodeWithTag("joker_round_$rounds").assertIsDisplayed()
+                .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).fetchSemanticsNode()
+            assertEquals("Current card must be fully visible", current.layoutInfo.coordinates.size.width.toFloat(), current.boundsInRoot.width, 1f)
+            compose.onNodeWithTag("joker_round_1").assertIsNotDisplayed()
+        }
+        capture("task4-joker-history-13-font-2.png")
+    }
+
+    @Test fun overflowingJokerHistoryRevealsActiveCorrectionRoundWhenItChanges() {
+        var activeRound by mutableIntStateOf(12)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(context.resources.displayMetrics.density, 2f)) {
+                PontinhoTheme { Box(Modifier.size(320.dp, 568.dp)) {
+                    Content(fixture(3).copy(roundNumber = activeRound,
+                        phase = if (activeRound == 12) MatchPhase.COUNTING else MatchPhase.EDITING,
+                        isCorrectingRound = activeRound != 12,
+                        jokers = (1..12).map { RoundJokerUi(RoundId("r$it"), it, null) }))
+                } }
+            }
+        }
+        compose.onNodeWithTag("joker_round_12").assertIsDisplayed()
+        for (round in listOf(2, 8, 1, 12)) {
+            compose.runOnIdle { activeRound = round }
+            compose.onNodeWithTag("joker_history")
+                .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
+            val active = compose.onNodeWithTag("joker_round_$round").assertIsDisplayed().fetchSemanticsNode()
+            assertEquals("Active round $round must be fully visible", active.layoutInfo.coordinates.size.width.toFloat(),
+                active.boundsInRoot.width, 1f)
+            if (round == 2) compose.onNodeWithTag("joker_round_12").assertIsNotDisplayed()
+        }
+    }
+
+    @Test fun initiallyFinishedOverflowHistoryRevealsLastCompletedRound() {
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(context.resources.displayMetrics.density, 2f)) {
+                PontinhoTheme { Box(Modifier.size(320.dp, 568.dp)) {
+                    Content(fixture(3).copy(roundNumber = 13, phase = MatchPhase.FINISHED, isFinished = true,
+                        jokers = (1..12).map { RoundJokerUi(RoundId("r$it"), it, null) }))
+                } }
+            }
+        }
+        compose.onNodeWithTag("joker_history")
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
+        val last = compose.onNodeWithTag("joker_round_12").assertIsDisplayed().fetchSemanticsNode()
+        assertEquals("Last completed round must be fully visible on initial render",
+            last.layoutInfo.coordinates.size.width.toFloat(), last.boundsInRoot.width, 1f)
+        compose.onNodeWithTag("joker_round_1").assertIsNotDisplayed()
+        compose.onNodeWithTag("joker_round_13").assertDoesNotExist()
+    }
+
+    @Test fun cameraPickerHidesRetainedScoreDialogUntilDismissed() {
+        var picker by mutableStateOf<IndicatorPickerState?>(IndicatorPickerState(RoundId("r1"), 1, PickerPurpose.CAMERA))
+        compose.setContent { PontinhoTheme {
+            MatchScreen(fixture(3).copy(picker = picker, scoreDialog = MatchScoreDialogState(
+                ParticipantId("p0"), "Ana", RoundId("r1"), 1, null, true, "42", canScan = true)),
+                {}, {}, {}, {}, { picker = null }, {}, {}, {}, {})
+        } }
+        compose.onNodeWithTag("joker_dialog").assertIsDisplayed()
+        compose.onNodeWithTag("score_input").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        compose.onNodeWithTag("score_input").assertIsFocused().assertTextContains("42")
+        compose.onNodeWithText(if (context.resources.configuration.locales[0].language == "pt") "Rodada 1" else "Round 1").assertIsDisplayed()
+    }
+
     @Test fun pickerHasThirteenRanksTwoColorsAndNoVerticalScroll() {
-        compose.setContent { PontinhoTheme { Content(fixture(3).copy(picker = IndicatorPickerState(ParticipantId("p0")))) } }
+        compose.setContent { PontinhoTheme { Content(fixture(3).copy(picker = IndicatorPickerState(RoundId("round"), 1, PickerPurpose.EDIT))) } }
         compose.onAllNodes(SemanticsMatcher("rank control") {
             it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("indicator_rank_") == true
         }).assertCountEquals(13)
@@ -432,11 +542,11 @@ class MatchScreenTest {
         assertTrue(viewed)
     }
 
-    @Test fun pickerAsksForTheWildcardDirectlyAndPreviewsBothMatchingSuits() {
+    @Test fun pickerAsksForTheWildcardDirectlyAndPreviewsOneRankColoredCard() {
         val localized = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
             setLocale(Locale.forLanguageTag("pt-BR"))
         })
-        var state by mutableStateOf(MatchUiState(isLoading = false, picker = IndicatorPickerState(ParticipantId("p0"))))
+        var state by mutableStateOf(MatchUiState(isLoading = false, picker = IndicatorPickerState(RoundId("round"), 1, PickerPurpose.EDIT)))
         var confirmed = false
         compose.setContent {
             CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources) {
@@ -451,14 +561,45 @@ class MatchScreenTest {
         compose.onNodeWithTag("indicator_rank_TEN").performClick().assertIsSelected()
         compose.onNodeWithText(localized.getString(R.string.confirm)).assertIsNotEnabled()
         compose.onNodeWithTag("indicator_color_RED").performClick().assertIsSelected()
-        compose.onNodeWithTag("joker_preview").assertContentDescriptionEquals(
-            "Coringas: 10 de copas e 10 de ouros, valendo 20 pontos cada.")
+        compose.onNodeWithTag("joker_preview").assertContentDescriptionEquals("Coringa: 10 vermelho")
+        compose.onNodeWithTag("joker_card_TEN_RED", true).assert(
+            SemanticsMatcher.expectValue(CardRankLabelKey, "10") and
+                SemanticsMatcher.keyNotDefined(CardSuitGlyphKey))
         compose.onNodeWithText(localized.getString(R.string.confirm)).performClick()
         assertTrue(confirmed)
         compose.onNodeWithTag("indicator_rank_ACE").performClick().assertIsSelected()
         compose.onNodeWithTag("indicator_rank_TEN").assertIsNotSelected()
         compose.onNodeWithTag("indicator_color_BLACK").performClick().assertIsSelected()
         compose.onNodeWithTag("indicator_color_RED").assertIsNotSelected()
+    }
+
+    @Test fun historyCardsAnnounceRoundRankAndColorAndEditCompletedRound() {
+        var clicked: Int? = null
+        val localized = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+            setLocale(Locale.forLanguageTag("pt-BR"))
+        })
+        compose.setContent {
+            CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources) {
+                PontinhoTheme { MatchScreen(fixture(3).copy(jokers = listOf(
+                    RoundJokerUi(null, 3, null),
+                    RoundJokerUi(RoundId("one"), 1, Indicator(Rank.KING, CardColor.RED)),
+                    RoundJokerUi(RoundId("two"), 2, Indicator(Rank.NINE, CardColor.BLACK)),
+                )), {}, {}, {}, {}, {}, {}, {}, {}, {}, onEditJoker = { clicked = it }) }
+            }
+        }
+        compose.onNodeWithText("Coringas").assertIsDisplayed()
+        listOf("Rodada 1: coringa A vermelho", "Rodada 2: coringa 10 preto", "Rodada 3: coringa não definido")
+            .forEach { compose.onAllNodesWithContentDescription(it).assertCountEquals(1) }
+        val first = compose.onNodeWithTag("joker_round_1")
+        val second = compose.onNodeWithTag("joker_round_2")
+        assertTrue(first.fetchSemanticsNode().boundsInRoot.right <= second.fetchSemanticsNode().boundsInRoot.left)
+        first.performClick()
+        assertEquals(1, clicked)
+        for ((tag, rank) in listOf("joker_card_ACE_RED" to "A", "joker_card_TEN_BLACK" to "10")) {
+            compose.onNodeWithTag(tag, true).assert(SemanticsMatcher.expectValue(CardRankLabelKey, rank))
+                .assert(SemanticsMatcher.keyNotDefined(CardSuitGlyphKey))
+        }
+        compose.onAllNodesWithTag("empty_card", true).assertCountEquals(1)
     }
 
     @Test fun scoreDialogFocusValidationRowsAndWinnerDisabledAreAccessible() {

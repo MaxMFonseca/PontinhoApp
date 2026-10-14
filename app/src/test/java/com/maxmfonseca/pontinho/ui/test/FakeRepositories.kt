@@ -44,7 +44,8 @@ class FakeMatchRepository(
     override suspend fun deleteMatch(matchId: MatchId) = unsupported()
     override suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId = unsupported()
     override suspend fun reorderParticipants(command: ReorderParticipants) = unsupported()
-    override suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound = unsupported()
+    override suspend fun prepareRound(command: PrepareRound): PreparedRound = unsupported()
+    override suspend fun updateRoundIndicator(command: UpdateRoundIndicator) = unsupported()
     override suspend fun designateWinner(command: DesignateWinner) = unsupported()
     override suspend fun submitScore(command: SubmitScore) = unsupported()
     override suspend fun submitScannedScore(command: SubmitScannedScore) {

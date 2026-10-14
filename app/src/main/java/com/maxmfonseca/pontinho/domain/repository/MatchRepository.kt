@@ -23,9 +23,10 @@ data class AddPlayerToMatch(val matchId: MatchId, val operationToken: String, va
 class DuplicatePlayerNameException : IllegalArgumentException("Duplicate player name")
 
 data class ReorderParticipants(val matchId: MatchId, val participantIds: List<ParticipantId>)
-data class ChooseIndicator(val matchId: MatchId, val indicator: Indicator)
-/** Transient picker result. Discarding it changes no persistent match state. */
-data class PreparedRound(val id: RoundId, val matchId: MatchId, val ordinal: Int, val indicator: Indicator)
+data class PrepareRound(val matchId: MatchId, val indicator: Indicator? = null)
+data class UpdateRoundIndicator(val matchId: MatchId, val roundId: RoundId, val indicator: Indicator?)
+/** Transient round preparation. Discarding it changes no persistent match state. */
+data class PreparedRound(val id: RoundId, val matchId: MatchId, val ordinal: Int, val indicator: Indicator?)
 data class DesignateWinner(val matchId: MatchId, val roundId: RoundId, val participantId: ParticipantId, val preparedRound: PreparedRound? = null)
 data class SubmitScore(val matchId: MatchId, val roundId: RoundId, val participantId: ParticipantId, val points: Int, val submissionToken: String, val preparedRound: PreparedRound? = null)
 data class SubmitScannedScore(
@@ -52,7 +53,7 @@ enum class RoundStatus { OPEN, PAUSED, COMPLETE }
 data class RoundSnapshot(
     val id: RoundId,
     val ordinal: Int,
-    val indicator: Indicator,
+    val indicator: Indicator?,
     val dealerParticipantId: ParticipantId,
     val draft: RoundDraft,
     val createdAt: Instant,
@@ -138,7 +139,9 @@ interface MatchRepository {
     suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId
     suspend fun reorderParticipants(command: ReorderParticipants)
     /** Reads and prepares the next round; only its first score/designation persists it. */
-    suspend fun chooseIndicator(command: ChooseIndicator): PreparedRound
+    suspend fun prepareRound(command: PrepareRound): PreparedRound
+    /** Updates only round metadata, including for completed rounds and finished matches. */
+    suspend fun updateRoundIndicator(command: UpdateRoundIndicator)
     suspend fun designateWinner(command: DesignateWinner)
     suspend fun submitScore(command: SubmitScore)
     suspend fun submitScannedScore(command: SubmitScannedScore): Unit = error("Scanned scoring is not implemented")
