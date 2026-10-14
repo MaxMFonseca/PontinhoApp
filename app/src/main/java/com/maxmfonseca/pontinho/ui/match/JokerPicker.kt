@@ -49,8 +49,16 @@ fun JokerPicker(
             }
             val colors: @Composable RowScope.() -> Unit = {
                 CardColor.entries.forEach { color ->
-                    PickerOption(colorLabel(color), selectedColor == color, !isSaving,
-                        { onSelectColor(color) }, Modifier.weight(1f).testTag("indicator_color_${color.name}"))
+                    PickerOption(
+                        label = if (color == CardColor.RED) "♥ ♦" else "♠ ♣",
+                        selected = selectedColor == color,
+                        enabled = !isSaving,
+                        onClick = { onSelectColor(color) },
+                        modifier = Modifier.weight(1f).testTag("indicator_color_${color.name}"),
+                        description = colorLabel(color),
+                        labelColor = if (color == CardColor.RED) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
             val cancelAction: @Composable (Modifier) -> Unit = { modifier ->
@@ -123,7 +131,8 @@ fun JokerPicker(
 }
 
 @Composable private fun PickerOption(label: String, selected: Boolean, enabled: Boolean,
-    onClick: () -> Unit, modifier: Modifier = Modifier) {
+    onClick: () -> Unit, modifier: Modifier = Modifier, description: String = label,
+    labelColor: androidx.compose.ui.graphics.Color? = null) {
     Surface(onClick = onClick, enabled = enabled, shape = MaterialTheme.shapes.small,
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
@@ -132,10 +141,12 @@ fun JokerPicker(
         modifier = modifier.heightIn(min = 48.dp).semantics {
             this.selected = selected
             role = Role.RadioButton
-            contentDescription = label
+            contentDescription = description
         }) {
         Box(contentAlignment = androidx.compose.ui.Alignment.Center, modifier = Modifier.padding(vertical = 4.dp)) {
-            Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.clearAndSetSemantics {})
+            Text(label, color = labelColor ?: LocalContentColor.current,
+                style = if (labelColor == null) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleLarge,
+                modifier = if (labelColor == null) Modifier.clearAndSetSemantics {} else Modifier)
         }
     }
 }

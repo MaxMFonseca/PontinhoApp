@@ -56,6 +56,12 @@ import com.maxmfonseca.pontinho.ui.theme.BlueContainerDark
 import com.maxmfonseca.pontinho.ui.theme.CoralStrong
 import com.maxmfonseca.pontinho.ui.theme.CoralContainer
 import com.maxmfonseca.pontinho.ui.theme.CoralContainerDark
+import com.maxmfonseca.pontinho.ui.theme.Zinc400
+import com.maxmfonseca.pontinho.ui.theme.Zinc50
+import com.maxmfonseca.pontinho.ui.theme.Zinc700
+import com.maxmfonseca.pontinho.ui.theme.Zinc800
+import com.maxmfonseca.pontinho.ui.theme.Zinc900
+import com.maxmfonseca.pontinho.ui.theme.Zinc950
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -116,10 +122,39 @@ class SharedComponentsTest {
             NeutralText, NeutralTextLight, NeutralOutline, NeutralOutlineDark,
             EmeraldContainer, EmeraldContainerDark, YellowContainer, YellowContainerDark,
             BlueContainer, BlueContainerDark, CoralStrong, CoralContainer, CoralContainerDark,
+            Zinc50, Zinc400, Zinc700, Zinc800, Zinc900, Zinc950,
         ).mapTo(mutableSetOf()) { it.toArgb() }
         composeRule.runOnIdle {
             assertTrue("Light scheme leaked colors: ${lightColors.filterNot(approved::contains)}", lightColors.all(approved::contains))
             assertTrue("Dark scheme leaked colors: ${darkColors.filterNot(approved::contains)}", darkColors.all(approved::contains))
+        }
+    }
+
+    @Test
+    fun darkThemeUsesNeutralZincSurfacesAndText() {
+        var colors = emptyList<Int>()
+        composeRule.setContent {
+            PontinhoTheme(themePreference = ThemePreference.DARK) {
+                val scheme = MaterialTheme.colorScheme
+                SideEffect {
+                    colors = listOf(
+                        scheme.background,
+                        scheme.surface,
+                        scheme.surfaceVariant,
+                        scheme.outline,
+                        scheme.onSurfaceVariant,
+                        scheme.onSurface,
+                    ).map { it.toArgb() }
+                }
+            }
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(
+                listOf(0xFF09090B, 0xFF18181B, 0xFF27272A, 0xFF3F3F46, 0xFFA1A1AA, 0xFFFAFAFA)
+                    .map { it.toInt() },
+                colors,
+            )
         }
     }
 

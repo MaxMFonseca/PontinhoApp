@@ -98,7 +98,18 @@ fun EmptyCard(
     contentDescription: String,
     modifier: Modifier = Modifier,
 ) {
-    PlayingCardSurface("empty_card", contentDescription, null, null, null, modifier) {}
+    PlayingCardSurface("empty_card", contentDescription, Color.Black, "?", null, modifier) {
+        Text(
+            text = "?",
+            color = Color.Black,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.align(Alignment.Center).testTag("empty_card_question"),
+        )
+    }
 }
 
 fun shortRankLabel(rank: Rank): String = when (rank) {
@@ -143,7 +154,7 @@ private fun cardForeground(color: CardColor): Color = when (color) {
     CardColor.BLACK -> MaterialTheme.colorScheme.onPrimaryFixed
 }
 
-private fun suitGlyph(suit: Suit): String = when (suit) {
+fun suitGlyph(suit: Suit): String = when (suit) {
     Suit.CLUBS -> "♣"
     Suit.DIAMONDS -> "♦"
     Suit.HEARTS -> "♥"

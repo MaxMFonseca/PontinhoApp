@@ -11,6 +11,14 @@ val OffWhite = Color(0xFFFFFBF4)
 val Navy = Color(0xFF14233B)
 val NavySurface = Color(0xFF1D2E49)
 
+// Zinc neutrals keep dark mode visually quiet without the previous blue cast.
+val Zinc50 = Color(0xFFFAFAFA)
+val Zinc400 = Color(0xFFA1A1AA)
+val Zinc700 = Color(0xFF3F3F46)
+val Zinc800 = Color(0xFF27272A)
+val Zinc900 = Color(0xFF18181B)
+val Zinc950 = Color(0xFF09090B)
+
 // Neutral surfaces keep accent colors reserved for meaning and actions.
 val WarmSurface = Color(0xFFFFFDFA)
 val WarmSurfaceLow = Color(0xFFF6F1E8)

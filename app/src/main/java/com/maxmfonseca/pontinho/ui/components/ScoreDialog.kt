@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
@@ -12,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -108,12 +110,18 @@ fun ScoreDialog(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     onCamera?.takeUnless { readOnly }?.let {
-                        OutlinedButton(onClick = it, enabled = enabled,
-                            modifier = Modifier.heightIn(min = 48.dp).testTag("score_camera")) { Text(stringResource(R.string.camera)) }
+                        val cameraLabel = stringResource(R.string.camera)
+                        OutlinedIconButton(onClick = it, enabled = enabled,
+                            modifier = Modifier.size(48.dp).testTag("score_camera")
+                                .semantics { contentDescription = cameraLabel }) {
+                            Icon(painterResource(R.drawable.ic_camera), contentDescription = null)
+                        }
                     }
-                    if (!isCorrection) OutlinedButton(onClick = onWentOut, enabled = enabled && wentOutEnabled) {
+                    if (!isCorrection) Button(onClick = onWentOut, enabled = enabled && wentOutEnabled,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
                         Text(stringResource(R.string.went_out))
                     }
                     if (isCorrection && onDelete != null) {

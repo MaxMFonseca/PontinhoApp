@@ -206,8 +206,8 @@ class CardScannerJourneyTest {
             assertTrue(repository.observeMatch(id).first()!!.rounds.isEmpty())
             assertTrue(database.roundDao().allCardObservations().isEmpty())
             compose.onNodeWithTag("scanner_retry").performScrollTo().performClick()
-            compose.onNodeWithTag("scanner_capture").performScrollTo().assertIsEnabled()
-            compose.onNodeWithTag("scanner_manual").performScrollTo().performClick()
+            compose.onNodeWithTag("scanner_capture").assertIsEnabled()
+            compose.onNodeWithTag("scanner_camera_cancel").performClick()
             awaitTag("score_input")
             compose.onNodeWithTag("score_input").performTextInput("17")
             compose.runOnIdle { match.confirmScore() }

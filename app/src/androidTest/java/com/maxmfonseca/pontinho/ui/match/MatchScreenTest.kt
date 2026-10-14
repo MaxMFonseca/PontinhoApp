@@ -262,6 +262,22 @@ class MatchScreenTest {
         }
     }
 
+    @Test fun jokerColorChoicesUseIconsAndKeepLocalizedAccessibilityNames() {
+        val localized = context
+        compose.setContent {
+            PontinhoTheme {
+                JokerPicker(null, null, false, false, {}, {}, {}, {})
+            }
+        }
+
+        compose.onNodeWithTag("indicator_color_RED")
+            .assertTextEquals("♥ ♦")
+            .assertContentDescriptionEquals(localized.getString(R.string.indicator_red))
+        compose.onNodeWithTag("indicator_color_BLACK")
+            .assertTextEquals("♠ ♣")
+            .assertContentDescriptionEquals(localized.getString(R.string.indicator_black))
+    }
+
     @Test fun matchCompactLayoutRetainsActionsAtTwoHundredPercentAcrossLocalesAndThemes() {
         val base = context
         var scenario by mutableStateOf(Triple("pt-BR", ThemePreference.LIGHT, 1f))
@@ -622,6 +638,29 @@ class MatchScreenTest {
         confirm.performClick()
         assertEquals(0, confirmed)
         compose.onNodeWithText(context.getString(R.string.camera)).assertDoesNotExist()
+    }
+
+    @Test fun scoreDialogUsesIconOnlyCameraAndCompactBateuButton() {
+        var camera = 0
+        var wentOut = 0
+        compose.setContent { PontinhoTheme {
+            ScoreDialog("Ana", 2, null, "12", {}, {}, {}, { wentOut++ }, onCamera = { camera++ })
+        } }
+
+        val cameraLabel = context.getString(R.string.camera)
+        val cameraAction = compose.onNodeWithTag("score_camera")
+            .assertContentDescriptionEquals(cameraLabel)
+            .assertHasClickAction()
+        compose.onNodeWithText(cameraLabel).assertDoesNotExist()
+        val wentOutAction = compose.onNodeWithText(context.getString(R.string.went_out)).assertHasClickAction()
+        val cameraBounds = cameraAction.fetchSemanticsNode().boundsInRoot
+        val wentOutBounds = wentOutAction.fetchSemanticsNode().boundsInRoot
+        assertTrue("Camera and Bateu belong on the same action row",
+            wentOutBounds.center.y in cameraBounds.top..cameraBounds.bottom)
+
+        cameraAction.performClick()
+        wentOutAction.performClick()
+        compose.runOnIdle { assertEquals(1, camera); assertEquals(1, wentOut) }
     }
 
     @Test fun scoreDialogKeepsTypedValueAndUsableInputForRetryAtSystemFontScale() {

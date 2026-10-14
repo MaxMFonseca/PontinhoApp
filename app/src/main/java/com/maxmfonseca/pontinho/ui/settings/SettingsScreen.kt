@@ -8,7 +8,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Menu
@@ -17,8 +16,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -45,7 +46,7 @@ fun SettingsScreen(
         PontinhoSettingCard(R.string.route_language, subtitle = R.string.settings_language_summary,
             icon = Icons.Filled.Menu, onClick = onLanguage)
         PontinhoSettingCard(R.string.route_learn, subtitle = R.string.settings_learn_summary,
-            icon = Icons.AutoMirrored.Filled.List, onClick = onLearn)
+            icon = ImageVector.vectorResource(R.drawable.ic_book), onClick = onLearn)
         PontinhoSettingCard(R.string.route_about, subtitle = R.string.settings_about_summary,
             icon = Icons.Filled.Info, onClick = onAbout)
     }

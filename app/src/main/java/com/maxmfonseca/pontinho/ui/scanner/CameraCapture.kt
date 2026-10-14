@@ -7,7 +7,6 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -17,6 +16,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -121,11 +121,11 @@ internal fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Bo
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val currentState by rememberUpdatedState(state)
     var attached by remember { mutableStateOf(true) }
     var permission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context,
         Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var permissionDenied by remember { mutableStateOf(false) }
+    var permissionRequestStarted by rememberSaveable { mutableStateOf(false) }
     var cameraError by remember { mutableStateOf(false) }
     var capture by remember { mutableStateOf<(() -> Unit)?>(null) }
 
@@ -134,6 +134,7 @@ internal fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Bo
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 permission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                if (permission) permissionDenied = false
             }
         }
         owner.lifecycle.addObserver(observer)
@@ -147,27 +148,24 @@ internal fun ScannerScreen(viewModel: ScannerViewModel, recognitionAvailable: Bo
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (attached) { permission = granted; permissionDenied = !granted }
     }
-    val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (attached && currentState.phase == ScannerPhase.Capture) viewModel.onPhotoSelected(uri)
+    LaunchedEffect(state.phase, state.saved, recognitionAvailable, permission, permissionDenied) {
+        if (state.phase == ScannerPhase.Capture && !state.saved && recognitionAvailable &&
+            !permission && !permissionDenied && !permissionRequestStarted
+        ) {
+            permissionRequestStarted = true
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
     }
     val cancel: () -> Unit = { if (state.phase != ScannerPhase.Saving && !state.saved) { files.clear(); viewModel.cancel() } }
     BackHandler { cancel() }
-    ScannerScreen(state, recognitionAvailable, permissionDenied, cameraError,
+    ScannerScreen(state, viewModel.request.indicator, recognitionAvailable, permissionDenied, cameraError,
         recognitionExperimental = recognitionExperimental,
-        captureEnabled = cameraError || !permission || capture != null,
+        captureEnabled = permission && capture != null,
         actions = ScannerActions(
             onCapture = {
                 cameraError = false
-                if (!permission) permissionLauncher.launch(Manifest.permission.CAMERA)
-                else capture?.let { viewModel.beginCapture(ScanImageSource.Camera); it() }
+                capture?.let { viewModel.beginCapture(ScanImageSource.Camera); it() }
             },
-            onImport = {
-                files.clear()
-                viewModel.beginCapture(ScanImageSource.Photo)
-                try { photoLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-                catch (_: Exception) { viewModel.onPhotoSelected(null); cameraError = true }
-            },
-            onManual = cancel,
             onCancel = cancel,
             onConfirm = viewModel::confirm,
             onRetry = { files.clear(); cameraError = false; viewModel.retry() },
@@ -200,7 +198,7 @@ internal fun CameraCapture(
     val captured by rememberUpdatedState(onCaptured)
     val failed by rememberUpdatedState(onError)
     val view = remember(context) { PreviewView(context).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE } }
-    AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().height(220.dp))
+    AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
     DisposableEffect(view, owner, permissionGranted, files) {
         var disposed = false
         var session: ResumedCameraSession? = null

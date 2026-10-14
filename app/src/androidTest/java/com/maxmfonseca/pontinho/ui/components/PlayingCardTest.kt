@@ -107,16 +107,15 @@ class PlayingCardTest {
     }
 
     @Test
-    fun emptyCardHasNoRankOrSuitGlyph() {
+    fun emptyCardShowsBlackQuestionMarkWithoutSuitGlyph() {
         compose.setContent {
             EmptyCard(contentDescription = "no joker selected", modifier = Modifier.width(48.dp))
         }
 
         compose.onNodeWithTag("empty_card")
             .assertContentDescriptionEquals("no joker selected")
-            .assert(SemanticsMatcher("Empty card has no rank semantics") {
-                CardRankLabelKey !in it.config
-            })
+            .assert(SemanticsMatcher.expectValue(CardRankLabelKey, "?"))
+            .assert(SemanticsMatcher.expectValue(CardForegroundColorKey, Color.Black.toArgb()))
             .assert(SemanticsMatcher("Empty card has no suit semantics") {
                 CardSuitGlyphKey !in it.config
             })

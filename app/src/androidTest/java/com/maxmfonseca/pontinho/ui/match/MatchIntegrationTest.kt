@@ -6,9 +6,17 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelProvider
 import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.result.ActivityResultRegistry
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.activity.result.contract.ActivityResultContract
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.ActivityOptionsCompat
 import android.graphics.Bitmap
 import android.net.Uri
 import android.Manifest
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import com.maxmfonseca.pontinho.domain.recognition.*
 import com.maxmfonseca.pontinho.ui.scanner.ScannerViewModel
@@ -111,7 +119,7 @@ class MatchIntegrationTest {
             val scanner = ViewModelProvider(nav.currentBackStackEntry!!)[ScannerViewModel::class.java]
             assertEquals(request, scanner.request)
         }
-        compose.onNodeWithTag("scanner_cancel").performScrollTo().performClick()
+        compose.onNodeWithTag("scanner_camera_cancel").performClick()
         compose.onNodeWithTag("score_input").assertTextContains("17")
         assertTrue(repository.observeMatch(id).first()!!.rounds.isEmpty())
     }
@@ -205,10 +213,34 @@ class MatchIntegrationTest {
         val app = container(repo, scannerAvailable = true, educationWriteGate = educationGate)
         lateinit var nav: NavHostController
         val restoration = StateRestorationTester(compose)
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val deniedContext = object : ContextWrapper(base) {
+            override fun checkPermission(permission: String, pid: Int, uid: Int): Int =
+                if (permission == Manifest.permission.CAMERA) PackageManager.PERMISSION_DENIED
+                else super.checkPermission(permission, pid, uid)
+        }
+        val permissionRequests = mutableListOf<String>()
+        val registryOwner = object : ActivityResultRegistryOwner {
+            override val activityResultRegistry = object : ActivityResultRegistry() {
+                override fun <I : Any?, O : Any?> onLaunch(
+                    requestCode: Int,
+                    contract: ActivityResultContract<I, O>,
+                    input: I,
+                    options: ActivityOptionsCompat?,
+                ) {
+                    permissionRequests += input as String
+                }
+            }
+        }
         restoration.setContent {
-            val controller = rememberNavController()
-            SideEffect { nav = controller }
-            PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+            CompositionLocalProvider(
+                LocalContext provides deniedContext,
+                LocalActivityResultRegistryOwner provides registryOwner,
+            ) {
+                val controller = rememberNavController()
+                SideEffect { nav = controller }
+                PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
+            }
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
         lateinit var model: MatchViewModel
@@ -218,12 +250,12 @@ class MatchIntegrationTest {
         }
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         compose.onNodeWithTag("score_input").performTextInput("17")
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val permissionBefore = context.checkSelfPermission(Manifest.permission.CAMERA)
+        val permissionBefore = deniedContext.checkSelfPermission(Manifest.permission.CAMERA)
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
         selectCameraJoker(model)
         awaitTag("camera_education_root")
-        assertEquals(permissionBefore, context.checkSelfPermission(Manifest.permission.CAMERA))
+        assertEquals(permissionBefore, deniedContext.checkSelfPermission(Manifest.permission.CAMERA))
+        assertTrue(permissionRequests.isEmpty())
         restoration.emulateSavedInstanceStateRestore()
         awaitTag("camera_education_root")
         compose.onNodeWithTag("camera_education_dismiss").performScrollTo().performClick()
@@ -234,28 +266,17 @@ class MatchIntegrationTest {
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
         awaitTag("scanner_root")
         assertEquals(PackageManager.PERMISSION_DENIED, permissionBefore)
-        compose.onNodeWithTag("scanner_capture").performScrollTo().performClick()
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        automation.serviceInfo = automation.serviceInfo.apply {
-            flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-        }
-        compose.waitUntil(5_000) {
-            automation.rootInActiveWindow?.findAccessibilityNodeInfosByViewId(
-                "com.android.permissioncontroller:id/permission_deny_button")?.isNotEmpty() == true
-        }
-        automation.rootInActiveWindow.findAccessibilityNodeInfosByViewId(
-            "com.android.permissioncontroller:id/permission_deny_button").first()
-            .performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
-        awaitTag("scanner_permission_denied")
+        compose.runOnIdle { assertEquals(listOf(Manifest.permission.CAMERA), permissionRequests) }
         val token = compose.runOnIdle { nav.currentBackStackEntry!!.arguments!!.getString("token") }
         restoration.emulateSavedInstanceStateRestore()
         awaitTag("scanner_root")
-        compose.onNodeWithTag("scanner_cancel").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, permissionRequests.size) }
+        compose.onNodeWithTag("scanner_camera_cancel").performClick()
         compose.onNodeWithTag("score_input").assertTextContains("17")
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
         awaitTag("scanner_root")
         compose.runOnIdle { assertEquals(token, nav.currentBackStackEntry!!.arguments!!.getString("token")) }
-        compose.onNodeWithTag("scanner_manual").performScrollTo().performClick()
+        compose.onNodeWithTag("scanner_camera_cancel").performClick()
         compose.runOnIdle { model.confirmScore() }
         compose.waitUntil { model.uiState.value.scoreDialog == null && !model.uiState.value.isSaving }
         assertEquals(17, repo.observeMatch(id).first()!!.openRound!!.draft.entries.values.single().points)
