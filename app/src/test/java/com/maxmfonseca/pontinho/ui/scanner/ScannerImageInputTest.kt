@@ -19,6 +19,19 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 @OptIn(ExperimentalCoroutinesApi::class)
 class ScannerImageInputTest {
+    @Test fun appStartupRemovesStaleScanPhotosButLeavesOtherCacheFiles() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scanDirectory = context.cacheDir.resolve("scans").apply { mkdirs() }
+        val stalePhoto = scanDirectory.resolve("scan-abandoned.jpg").apply { writeText("photo") }
+        val unrelated = context.cacheDir.resolve("keep-after-restart.txt").apply { writeText("keep") }
+
+        deleteStaleScanCaptures(context.cacheDir)
+
+        assertFalse(stalePhoto.exists())
+        assertTrue(unrelated.exists())
+        unrelated.delete()
+    }
+
     @Test fun cameraBindsOnlyWhileResumedWithPermissionAndUnbindsOnStopOrDisposal() {
         val owner = object : LifecycleOwner {
             override val lifecycle = LifecycleRegistry.createUnsafe(this)

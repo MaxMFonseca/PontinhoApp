@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "status": "OWNER_APPROVED_V1",
+  "approvalBasis": "OWNER_ACCEPTANCE",
+  "approvedOn": "2026-10-16",
+  "model": {
+    "file": "app/src/main/assets/card_detector.tflite",
+    "sha256": "01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277",
+    "sizeBytes": 12838331
+  },
+  "runtime": {
+    "confidenceThreshold": 0.65,
+    "iouThreshold": 0.3,
+    "maximumCards": 10
+  },
+  "historicalBenchmarkStatus": "ml/card-recognition/reports/release/status.json",
+  "benchmarkClaim": null,
+  "note": "Approval records the owner's successful in-app acceptance testing. It does not assert a measured accuracy percentage or passage of the historical benchmark gate."
+}

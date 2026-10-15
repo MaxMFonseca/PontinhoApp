@@ -25,13 +25,23 @@ import org.junit.Test
 class AboutNavigationTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun aboutPrivacyActionNavigatesAndSystemBackReturnsToAbout() {
+        val container = container(RecordingPreferencesRepository())
+        composeRule.setContent {
+            PontinhoNavHost(container = container, startDestination = Destination.About.route)
+        }
+
+        composeRule.onNodeWithTag("about_privacy_licenses").performScrollTo().performClick()
+        composeRule.onNodeWithTag("privacy_licenses_root").assertExists()
+
+        pressBack()
+
+        composeRule.onNodeWithTag("about_root").assertExists()
+    }
+
     @Test fun navHostPersistsEducationOnlyWhenSystemBackExplicitlyDismissesIt() {
         val preferences = RecordingPreferencesRepository()
-        val container = object : AppContainer {
-            override val playerRepository: PlayerRepository get() = error("not used")
-            override val matchRepository: MatchRepository get() = error("not used")
-            override val preferencesRepository: PreferencesRepository = preferences
-        }
+        val container = container(preferences)
         composeRule.setContent {
             PontinhoNavHost(container = container, startDestination = Destination.About.route)
         }
@@ -54,6 +64,12 @@ class AboutNavigationTest {
             assertTrue(preferences.preferences.value.cameraEducationSeen)
         }
     }
+
+    private fun container(preferences: RecordingPreferencesRepository) = object : AppContainer {
+            override val playerRepository: PlayerRepository get() = error("not used")
+            override val matchRepository: MatchRepository get() = error("not used")
+            override val preferencesRepository: PreferencesRepository = preferences
+        }
 
     private class RecordingPreferencesRepository : PreferencesRepository {
         override val preferences = MutableStateFlow(AppPreferences())

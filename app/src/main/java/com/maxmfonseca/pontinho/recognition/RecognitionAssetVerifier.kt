@@ -23,9 +23,16 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
             val root = parseStrictJson(releaseJson).objectValue()
             root.exact(ROOT_FIELDS)
             require(root.int("schemaVersion") == 1)
-            require(root.string("candidateStatus") == "DEBUG_ONLY")
-            require(root.boolean("productionApproved") == false)
-            require(BuildConfig.DEBUG && allowExperimental)
+            val candidateStatus = root.string("candidateStatus")
+            val productionApproved = root.boolean("productionApproved")
+            val debugOnly = when (candidateStatus to productionApproved) {
+                "DEBUG_ONLY" to false -> {
+                    require(BuildConfig.DEBUG && allowExperimental)
+                    true
+                }
+                "OWNER_APPROVED_V1" to true -> false
+                else -> error("Invalid candidate approval state")
+            }
 
             val modelObject = root.objectField("model")
             modelObject.exact(MODEL_FIELDS)
@@ -100,8 +107,8 @@ class RecognitionAssetVerifier internal constructor(private val allowExperimenta
                     exportInvocationSha256 = root.hash("exportInvocationSha256"),
                     validationEvaluationSha256 = root.hash("validationEvaluationSha256"),
                     testEvaluationSha256 = root.hash("testEvaluationSha256"),
-                    debugOnly = true,
-                    productionApproved = root.boolean("productionApproved"),
+                    debugOnly = debugOnly,
+                    productionApproved = productionApproved,
                 ),
             )
         } catch (_: Exception) {

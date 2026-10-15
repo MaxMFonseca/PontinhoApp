@@ -12,18 +12,22 @@
 - Brazilian Portuguese fallback and complete US English resources for every implemented surface.
 - Light/dark themes, reduced-motion preference, large-text layouts, localized screen-reader semantics, and non-drag reorder actions.
 - Offline Learn to Play, Settings, Language, Appearance and Accessibility, and About surfaces.
+- Owner-approved offline card recognition for up to ten visible, non-overlapping standard cards, with mandatory review/correction before save and manual scoring fallback.
+- Localized, offline Privacy and licenses details covering local data, camera processing, model provenance, and AGPL source obligations.
 
-The debug build is ready for hands-on testing of manual scoring and the
-experimental offline single-stage scanner. Its FP32 model is measured against
-the public dataset and remains debug-only pending physical-phone acceptance.
+The release source set contains the exact FP32 model tested and accepted by the
+owner for the first release. Production metadata records this basis as
+`OWNER_APPROVED_V1`; it does not claim a measured real-world accuracy rate.
+The public dataset evidence and its limitations remain documented, and users
+must review recognized cards before a score can be saved.
 
 ## Not implemented in this phase
 
-- Production-approved card recognition. Camera/photo/review flows exist in
-  debug, but physical-deck accuracy and device latency are still unmeasured.
 - Advertising, consent management, Google Mobile Ads integration, billing, promotional-code entitlement, and Remove Ads.
 - Backup export, restore validation, or database replacement.
 - Release signing, store listing assets, Play Console declarations, or publication.
+- A public source repository URL; the in-app legal screen intentionally retains the owner placeholder until that repository exists.
 
-The scanner model is intentionally absent from the release APK. Advertising,
-backup and store-publication work remain follow-up plans.
+Unsigned release APK/AAB generation and strict offline/model/native-alignment
+checks are implemented. Signing, public-source hosting, advertising, backup,
+and store-publication work remain follow-up phases.

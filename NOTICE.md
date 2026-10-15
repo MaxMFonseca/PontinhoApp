@@ -13,9 +13,9 @@ remain available from its upstream repository.
 
 ## Training-data provenance
 
-The planned single-stage detector uses the public Roboflow
+The first-release single-stage detector uses the public Roboflow
 [`playing-cards-ow27d`](https://universe.roboflow.com/augmented-startups/playing-cards-ow27d)
-dataset, version 4. Before any training, this repository records its exact
+dataset, version 4. This repository records its exact
 downloaded archive, provider URL, class list, and license evidence. See
 [`docs/licenses/card-recognition.md`](docs/licenses/card-recognition.md) for
 the admission and attribution record.

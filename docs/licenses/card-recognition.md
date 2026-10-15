@@ -1,12 +1,13 @@
 # Card-recognition data and model notices
 
-**Status:** The debug build contains an experimental model trained from the
-source below. Release builds contain no model and keep the scanner disabled.
+**Status:** Debug and release contain the owner-approved first-release model
+described below. Recognition runs fully on-device and the release remains
+usable with manual scoring if model verification or initialization fails.
 
-## Single-stage YOLO candidate
+## Single-stage YOLO release model
 
-The planned replacement is a debug-only, offline 52-class detector trained
-with Ultralytics YOLOv8n `8.4.177`. Pontinho's complete corresponding source is
+The packaged model is an offline 52-class detector trained with Ultralytics
+YOLOv8n `8.4.177`. Pontinho's complete corresponding source is
 distributed under AGPLv3 or later; the full text is in the repository
 [`LICENSE`](../../LICENSE), with third-party and data provenance notices in
 [`NOTICE.md`](../../NOTICE.md).
@@ -35,7 +36,8 @@ badge. Its 52 class names, in archive order, are `10C`, `10D`, `10H`, `10S`,
 
 The extracted export has 21,203 train, 2,020 validation, and 1,010 test
 image/label pairs. It is a synthetically generated detector dataset and has no
-production approval or final-holdout role.
+qualifying real-world final-holdout role. First-release approval is explicitly
+based on owner acceptance, not on treating this dataset as that holdout.
 
 ### Provider-declared export recipe and count reconciliation
 
@@ -130,31 +132,27 @@ attribution will be added here verbatim before any model can be promoted.
 
 ## Model release and dependency notice
 
-The Android release application currently contains no card-recognition model
-or third-party card imagery. The experimental model is isolated to the debug
-source set. A future production model may be promoted only when the strict
-manifest parser accepts every source and the release receipt cryptographically
-binds that manifest, the frozen split and holdout, the selected exported model,
-and its validation report. Each declared source archive must also exist at its
-canonical path and match the manifest checksum, and a human-review receipt must
-match the trust-root hash configured in `config/release-gate.yaml`. Empty
-manifests, missing archives or audit receipts, platform license badges without
-source-specific evidence, and merely permissive licenses fail closed.
+The Android main source set contains `card_detector.tflite` and
+`card_recognition.release.json`. The model SHA-256 is
+`01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277` and its
+size is 12,838,331 bytes. Production metadata uses `OWNER_APPROVED_V1` with
+`productionApproved: true`; the independent owner receipt is
+[`owner-acceptance-v1.json`](../../ml/card-recognition/reports/release/owner-acceptance-v1.json).
 
-For every real train, validation, or test image, that receipt must identify a
-safe `sourceArchiveMember` path inside the exact hashed source archive, its
-`sourceArchiveMemberSha256`,
-the canonical image checksum and dimensions, and the human real-photo
-classification. It also binds the complete normalized dataset digest and exact
-split-manifest digest. The currently pinned receipt is deliberately
-`NOT_APPROVED` and cannot authorize a model.
+The earlier machine-generated
+[`status.json`](../../ml/card-recognition/reports/release/status.json) remains a
+historical `NOT_APPROVED` result for the stronger 200-photo/10-unseen-deck
+benchmark. It was not rewritten into a benchmark pass. Users must review and
+may correct every recognized card before saving, and manual score entry remains
+available.
 
-The development toolchain uses the exact versions resolved in
-`ml/card-recognition/requirements.lock`, including TensorFlow, TensorFlow Lite
-Model Maker, TensorFlow Lite Support, NumPy, OpenCV, Pillow, PyYAML, and
-pycocotools. Those packages are development dependencies, not evidence that a
-dataset or trained model may be redistributed. Their upstream license notices
-must be reviewed and included as applicable before an approved binary is
-shipped. The Android runtime is expected to use MediaPipe Tasks; its upstream
-notice must likewise be included when that dependency and an approved model are
-present in a release.
+The release includes no training images. The Android runtime uses LiteRT 2.3.0
+locally; AndroidX, Jetpack Compose, Room, CameraX, and LiteRT notices are shown
+inside the app and summarized in [`NOTICE.md`](../../NOTICE.md). Training tools
+and Ultralytics are development dependencies; their versions and source/license
+records remain in the model receipts and corresponding source repository.
+
+Pontinho and the model's complete corresponding source are distributed under
+AGPL-3.0-or-later. Before public distribution, the in-app source URL placeholder
+must be replaced with the public corresponding-source location. This document
+records project decisions and provenance; it is not legal advice.

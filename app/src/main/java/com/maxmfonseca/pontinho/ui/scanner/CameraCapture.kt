@@ -29,6 +29,12 @@ import com.maxmfonseca.pontinho.recognition.RecognitionImageLoader
 import java.io.File
 import kotlinx.coroutines.*
 
+internal fun deleteStaleScanCaptures(cacheDir: File) {
+    cacheDir.resolve("scans").listFiles().orEmpty()
+        .filter { it.isFile && it.name.startsWith("scan-") && it.name.endsWith(".jpg") }
+        .forEach(File::delete)
+}
+
 /** Owns exactly the use cases returned by bind; it never unbinds another camera client's cases. */
 internal class ResumedCameraSession(
     private val owner: LifecycleOwner,

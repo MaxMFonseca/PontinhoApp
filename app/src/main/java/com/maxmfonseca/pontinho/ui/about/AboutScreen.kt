@@ -43,6 +43,7 @@ fun AboutScreen(
     onLearn: () -> Unit,
     onCameraEducationSeen: () -> Unit,
     modifier: Modifier = Modifier,
+    onPrivacyLicenses: () -> Unit = {},
 ) {
     var showCameraEducation by rememberSaveable { mutableStateOf(false) }
     if (showCameraEducation) {
@@ -84,6 +85,12 @@ fun AboutScreen(
                         }
                     }, style = MaterialTheme.typography.bodyLarge)
                 }
+            }
+            TextButton(
+                onClick = onPrivacyLicenses,
+                modifier = Modifier.fillMaxWidth().testTag("about_privacy_licenses"),
+            ) {
+                Text(stringResource(R.string.about_privacy_licenses))
             }
             TextButton(
                 onClick = { showCameraEducation = true },

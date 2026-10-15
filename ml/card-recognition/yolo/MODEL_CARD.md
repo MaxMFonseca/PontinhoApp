@@ -1,16 +1,15 @@
-# Pontinho single-stage card detector — debug candidate
+# Pontinho single-stage card detector — first release model
 
-Status: **DEBUG_ONLY / NOT PRODUCTION APPROVED**
+Status: **OWNER_APPROVED_V1**
 
 This YOLOv8n detector recognizes the 52 standard playing cards in one offline
-LiteRT pass. It is packaged only in the debug build. Manual review and manual
-score entry remain mandatory fallbacks.
+LiteRT pass. The exact evaluated FP32 bytes are packaged in debug and release.
+Manual review and manual score entry remain mandatory fallbacks.
 
 ## Candidate
 
 - Run: `playing-cards-v4-yolov8n-20261016`
-- Training: 22 completed epochs, stopped with explicit user approval for the
-  first debug candidate; best epoch 21
+- Training: 22 completed epochs, stopped with explicit user approval; best epoch 21
 - Best checkpoint SHA-256:
   `695e860b6dc323ce12f582da2827ce2ed63b4a7279e5267474c5535a433c4712`
 - Export: FP32 TFLite, input `(1,640,640,3)`, raw output `(1,56,8400)`
@@ -22,7 +21,8 @@ score entry remain mandatory fallbacks.
 
 INT8 was exported and structurally inspected, but its full validation was
 stopped because it was taking hours. It was not selected or packaged. FP32 was
-chosen for this first debug build because its complete validation had passed.
+chosen for the first release because its complete public-dataset validation had
+passed and the owner approved its behavior in the app.
 
 ## Measured public-dataset evidence
 
@@ -43,15 +43,17 @@ dataset therefore does not establish real-phone accuracy for 1, 3, 5, 8 or 10
 cards, difficult lighting, blur, glare, perspective, partial cards, or unseen
 deck artwork.
 
-## Android evidence and remaining gate
+## Approval basis and Android evidence
 
-The debug asset hash matches the evaluated model. Android unit tests, debug
-androidTest compilation, offline dependency verification, debug/release builds
-and the manual-only release-APK check pass. The licensed fixture test invokes
-the actual LiteRT engine, but it was not executed because no Android device or
-emulator was connected.
+The owner performed in-app acceptance testing and approved this exact model for
+the first release. The machine-readable receipt is
+`ml/card-recognition/reports/release/owner-acceptance-v1.json`. That decision is
+an owner acceptance, not a substitute for a real-world accuracy benchmark.
 
-Production approval requires the unchecked physical-phone matrix in
-`docs/manual-testing/2026-10-14-card-scanner-checklist.md`, including accuracy
-and latency measurements. No 90%, 95%, 97%, Play Store, or production-readiness
-claim is made from the public dataset result.
+Automated checks bind the main-source, APK, and AAB model bytes and production
+metadata; reject corrupt or mismatched assets; keep camera hardware optional;
+and verify offline dependencies plus 16 KB zip/ELF alignment. The historical
+`NOT_APPROVED` benchmark report remains preserved because its stronger
+200-photo/10-unseen-deck matrix was not completed. No measured real-phone
+accuracy percentage or cross-deck benchmark claim is made from the public
+dataset result.

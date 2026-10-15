@@ -1,0 +1,72 @@
+{
+  "candidateStatus": "OWNER_APPROVED_V1",
+  "datasetAuditSha256": "60261271beb9b325cb9808482b375376e5024facaad826cea01b061b2df2baf6",
+  "datasetReceiptSha256": "259e224e3dd6b40c12edb4143007d1efd65cce531d2f130159ddad3cf7eebd2e",
+  "exportInvocationSha256": "e2a6db7c40da120747cd0d830581465f3bca2cb134ff9f35f0b584df78b8d81e",
+  "holdoutReceiptSha256": "d0c3013d220413e2631d66c745bfcabee7194ae620c1cc62620eb4a4d33f5a4c",
+  "input": {
+    "colorSpace": "RGB",
+    "dtype": "float32",
+    "normalization": {
+      "offset": 0.0,
+      "scale": 0.00392156862745098
+    },
+    "quantization": null,
+    "resizePolicy": "centered-letterbox-bilinear",
+    "shape": [1, 640, 640, 3]
+  },
+  "labels": [
+    "10C", "10D", "10H", "10S", "2C", "2D", "2H", "2S",
+    "3C", "3D", "3H", "3S", "4C", "4D", "4H", "4S",
+    "5C", "5D", "5H", "5S", "6C", "6D", "6H", "6S",
+    "7C", "7D", "7H", "7S", "8C", "8D", "8H", "8S",
+    "9C", "9D", "9H", "9S", "AC", "AD", "AH", "AS",
+    "JC", "JD", "JH", "JS", "KC", "KD", "KH", "KS",
+    "QC", "QD", "QH", "QS"
+  ],
+  "maxCards": 10,
+  "model": {
+    "file": "card_detector.tflite",
+    "internalQuantization": {
+      "int8TensorCount": 0,
+      "operatorCodes": [],
+      "quantizedComputeCoverage": 0.0,
+      "quantizedComputeOperatorCount": 0,
+      "weightedComputeOperatorCount": 64
+    },
+    "quantization": "fp32",
+    "sha256": "01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277",
+    "sizeBytes": 12838331,
+    "sourceCheckpointSha256": "695e860b6dc323ce12f582da2827ce2ed63b4a7279e5267474c5535a433c4712"
+  },
+  "nms": {
+    "classAwareFirst": true,
+    "finalOrder": "left-top-right-bottom-class-score-anchor",
+    "physicalDuplicateIou": 0.95,
+    "physicalDuplicateSuppression": true,
+    "tieBreak": "score-desc-box-class-anchor"
+  },
+  "output": {
+    "boxCoordinateReference": {"height": 640, "width": 640},
+    "boxCoordinateUnits": "normalized-input-dimensions",
+    "boxEncoding": "xywh",
+    "classCount": 52,
+    "dtype": "float32",
+    "layout": "channels-first",
+    "quantization": null,
+    "raw": true,
+    "shape": [1, 56, 8400]
+  },
+  "productionApproved": true,
+  "schemaVersion": 1,
+  "testEvaluationSha256": "53584bc315a24908f9521c5be2d51870e479bff6a44e3707d652679deceb8432",
+  "thresholds": {
+    "comparison": "strict-greater-than",
+    "confidence": 0.65,
+    "iou": 0.3,
+    "selectedOn": "validation",
+    "selectionSha256": "6318b7d36e29f477d8faf488403ce41302e4941adbf37edbc77b9148aa27239b",
+    "sourceCheckpointSha256": "695e860b6dc323ce12f582da2827ce2ed63b4a7279e5267474c5535a433c4712"
+  },
+  "validationEvaluationSha256": "140eb204fed9d1e7771d0f1b16fb8eb338d30a04622a9d2541e38f59ef1bce57"
+}

@@ -37,10 +37,26 @@ import java.util.Locale
 class AboutScreenTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun aboutExposesPrivacyAndLicensesAction() {
+        var opens = 0
+        composeRule.setContent {
+            AboutScreen(
+                versionName = "1.0.0",
+                onBack = {},
+                onLearn = {},
+                onPrivacyLicenses = { opens++ },
+                onCameraEducationSeen = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("about_privacy_licenses").performScrollTo().performClick()
+        composeRule.runOnIdle { assertEquals(1, opens) }
+    }
+
     @Test fun aboutContainsOnlyKnownFactsAndSupportAddress() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         composeRule.setContent {
-            AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {}, onCameraEducationSeen = {})
+            AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {}, onPrivacyLicenses = {}, onCameraEducationSeen = {})
         }
 
         composeRule.onNodeWithTag("about_root").assertIsDisplayed()
@@ -49,8 +65,6 @@ class AboutScreenTest {
         composeRule.onNodeWithText(context.getString(R.string.about_purpose)).assertIsDisplayed()
         composeRule.onNodeWithText("maxmfonseca12@gmail.com").assertIsDisplayed()
         composeRule.onNodeWithTag("about_learn").assertDoesNotExist()
-        composeRule.onNodeWithText("Privacidade").assertDoesNotExist()
-        composeRule.onNodeWithText("Licenças").assertDoesNotExist()
         composeRule.onNodeWithText("Câmera").assertDoesNotExist()
     }
 
@@ -99,6 +113,7 @@ class AboutScreenTest {
                         versionName = "1.0.0",
                         onBack = {},
                         onLearn = {},
+                        onPrivacyLicenses = {},
                         onCameraEducationSeen = {},
                     )
                 }
@@ -186,6 +201,7 @@ class AboutScreenTest {
                     versionName = "1.0.0",
                     onBack = {},
                     onLearn = {},
+                    onPrivacyLicenses = {},
                     onCameraEducationSeen = { seenCalls++ },
                 )
             }

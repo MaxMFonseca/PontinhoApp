@@ -134,14 +134,24 @@ class RecognitionAssetVerifierTest {
         )
     }
 
-    @Test fun `debug candidates require an explicit debug gate and no release status is invented`() {
+    @Test fun `owner approved production candidate is accepted without an experimental gate`() {
+        val result = verify(YoloBundleFixture.productionJson()) as RecognitionAvailability.Available
+        val metadata = result.metadata as YoloRecognitionMetadata
+
+        assertFalse(metadata.debugOnly)
+        assertTrue(metadata.productionApproved)
+    }
+
+    @Test fun `candidate status and approval flag must be an allowed pair`() {
+        reject(YoloBundleFixture.productionJson().put("productionApproved", false))
+        reject(YoloBundleFixture.json().put("productionApproved", true))
+        reject(YoloBundleFixture.productionJson().put("candidateStatus", "PRODUCTION_APPROVED"))
+        reject(YoloBundleFixture.productionJson().put("candidateStatus", "EXPERIMENTAL_ONE_DECK"))
+    }
+
+    @Test fun `debug candidates require an explicit debug gate`() {
         assertTrue(verify() is RecognitionAvailability.Unavailable)
         if (BuildConfig.DEBUG) assertTrue(verify(allowDebugOnly = true) is RecognitionAvailability.Available)
-        reject(YoloBundleFixture.json().put("productionApproved", true))
-        reject(YoloBundleFixture.json().put("candidateStatus", "PRODUCTION_APPROVED"))
-        val production = YoloBundleFixture.json().put("candidateStatus", "PRODUCTION_APPROVED").put("productionApproved", true)
-        reject(production)
-        reject(YoloBundleFixture.json().put("candidateStatus", "EXPERIMENTAL_ONE_DECK"))
     }
 
     private fun verify(json: JSONObject = YoloBundleFixture.json(), allowDebugOnly: Boolean = false) =

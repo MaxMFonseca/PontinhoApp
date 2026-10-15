@@ -41,6 +41,7 @@ import com.maxmfonseca.pontinho.ui.home.HomeScreen
 import com.maxmfonseca.pontinho.ui.home.HomeViewModel
 import com.maxmfonseca.pontinho.ui.learn.LearnScreen
 import com.maxmfonseca.pontinho.ui.about.AboutScreen
+import com.maxmfonseca.pontinho.ui.about.PrivacyLicensesScreen
 import com.maxmfonseca.pontinho.ui.settings.AndroidXAppLocaleController
 import com.maxmfonseca.pontinho.ui.settings.AppearanceScreen
 import com.maxmfonseca.pontinho.ui.settings.LanguageScreen
@@ -269,6 +270,9 @@ fun PontinhoNavHost(
             )
         }
         composable(Destination.Learn.route) { LearnScreen(onBack = { navController.popBackStack() }) }
+        composable(Destination.PrivacyLicenses.route) {
+            PrivacyLicensesScreen(onBack = { navController.popBackStack() })
+        }
         composable(Destination.About.route) {
             val context = androidx.compose.ui.platform.LocalContext.current
             val scope = rememberCoroutineScope()
@@ -277,6 +281,7 @@ fun PontinhoNavHost(
             }
             AboutScreen(versionName = version, onBack = { navController.popBackStack() },
                 onLearn = { navController.navigate(Destination.Learn.route) },
+                onPrivacyLicenses = { navController.navigate(Destination.PrivacyLicenses.route) },
                 onCameraEducationSeen = {
                     scope.launch { container.preferencesRepository.setCameraEducationSeen(true) }
                 })

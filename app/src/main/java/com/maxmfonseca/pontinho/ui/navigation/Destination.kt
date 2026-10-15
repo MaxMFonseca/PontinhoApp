@@ -40,6 +40,7 @@ sealed interface Destination {
     data object Language : Destination { override val route = "language" }
     data object Learn : Destination { override val route = "learn" }
     data object About : Destination { override val route = "about" }
+    data object PrivacyLicenses : Destination { override val route = "privacy-licenses" }
 }
 
 private fun String.routeEncoded(): String =

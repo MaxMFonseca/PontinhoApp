@@ -13,6 +13,8 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class VerifiedCardRecognitionEngineProviderTest {
     private fun assets(): Pair<ByteArray?, ByteArray?> = YoloBundleFixture.model.copyOf() to YoloBundleFixture.bytes()
+    private fun productionAssets(): Pair<ByteArray?, ByteArray?> =
+        YoloBundleFixture.model.copyOf() to YoloBundleFixture.productionBytes()
 
     @Test fun `asset reader contract is the exact nullable model and release pair`() = runTest {
         val reader: SingleStageRecognitionAssetReader = { null to null }
@@ -34,7 +36,7 @@ class VerifiedCardRecognitionEngineProviderTest {
     @Test fun `production dispatcher verifies assets and constructs one detector off main`() = runBlocking {
         val main = android.os.Looper.getMainLooper().thread
         val provider = VerifiedCardRecognitionEngineProvider(
-            readAssets = { assertNotEquals(main, Thread.currentThread()); assets() },
+            readAssets = { assertNotEquals(main, Thread.currentThread()); productionAssets() },
             factory = { model, metadata ->
                 assertArrayEquals(YoloBundleFixture.model, model); assertNotEquals(main, Thread.currentThread())
                 Engine(metadata).also { it.inference.complete(Unit) }

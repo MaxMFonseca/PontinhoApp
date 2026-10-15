@@ -75,6 +75,7 @@
     <string name="route_language">Idioma</string>
     <string name="route_learn">Aprenda a jogar</string>
     <string name="route_about">Sobre</string>
+    <string name="route_privacy_licenses">Privacidade e licenças</string>
     <string name="settings_appearance_summary">Tema do aplicativo</string>
     <string name="settings_language_summary">Idioma do aplicativo</string>
     <string name="settings_learn_summary">Regras completas disponíveis offline</string>
@@ -92,7 +93,24 @@
     <string name="about_purpose">Marcador offline para partidas presenciais do jogo de cartas Pontinho. Aprenda a jogar.</string>
     <string name="about_support">Suporte</string>
     <string name="about_camera_education">Como funciona a leitura de cartas</string>
-    <string name="about_card_model_attribution">Modelo experimental treinado com Poker Cards Cxcvz, por LibreYOLO / Roboflow 100 / Augmented Startups, sob CC BY 4.0.</string>
+    <string name="about_privacy_licenses">Privacidade e licenças</string>
+    <string name="privacy_local_data_title">Dados no dispositivo</string>
+    <string name="privacy_local_data_body">Nomes de jogadores, pontuações, partidas e preferências permanecem neste dispositivo.</string>
+    <string name="privacy_photos_title">Fotos das cartas</string>
+    <string name="privacy_photos_body">As fotos são processadas localmente, não são enviadas e são descartadas após a leitura. Arquivos temporários não entram no backup.</string>
+    <string name="privacy_network_title">Sem rastreamento</string>
+    <string name="privacy_network_body">Esta versão não contém anúncios, análises, contas, rastreamento nem comunicação de rede.</string>
+    <string name="privacy_camera_title">Permissão da câmera</string>
+    <string name="privacy_camera_body">A permissão é solicitada apenas quando você abre a leitura de cartas e é usada somente para capturar a mesa.</string>
+    <string name="privacy_app_license_title">Licença do aplicativo</string>
+    <string name="privacy_app_license_body">O Pontinho é software livre licenciado sob AGPL-3.0-or-later.</string>
+    <string name="privacy_third_party_title">Avisos de terceiros</string>
+    <string name="privacy_third_party_body">AndroidX, Jetpack Compose, Room, CameraX e LiteRT são usados sob licenças Apache 2.0. Os avisos completos acompanham o código-fonte correspondente.</string>
+    <string name="privacy_model_title">Origem do modelo</string>
+    <string name="privacy_model_body">Detector YOLOv8n derivado de Ultralytics e treinado com Playing Cards Object Detection versão 4, publicado por Augmented Startups como Domínio Público. Limitações conhecidas constam no cartão do modelo.</string>
+    <string name="privacy_source_title">Código-fonte público</string>
+    <string name="legal_source_code_url" translatable="false">TODO:Max</string>
+    <string name="about_card_model_attribution">Modelo de cartas YOLOv8n derivado de Ultralytics e treinado com Playing Cards Object Detection versão 4, publicado por Augmented Startups como Domínio Público.</string>
     <string name="camera_education_title">Antes de escanear</string>
     <string name="camera_education_offline">A foto é processada inteiramente neste dispositivo. O aplicativo não envia nem retém a imagem.</string>
     <string name="camera_education_capture">Para obter melhores resultados, use boa iluminação, evite reflexos e mantenha todas as cartas totalmente visíveis e sem sobreposição.</string>

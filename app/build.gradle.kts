@@ -1,3 +1,7 @@
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -46,6 +50,7 @@ android {
 
     sourceSets.named("test") {
         resources.directories.add("../ml/card-recognition/tests/fixtures/android-release")
+        resources.directories.add("src/main/assets")
     }
     sourceSets.named("androidTest") { assets.directories.add("$projectDir/schemas") }
 
@@ -139,7 +144,7 @@ room {
 }
 
 // Inspect the packaged release artifact, including features implied by CAMERA permission.
-tasks.register("verifyManualOnlyReleaseApk") {
+tasks.register("verifyOptionalCameraReleaseApk") {
     dependsOn("assembleRelease")
     val sdkDirectory = androidComponents.sdkComponents.sdkDirectory
     val buildToolsVersion = android.buildToolsVersion
@@ -154,11 +159,169 @@ tasks.register("verifyManualOnlyReleaseApk") {
         check(process.waitFor() == 0) { output }
         val required = output.lineSequence().map(String::trim).filter { it.startsWith("uses-feature:") || it.startsWith("uses-implied-feature:") }
             .filter { it.contains("android.hardware.camera") }.toList()
-        check(required.isEmpty()) { "Manual-only devices excluded by release APK: $required" }
+        check(required.isEmpty()) { "Devices without camera hardware are excluded by release APK: $required" }
         listOf("android.hardware.camera", "android.hardware.camera.autofocus", "android.hardware.camera.any").forEach { feature ->
             check(output.contains("uses-feature-not-required: name='$feature'")) { "Missing optional feature $feature" }
         }
     }
+}
+
+tasks.register("verifyReleaseRecognitionAssets") {
+    dependsOn("assembleRelease", "bundleRelease")
+    val sourceModel = layout.projectDirectory.file("src/main/assets/card_detector.tflite")
+    val sourceMetadata = layout.projectDirectory.file("src/main/assets/card_recognition.release.json")
+    val apk = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk")
+    val bundle = layout.buildDirectory.file("outputs/bundle/release/app-release.aab")
+    inputs.files(sourceModel, sourceMetadata, apk, bundle)
+    doLast {
+        fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+            .digest(bytes).joinToString("") { "%02x".format(it) }
+        val approvedHash = "01034db88037605250fd3d78b49ee791a7711b218305e44ebe4ff3c02e2ad277"
+        val modelBytes = sourceModel.asFile.readBytes()
+        val metadataBytes = sourceMetadata.asFile.readBytes()
+        val metadata = JsonSlurper().parse(metadataBytes) as Map<*, *>
+        val model = metadata["model"] as? Map<*, *> ?: error("Production metadata model is missing")
+        check(metadata["candidateStatus"] == "OWNER_APPROVED_V1") { "Release metadata is not owner approved" }
+        check(metadata["productionApproved"] == true) { "Release metadata productionApproved must be true" }
+        check(model["sha256"] == approvedHash) { "Release metadata model hash is not the approved hash" }
+        check((model["sizeBytes"] as? Number)?.toLong() == 12_838_331L) { "Release metadata model size is invalid" }
+        check(modelBytes.size == 12_838_331 && sha256(modelBytes) == approvedHash) {
+            "Main recognition model is not the owner-approved artifact"
+        }
+        fun verifyArchive(file: File, modelEntry: String, metadataEntry: String) {
+            ZipFile(file).use { zip ->
+                val packagedModel = zip.getEntry(modelEntry)?.let { zip.getInputStream(it).use { stream -> stream.readBytes() } }
+                    ?: error("${file.name} is missing $modelEntry")
+                val packagedMetadata = zip.getEntry(metadataEntry)?.let { zip.getInputStream(it).use { stream -> stream.readBytes() } }
+                    ?: error("${file.name} is missing $metadataEntry")
+                check(packagedModel.contentEquals(modelBytes)) { "${file.name} contains different model bytes" }
+                check(packagedMetadata.contentEquals(metadataBytes)) { "${file.name} contains different production metadata" }
+                check("DEBUG_ONLY" !in packagedMetadata.decodeToString()) { "${file.name} contains debug-only metadata" }
+            }
+        }
+        verifyArchive(apk.get().asFile, "assets/card_detector.tflite", "assets/card_recognition.release.json")
+        verifyArchive(bundle.get().asFile, "base/assets/card_detector.tflite", "base/assets/card_recognition.release.json")
+    }
+}
+
+tasks.register("verifyReleaseNativeAlignment") {
+    dependsOn("assembleRelease")
+    val sdkDirectory = androidComponents.sdkComponents.sdkDirectory
+    val buildToolsVersion = android.buildToolsVersion
+    val apk = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk")
+    inputs.file(apk)
+    doLast {
+        fun parsePtLoadAlignments(output: String): List<Long> {
+            val llvm = Regex("Type: PT_LOAD[\\s\\S]*?Alignment: (\\d+)")
+                .findAll(output)
+                .map { it.groupValues[1].toLong() }
+                .toList()
+            val gnu = output.lineSequence()
+                .map(String::trim)
+                .filter { it.startsWith("LOAD ") }
+                .mapNotNull { line ->
+                    line.substringAfterLast(' ').let { value ->
+                        runCatching {
+                            if (value.startsWith("0x", ignoreCase = true)) value.drop(2).toLong(16)
+                            else value.toLong()
+                        }.getOrNull()
+                    }
+                }
+                .toList()
+            return (llvm + gnu).distinct()
+        }
+        val suffix = if (System.getProperty("os.name").startsWith("Windows")) ".exe" else ""
+        val zipalign = sdkDirectory.get().file("build-tools/$buildToolsVersion/zipalign$suffix").asFile
+        val alignment = ProcessBuilder(zipalign.absolutePath, "-c", "-P", "16", "4", apk.get().asFile.absolutePath)
+            .redirectErrorStream(true).start()
+        val alignmentOutput = alignment.inputStream.bufferedReader().use { it.readText() }
+        check(alignment.waitFor() == 0) { "APK 16 KB zip alignment failed:\n$alignmentOutput" }
+
+        val sdkNdkTools = sdkDirectory.get().dir("ndk").asFile
+            .listFiles().orEmpty().flatMap { ndk ->
+                ndk.resolve("toolchains/llvm/prebuilt").listFiles().orEmpty().flatMap { prebuilt ->
+                    listOf(prebuilt.resolve("bin/llvm-readelf$suffix"), prebuilt.resolve("bin/llvm-readobj$suffix"))
+                }
+            }
+        val pathTools = System.getenv("PATH").orEmpty().split(File.pathSeparator).flatMap { directory ->
+            listOf(File(directory, "llvm-readelf$suffix"), File(directory, "llvm-readobj$suffix"))
+        }
+        val fallbackTools = if (suffix.isNotEmpty()) {
+            listOf(File("C:/Program Files/LLVM/bin/llvm-readobj.exe"))
+        } else emptyList()
+        val elfTool = (sdkNdkTools + pathTools + fallbackTools).firstOrNull(File::isFile)
+            ?: error("No llvm-readelf/llvm-readobj tool is installed; native 16 KB ELF alignment was not verified")
+
+        var nativeLibraryCount = 0
+        ZipFile(apk.get().asFile).use { zip ->
+            zip.entries().asSequence().filter { !it.isDirectory && it.name.endsWith(".so") }.forEach { entry ->
+                nativeLibraryCount++
+                val extracted = temporaryDir.resolve(entry.name)
+                extracted.parentFile.mkdirs()
+                zip.getInputStream(entry).use { input -> extracted.outputStream().use(input::copyTo) }
+                val option = if (elfTool.name.startsWith("llvm-readelf")) "--program-headers" else "--program-headers"
+                val inspection = ProcessBuilder(elfTool.absolutePath, option, extracted.absolutePath)
+                    .redirectErrorStream(true).start()
+                val output = inspection.inputStream.bufferedReader().use { it.readText() }
+                check(inspection.waitFor() == 0) { "ELF inspection failed for ${entry.name}:\n$output" }
+                val alignments = parsePtLoadAlignments(output)
+                check(alignments.isNotEmpty()) { "No PT_LOAD alignment found for ${entry.name} using ${elfTool.name}" }
+                check(alignments.all { it >= 16_384L }) {
+                    "${entry.name} has PT_LOAD alignment below 16 KB: $alignments"
+                }
+            }
+        }
+        check(nativeLibraryCount > 0) { "Release APK contains no native libraries to verify" }
+        logger.lifecycle("Verified 16 KB zip and ELF alignment for $nativeLibraryCount native libraries with ${elfTool.absolutePath}")
+    }
+}
+
+tasks.register("verifyNativeAlignmentParser") {
+    doLast {
+        fun parsePtLoadAlignments(output: String): List<Long> {
+            val llvm = Regex("Type: PT_LOAD[\\s\\S]*?Alignment: (\\d+)")
+                .findAll(output)
+                .map { it.groupValues[1].toLong() }
+                .toList()
+            val gnu = output.lineSequence()
+                .map(String::trim)
+                .filter { it.startsWith("LOAD ") }
+                .mapNotNull { line ->
+                    line.substringAfterLast(' ').let { value ->
+                        runCatching {
+                            if (value.startsWith("0x", ignoreCase = true)) value.drop(2).toLong(16)
+                            else value.toLong()
+                        }.getOrNull()
+                    }
+                }
+                .toList()
+            return (llvm + gnu).distinct()
+        }
+        val llvm = """
+            ProgramHeader {
+              Type: PT_LOAD (0x1)
+              Alignment: 16384
+            }
+        """.trimIndent()
+        val gnu = """
+            Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align
+            LOAD           0x000000 0x00000000 0x00000000 0x001000 0x001000 R E 0x4000
+        """.trimIndent()
+        check(parsePtLoadAlignments(llvm) == listOf(16_384L)) { "LLVM PT_LOAD parser regression" }
+        check(parsePtLoadAlignments(gnu) == listOf(16_384L)) { "GNU PT_LOAD parser regression" }
+    }
+}
+
+tasks.register("verifyUnsignedReleaseCandidate") {
+    dependsOn(
+        "testDebugUnitTest",
+        "lintRelease",
+        "verifyOfflineScannerDependencies",
+        "verifyOptionalCameraReleaseApk",
+        "verifyReleaseRecognitionAssets",
+        "verifyReleaseNativeAlignment",
+        "verifyNativeAlignmentParser",
+    )
 }
 
 dependencies {

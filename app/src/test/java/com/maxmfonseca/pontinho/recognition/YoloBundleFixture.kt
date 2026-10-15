@@ -77,4 +77,10 @@ internal object YoloBundleFixture {
     }
 
     fun bytes(): ByteArray = json().toString().encodeToByteArray()
+
+    fun productionJson(): JSONObject = json()
+        .put("candidateStatus", "OWNER_APPROVED_V1")
+        .put("productionApproved", true)
+
+    fun productionBytes(): ByteArray = productionJson().toString().encodeToByteArray()
 }

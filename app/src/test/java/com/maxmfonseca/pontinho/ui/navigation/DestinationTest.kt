@@ -70,6 +70,7 @@ class DestinationTest {
         assertEquals("language", Destination.Language.route)
         assertEquals("learn", Destination.Learn.route)
         assertEquals("about", Destination.About.route)
+        assertEquals("privacy-licenses", Destination.PrivacyLicenses.route)
     }
 
     @Test
