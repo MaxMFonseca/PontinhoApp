@@ -148,7 +148,7 @@ class ModernVisualJourneyTest {
                     compose.onAllNodes(SemanticsMatcher("color") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("indicator_color_") == true }, true).assertCountEquals(2)
                     compose.onAllNodes(hasScrollAction() and hasAnyAncestor(hasTestTag("joker_dialog")), true).assertCountEquals(0)
                 }
-                if (destination == "learn") compose.onNodeWithText(context.getString(R.string.score_correction_help)).performScrollTo().assertIsDisplayed()
+                if (destination == "learn") compose.onNodeWithText(context.getString(R.string.learn_rule_20_title)).performScrollTo().assertIsDisplayed()
                 capture("$destination-$language-${mode.name.lowercase()}-$font")
             }
         }

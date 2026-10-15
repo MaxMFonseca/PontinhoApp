@@ -105,15 +105,11 @@ class SettingsScreensTest {
                         back.performScrollTo()
                     }
                     "learn" -> {
-                        for (text in listOf(R.string.learn_penalties, R.string.learn_hand_rotation, R.string.learn_wildcards,
-                            R.string.learn_card_values, R.string.learn_round_completion, R.string.learn_match_end,
-                            R.string.learn_late_players, R.string.score_correction_help)) {
+                        for (text in listOf(R.string.learn_rules_heading, R.string.learn_rule_01_title,
+                            R.string.learn_rule_10_title, R.string.learn_rule_20_title)) {
                             composeRule.onNodeWithText(localized.getString(text)).performScrollTo().assertIsDisplayed()
                         }
-                        for (description in listOf(R.string.learn_example_ace_hearts_description, R.string.learn_example_two_diamonds_description,
-                            R.string.learn_example_king_spades_description, R.string.learn_example_chosen_wildcard_description)) {
-                            composeRule.onNodeWithContentDescription(localized.getString(description)).performScrollTo().assertIsDisplayed()
-                        }
+                        composeRule.onNodeWithTag("learn_score_table").performScrollTo().assertIsDisplayed()
                     }
                     "about" -> {
                         composeRule.onNodeWithText(localized.getString(R.string.about_version, "1.0.0")).performScrollTo().assertIsDisplayed()
