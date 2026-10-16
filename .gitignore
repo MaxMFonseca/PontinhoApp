@@ -1,6 +1,8 @@
 *.iml
 .gradle/
 .gradle-user-home/
+.android-user-home/
+.tmp/
 .kotlin/
 .idea/
 /build/
@@ -46,5 +48,3 @@ ml/card-recognition/yolo/datasets/extracted/
 ml/card-recognition/yolo/runs/
 ml/card-recognition/yolo/checkpoints/
 ml/card-recognition/yolo/exports/*
-!ml/card-recognition/yolo/exports/selected/
-!ml/card-recognition/yolo/exports/selected/**
