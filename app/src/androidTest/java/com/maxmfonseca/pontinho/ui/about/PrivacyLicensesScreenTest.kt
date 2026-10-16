@@ -49,7 +49,7 @@ class PrivacyLicensesScreenTest {
                 "Esta versão não contém anúncios, análises, contas, rastreamento nem comunicação de rede.",
                 "AGPL-3.0-or-later",
                 "Origem do modelo",
-                "TODO:" + "Max",
+                "https://github.com/MaxMFonseca/PontinhoApp",
             ),
             "en-US" to listOf(
                 "On-device data",
@@ -57,7 +57,7 @@ class PrivacyLicensesScreenTest {
                 "This release contains no ads, analytics, accounts, tracking, or network communication.",
                 "AGPL-3.0-or-later",
                 "Model provenance",
-                "TODO:" + "Max",
+                "https://github.com/MaxMFonseca/PontinhoApp",
             ),
         )
         expected.forEach { (tag, texts) ->

@@ -109,7 +109,7 @@
     <string name="privacy_model_title">Origem do modelo</string>
     <string name="privacy_model_body">Detector YOLOv8n derivado de Ultralytics e treinado com Playing Cards Object Detection versão 4, publicado por Augmented Startups como Domínio Público. Limitações conhecidas constam no cartão do modelo.</string>
     <string name="privacy_source_title">Código-fonte público</string>
-    <string name="legal_source_code_url" translatable="false">TODO:Max</string>
+    <string name="legal_source_code_url" translatable="false">https://github.com/MaxMFonseca/PontinhoApp</string>
     <string name="about_card_model_attribution">Modelo de cartas YOLOv8n derivado de Ultralytics e treinado com Playing Cards Object Detection versão 4, publicado por Augmented Startups como Domínio Público.</string>
     <string name="camera_education_title">Antes de escanear</string>
     <string name="camera_education_offline">A foto é processada inteiramente neste dispositivo. O aplicativo não envia nem retém a imagem.</string>

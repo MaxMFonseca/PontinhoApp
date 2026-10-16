@@ -3,9 +3,9 @@
 Effective date: to be set when this policy is published.
 
 This document is a publication-ready draft for Pontinho. Before distributing
-the app publicly, publish this text at a stable web address, replace the
-in-app `legal_source_code_url` resource with the public corresponding-source
-URL, and add the hosted privacy-policy URL to the store listing.
+the app publicly, publish this text at a stable web address and add the hosted
+privacy-policy URL to the store listing. The corresponding source is published
+at [`github.com/MaxMFonseca/PontinhoApp`](https://github.com/MaxMFonseca/PontinhoApp).
 
 ## Português (Brasil)
 
@@ -43,8 +43,8 @@ do aplicativo nas configurações do Android.
 
 Pontinho é distribuído sob AGPL-3.0-or-later. Avisos de terceiros e a origem do
 modelo de reconhecimento estão disponíveis no aplicativo e no código-fonte
-correspondente. O endereço público do código será o valor final do recurso
-`legal_source_code_url`.
+correspondente, publicado em
+[`github.com/MaxMFonseca/PontinhoApp`](https://github.com/MaxMFonseca/PontinhoApp).
 
 ### Contato
 
@@ -83,8 +83,8 @@ until the user deletes the match or clears the app's data in Android settings.
 ### Source and licenses
 
 Pontinho is distributed under AGPL-3.0-or-later. Third-party notices and card
-model provenance are available in the app and corresponding source. The public
-source address will be the final value of the `legal_source_code_url` resource.
+model provenance are available in the app and corresponding source, published
+at [`github.com/MaxMFonseca/PontinhoApp`](https://github.com/MaxMFonseca/PontinhoApp).
 
 ### Contact
 

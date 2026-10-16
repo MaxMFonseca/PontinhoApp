@@ -153,6 +153,6 @@ and Ultralytics are development dependencies; their versions and source/license
 records remain in the model receipts and corresponding source repository.
 
 Pontinho and the model's complete corresponding source are distributed under
-AGPL-3.0-or-later. Before public distribution, the in-app source URL placeholder
-must be replaced with the public corresponding-source location. This document
-records project decisions and provenance; it is not legal advice.
+AGPL-3.0-or-later at
+[`github.com/MaxMFonseca/PontinhoApp`](https://github.com/MaxMFonseca/PontinhoApp).
+This document records project decisions and provenance; it is not legal advice.
