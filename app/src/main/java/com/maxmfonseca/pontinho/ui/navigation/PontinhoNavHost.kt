@@ -62,6 +62,8 @@ import com.maxmfonseca.pontinho.ui.history.HistoryViewModel
 import com.maxmfonseca.pontinho.ui.results.ResultsEvent
 import com.maxmfonseca.pontinho.ui.results.ResultsScreen
 import com.maxmfonseca.pontinho.ui.results.ResultsViewModel
+import com.maxmfonseca.pontinho.ui.statistics.StatisticsScreen
+import com.maxmfonseca.pontinho.ui.statistics.StatisticsViewModel
 import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
 import java.time.LocalDate
 import kotlinx.coroutines.launch
@@ -102,7 +104,29 @@ fun PontinhoNavHost(
                 onNewMatch = { navController.navigate(Destination.Setup.route) },
                 onLearn = { navController.navigate(Destination.Learn.route) },
                 onOpenDay = { navController.navigate(Destination.DayHistory.createRoute(it.toString())) },
+                onStatistics = { navController.navigate(Destination.Statistics.route) },
                 onSettings = { navController.navigate(Destination.Settings.route) },
+            )
+        }
+        composable(Destination.Statistics.route) {
+            val statisticsViewModel: StatisticsViewModel = viewModel(
+                factory = viewModelFactory {
+                    initializer {
+                        StatisticsViewModel(
+                            savedStateHandle = createSavedStateHandle(),
+                            repository = container.matchRepository,
+                        )
+                    }
+                },
+            )
+            val state by statisticsViewModel.uiState.collectAsStateWithLifecycle()
+            StatisticsScreen(
+                state = state,
+                onBack = { navController.popBackStack() },
+                onSettings = { navController.navigate(Destination.Settings.route) },
+                onQueryChange = statisticsViewModel::updateQuery,
+                onClearQuery = statisticsViewModel::clearQuery,
+                onSelectSort = statisticsViewModel::selectSort,
             )
         }
         composable(Destination.Setup.route) {

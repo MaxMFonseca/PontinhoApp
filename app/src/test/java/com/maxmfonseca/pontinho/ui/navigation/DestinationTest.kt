@@ -64,6 +64,7 @@ class DestinationTest {
     @Test
     fun staticDestinationsExposeStableRoutes() {
         assertEquals("home", Destination.Home.route)
+        assertEquals("statistics", Destination.Statistics.route)
         assertEquals("setup", Destination.Setup.route)
         assertEquals("settings", Destination.Settings.route)
         assertEquals("appearance", Destination.Appearance.route)

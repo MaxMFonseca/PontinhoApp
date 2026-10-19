@@ -8,6 +8,8 @@ import com.maxmfonseca.pontinho.data.local.mapper.indicatorOrNull
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.rules.*
+import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
+import com.maxmfonseca.pontinho.domain.statistics.calculateLifetimeStatistics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -48,6 +50,13 @@ class RoomMatchRepository(
             matches.matches().map { requireNotNull(snapshot(it.id)) }
                 .groupBy { it.localDate }.toSortedMap(compareByDescending { it })
                 .map { (date, items) -> DaySummary(date, items) }
+        }
+    }.distinctUntilChanged()
+
+    override fun observeLifetimeStatistics(): Flow<List<LifetimePlayerStatistics>> = changes().map {
+        db.withTransaction {
+            val snapshots = matches.matches().map { requireNotNull(snapshot(it.id)) }
+            calculateLifetimeStatistics(snapshots)
         }
     }.distinctUntilChanged()
 

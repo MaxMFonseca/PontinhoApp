@@ -9,10 +9,13 @@ import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.local.entity.*
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard
 import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -1185,6 +1188,66 @@ class RoomMatchRepositoryTest {
         assertTrue(state.hasPendingResults)
         assertTrue(state.resultRevision > firstResult.resultRevision)
         assertEquals(0L, state.acknowledgedResultRevision)
+    }
+
+    @Test fun lifetimeStatisticsReactToCorrectionAndDeletion() = runBlocking {
+        clock.time = Instant.parse("2026-10-13T12:00:00Z")
+        val older = create(3)
+        val olderFirst = start(older)
+        submit(older, olderFirst, 0, 20)
+        submit(older, olderFirst, 1, 0)
+        val olderLast = start(older)
+        submit(older, olderLast, 0, 101)
+        submit(older, olderLast, 1, 0)
+        // Final totals: 121, 0, 0. Both players with zero points win.
+
+        clock.time = Instant.parse("2026-10-14T12:00:00Z")
+        val newer = create(3)
+        val newerFirst = start(newer)
+        submit(newer, newerFirst, 0, 0)
+        submit(newer, newerFirst, 1, 10)
+        val newerLast = start(newer)
+        submit(newer, newerLast, 0, 101)
+        submit(newer, newerLast, 1, 0)
+        // Final totals: 101, 10, 0. Player 3 is the sole winner.
+        assertNotEquals(snapshot(older).localDate, snapshot(newer).localDate)
+
+        clock.time = Instant.parse("2026-10-15T12:00:00Z")
+        val active = create(3)
+        val activeRound = start(active)
+        submit(active, activeRound, 0, 90)
+        submit(active, activeRound, 1, 80)
+        assertFalse(snapshot(active).isFinished)
+
+        val emissions = Channel<List<LifetimePlayerStatistics>>(Channel.UNLIMITED)
+        val collection = launch { repo.observeLifetimeStatistics().collect { emissions.send(it) } }
+        suspend fun nextRows() = withTimeout(5_000) { emissions.receive() }
+        try {
+            assertEquals(listOf(
+                LifetimePlayerStatistics(PlayerNameKey("player 1"), "Player 1", 2, 0, 222L),
+                LifetimePlayerStatistics(PlayerNameKey("player 2"), "Player 2", 2, 1, 10L),
+                LifetimePlayerStatistics(PlayerNameKey("player 3"), "Player 3", 2, 2, 0L),
+            ), nextRows())
+
+            val olderRoster = snapshot(older).participants
+            repo.updateExplicitScore(UpdateExplicitScore(older, olderFirst, olderRoster[1].id, 5))
+            assertEquals(setOf(olderRoster[2].id), snapshot(older).outcome!!.winners)
+            assertEquals(listOf(
+                LifetimePlayerStatistics(PlayerNameKey("player 1"), "Player 1", 2, 0, 222L),
+                LifetimePlayerStatistics(PlayerNameKey("player 2"), "Player 2", 2, 0, 15L),
+                LifetimePlayerStatistics(PlayerNameKey("player 3"), "Player 3", 2, 2, 0L),
+            ), nextRows())
+
+            repo.deleteMatch(newer)
+            assertEquals(listOf(
+                LifetimePlayerStatistics(PlayerNameKey("player 1"), "Player 1", 1, 0, 121L),
+                LifetimePlayerStatistics(PlayerNameKey("player 2"), "Player 2", 1, 0, 5L),
+                LifetimePlayerStatistics(PlayerNameKey("player 3"), "Player 3", 1, 1, 0L),
+            ), nextRows())
+        } finally {
+            collection.cancelAndJoin()
+            emissions.close()
+        }
     }
 
     private class TestClock(var time: Instant, var zoneId: ZoneId) : Clock() {

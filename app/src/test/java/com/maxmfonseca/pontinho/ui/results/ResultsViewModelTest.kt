@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.results
 
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.ui.test.matchSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -72,6 +73,7 @@ private class ResultRepository(snapshot: MatchSnapshot) : MatchRepository {
     val acknowledgements = mutableListOf<Pair<MatchId, Long>>()
     override fun observeMatch(matchId: MatchId) = state
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
+    override fun observeLifetimeStatistics() = MutableStateFlow(emptyList<LifetimePlayerStatistics>())
     override fun observeDay(localDate: LocalDate) = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
     override suspend fun acknowledgeResults(matchId: MatchId, revision: Long) { acknowledgements += matchId to revision }
     override suspend fun createMatch(command: CreateMatch) = error("unused")

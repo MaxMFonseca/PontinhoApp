@@ -1,5 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="route_statistics">Statistics</string>
+    <string name="home_statistics">Statistics</string>
+    <string name="statistics_search">Search player</string>
+    <string name="statistics_clear">Clear search</string>
+    <string name="statistics_name">Name</string>
+    <string name="statistics_matches">Completed matches</string>
+    <string name="statistics_wins">Wins</string>
+    <string name="statistics_win_rate">Win rate</string>
+    <string name="statistics_points">Accumulated points</string>
+    <string name="statistics_ascending">ascending</string>
+    <string name="statistics_descending">descending</string>
+    <string name="statistics_sort_description">Sort by %1$s, %2$s</string>
+    <string name="statistics_sort_selected_description">Sort by %1$s, %2$s, selected</string>
+    <string name="statistics_empty">Statistics will appear after you finish a match.</string>
+    <string name="statistics_no_results">No players found.</string>
     <string name="match_round_not_started">Round %1$d not started</string>
     <string name="match_round_counting">Counting points for round %1$d</string>
     <string name="match_round_editing">Editing round %1$d</string>

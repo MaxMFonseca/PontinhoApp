@@ -23,6 +23,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -52,6 +53,7 @@ fun HomeScreen(
     onNewMatch: () -> Unit,
     onLearn: () -> Unit,
     onOpenDay: (LocalDate) -> Unit,
+    onStatistics: () -> Unit,
     modifier: Modifier = Modifier,
     onSettings: () -> Unit = {},
 ) {
@@ -66,6 +68,11 @@ fun HomeScreen(
                     Icon(Icons.Filled.Add, null, Modifier.padding(end = 8.dp))
                     Text(stringResource(R.string.home_new_match), style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.testTag("home_new_match_label"))
+                }
+                OutlinedButton(onClick = onStatistics, shape = MaterialTheme.shapes.large,
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).testTag("home_statistics")) {
+                    Text(stringResource(R.string.home_statistics), style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.testTag("home_statistics_label"))
                 }
             }
         }

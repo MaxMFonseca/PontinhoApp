@@ -1,5 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="route_statistics">Estatísticas</string>
+    <string name="home_statistics">Estatísticas</string>
+    <string name="statistics_search">Buscar jogador</string>
+    <string name="statistics_clear">Limpar busca</string>
+    <string name="statistics_name">Nome</string>
+    <string name="statistics_matches">Partidas concluídas</string>
+    <string name="statistics_wins">Vitórias</string>
+    <string name="statistics_win_rate">Taxa de vitórias</string>
+    <string name="statistics_points">Pontos acumulados</string>
+    <string name="statistics_ascending">crescente</string>
+    <string name="statistics_descending">decrescente</string>
+    <string name="statistics_sort_description">Ordenar por %1$s, %2$s</string>
+    <string name="statistics_sort_selected_description">Ordenar por %1$s, %2$s, selecionado</string>
+    <string name="statistics_empty">As estatísticas aparecerão após finalizar uma partida.</string>
+    <string name="statistics_no_results">Nenhum jogador encontrado.</string>
     <string name="match_round_not_started">Rodada %1$d não iniciada</string>
     <string name="match_round_counting">Contando pontos da rodada %1$d</string>
     <string name="match_round_editing">Editando rodada %1$d</string>

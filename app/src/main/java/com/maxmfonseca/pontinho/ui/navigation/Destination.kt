@@ -10,6 +10,7 @@ sealed interface Destination {
     val route: String
 
     data object Home : Destination { override val route = "home" }
+    data object Statistics : Destination { override val route = "statistics" }
     data object Scanner : Destination {
         override val route = "scanner/{match}/{round}/{participant}/{ordinal}/{rank}/{color}/{token}?correction={correction}"
         val argumentNames = listOf("match", "round", "participant", "ordinal", "rank", "color", "token", "correction")

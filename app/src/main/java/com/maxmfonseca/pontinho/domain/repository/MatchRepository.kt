@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.domain.repository
 
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard
+import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
 import java.time.LocalDate
@@ -122,6 +123,7 @@ data class DayHistory(
  */
 interface MatchRepository {
     fun observeHome(): Flow<List<DaySummary>>
+    fun observeLifetimeStatistics(): Flow<List<LifetimePlayerStatistics>>
     fun observeDay(localDate: LocalDate): Flow<DayHistory>
     fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?>
     suspend fun createMatch(command: CreateMatch): MatchId

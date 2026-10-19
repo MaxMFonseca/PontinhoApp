@@ -2,18 +2,28 @@ package com.maxmfonseca.pontinho.ui.navigation
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import com.maxmfonseca.pontinho.PontinhoApplication
 import com.maxmfonseca.pontinho.R
+import com.maxmfonseca.pontinho.di.AppContainer
+import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
+import com.maxmfonseca.pontinho.domain.repository.MatchRepository
+import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -26,6 +36,63 @@ class NavigationMotionTest {
 
     @Test fun reducedMotionHomeLearnBackSettlesWithoutAnimationTime() {
         homeLearnBack(reducedMotion = true)
+    }
+
+    @Test fun homeStatisticsSettingsAndBackKeepTheSuppliedRepositoryAndSearchSortState() {
+        lateinit var controller: NavHostController
+        val applicationContainer = (compose.activity.application as PontinhoApplication).container
+        val repository = object : MatchRepository by applicationContainer.matchRepository {
+            override fun observeLifetimeStatistics() = flowOf(listOf(
+                LifetimePlayerStatistics(PlayerNameKey.from("Ana"), "Ana", 3, 1, 30),
+                LifetimePlayerStatistics(PlayerNameKey.from("Bruno"), "Bruno", 3, 2, 15),
+            ))
+        }
+        val container = object : AppContainer by applicationContainer {
+            override val matchRepository = repository
+        }
+        compose.setContent {
+            PontinhoTheme(reducedMotion = true) {
+                controller = rememberNavController()
+                PontinhoNavHost(container, navController = controller)
+            }
+        }
+        compose.onNodeWithTag("home_statistics").assertIsDisplayed().performClick()
+        compose.onAllNodesWithTag("statistics_root").assertCountEquals(1)
+        compose.onNodeWithTag("home_root").assertDoesNotExist()
+        compose.runOnUiThread { assertEquals("statistics", controller.currentDestination?.route) }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("statistics_player_bruno").fetchSemanticsNodes().size == 1
+        }
+        val ana = compose.onNodeWithTag("statistics_player_ana")
+        val bruno = compose.onNodeWithTag("statistics_player_bruno")
+        assertTrue(bruno.fetchSemanticsNode().boundsInRoot.top < ana.fetchSemanticsNode().boundsInRoot.top)
+
+        compose.onNodeWithTag("statistics_sort_name").performClick()
+        compose.waitUntil(5_000) {
+            ana.fetchSemanticsNode().boundsInRoot.top < bruno.fetchSemanticsNode().boundsInRoot.top
+        }
+        compose.onNodeWithTag("statistics_sort_name").assertIsSelected()
+        compose.onNodeWithTag("statistics_search").performTextInput("Ana")
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("statistics_player_bruno").fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.home_settings)).performClick()
+        compose.runOnUiThread { assertEquals(Destination.Settings.route, controller.currentDestination?.route) }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.match_back)).performClick()
+        compose.onNodeWithTag("statistics_search").assertTextContains("Ana")
+        compose.onNodeWithTag("statistics_sort_name").assertIsSelected()
+        compose.onNodeWithTag("statistics_player_bruno").assertDoesNotExist()
+        compose.onNodeWithTag("statistics_clear").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("statistics_player_bruno").fetchSemanticsNodes().size == 1
+        }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.match_back)).performClick()
+        compose.onNodeWithTag("statistics_root").assertDoesNotExist()
+        compose.onAllNodesWithTag("home_root").assertCountEquals(1)
+        compose.runOnUiThread {
+            assertEquals(Destination.Home.route, controller.currentDestination?.route)
+            assertFalse(controller.previousBackStackEntry != null)
+        }
     }
 
     private fun homeLearnBack(reducedMotion: Boolean) {

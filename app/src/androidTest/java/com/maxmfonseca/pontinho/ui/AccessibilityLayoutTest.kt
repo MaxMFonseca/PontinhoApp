@@ -69,7 +69,7 @@ class AccessibilityLayoutTest {
         val settingsLabel = baseContext.getString(R.string.home_settings)
         compose.setContent {
             PontinhoTheme {
-                HomeScreen(HomeUiState(isLoading = false), {}, {}, {}, onSettings = {})
+                HomeScreen(HomeUiState(isLoading = false), {}, {}, {}, onStatistics = {}, onSettings = {})
             }
         }
 
@@ -93,6 +93,7 @@ class AccessibilityLayoutTest {
                         ),
                     ),
                     {}, {}, {},
+                    onStatistics = {},
                 )
             }
         }

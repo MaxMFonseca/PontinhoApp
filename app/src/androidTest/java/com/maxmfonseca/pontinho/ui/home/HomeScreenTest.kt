@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
@@ -52,6 +53,7 @@ class HomeScreenTest {
         var scenario by mutableStateOf(Triple("pt-BR", ThemePreference.LIGHT, 1f))
         var opened: LocalDate? = null
         var learnClicks = 0
+        var statisticsClicks = 0
         var safeTop = 0
         composeRule.setContent {
             val (locale, theme, scale) = scenario
@@ -64,7 +66,7 @@ class HomeScreenTest {
                     Surface { Box(Modifier.size(320.dp, 568.dp)) {
                         HomeScreen(HomeUiState(isLoading = false, dateCards = listOf(
                             HomeDateCard(LocalDate.of(2026, 10, 14), 2, 1, listOf("Alexandre Maximiliano de Albuquerque", "Bruno")),
-                        )), {}, { learnClicks++ }, { opened = it })
+                        )), {}, { learnClicks++ }, { opened = it }, onStatistics = { statisticsClicks++ })
                     } }
                 }
             }
@@ -89,7 +91,7 @@ class HomeScreenTest {
             composeRule.runOnIdle { assertEquals(previousClicks + 1, learnClicks) }
             composeRule.onNodeWithTag("home_learn").assertDoesNotExist()
             composeRule.onNodeWithText(learnLabel).assertDoesNotExist()
-            listOf("home_new_match").forEach { tag ->
+            listOf("home_new_match", "home_statistics").forEach { tag ->
                 list.performScrollToNode(hasTestTag(tag))
                 val node = composeRule.onNodeWithTag(tag).assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
                 val button = node.fetchSemanticsNode().boundsInRoot
@@ -97,6 +99,11 @@ class HomeScreenTest {
                 val label = composeRule.onNodeWithTag(textTag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
                 assertTrue("$tag must contain its label at $scenario", button.contains(label.topLeft) && button.contains(label.bottomRight))
             }
+            composeRule.onNodeWithTag("home_statistics_label", useUnmergedTree = true)
+                .assertTextEquals(localized.getString(R.string.home_statistics))
+            val previousStatisticsClicks = statisticsClicks
+            composeRule.onNodeWithTag("home_statistics").performClick()
+            composeRule.runOnIdle { assertEquals(previousStatisticsClicks + 1, statisticsClicks) }
             list.performScrollToNode(hasTestTag("home_day_0"))
             composeRule.onNodeWithTag("home_day_0").assertIsDisplayed().performClick()
             composeRule.runOnIdle { assertEquals(LocalDate.of(2026, 10, 14), opened) }
@@ -112,20 +119,34 @@ class HomeScreenTest {
     }
 
     @Test
-    fun emptyHomeShowsBothEntryActionsAndNoAdvertisement() {
+    fun emptyHomeShowsFullWidthStatisticsImmediatelyAfterNewMatchAndInvokesItsCallback() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         var newMatchClicks = 0
         var learnClicks = 0
+        var statisticsClicks = 0
         composeRule.setContent {
             HomeScreen(
                 state = HomeUiState(isLoading = false),
                 onNewMatch = { newMatchClicks++ },
                 onLearn = { learnClicks++ },
                 onOpenDay = {},
+                onStatistics = { statisticsClicks++ },
             )
         }
 
         composeRule.onNodeWithText(context.getString(R.string.home_new_match)).performClick()
+        val newMatch = composeRule.onNodeWithTag("home_new_match").assertHeightIsAtLeast(56.dp)
+            .fetchSemanticsNode().boundsInRoot
+        val statistics = composeRule.onNodeWithTag("home_statistics")
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        statistics.assertTextEquals(context.getString(R.string.home_statistics))
+        val statisticsBounds = statistics.fetchSemanticsNode().boundsInRoot
+        assertEquals(newMatch.left, statisticsBounds.left, 1f)
+        assertEquals(newMatch.right, statisticsBounds.right, 1f)
+        assertTrue("Statistics must immediately follow New Match", statisticsBounds.top >= newMatch.bottom)
+        val density = context.resources.displayMetrics.density
+        assertTrue("No other content belongs between the actions", statisticsBounds.top - newMatch.bottom <= 8 * density)
+        statistics.performClick()
         composeRule.onAllNodesWithContentDescription(context.getString(R.string.home_learn)).assertCountEquals(1)
         composeRule.onNodeWithContentDescription(context.getString(R.string.home_learn)).performClick()
         composeRule.onNodeWithTag("home_learn").assertDoesNotExist()
@@ -134,6 +155,7 @@ class HomeScreenTest {
         composeRule.runOnIdle {
             assertEquals(1, newMatchClicks)
             assertEquals(1, learnClicks)
+            assertEquals(1, statisticsClicks)
         }
     }
 
@@ -152,6 +174,7 @@ class HomeScreenTest {
                 onNewMatch = {},
                 onLearn = {},
                 onOpenDay = {},
+                onStatistics = {},
             )
         }
 
@@ -163,7 +186,7 @@ class HomeScreenTest {
     @Test fun settingsGlyphHasLocalizedTalkBackDescription() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         composeRule.setContent {
-            HomeScreen(HomeUiState(isLoading = false), {}, {}, {}, onSettings = {})
+            HomeScreen(HomeUiState(isLoading = false), {}, {}, {}, onStatistics = {}, onSettings = {})
         }
         composeRule.onNodeWithContentDescription(context.getString(R.string.home_settings))
             .assertContentDescriptionEquals(context.getString(R.string.home_settings))

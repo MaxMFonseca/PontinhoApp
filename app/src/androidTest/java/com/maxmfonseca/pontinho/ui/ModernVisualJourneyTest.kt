@@ -189,7 +189,7 @@ class ModernVisualJourneyTest {
         val participant = ParticipantId("julia")
         val players = listOf(MatchPlayer(participant, "Julia", 33, true, emptyList(), true), MatchPlayer(ParticipantId("max"), "Max", 70, false, emptyList(), true))
         when (screen) {
-            "home" -> HomeScreen(HomeUiState(isLoading = false, dateCards = listOf(HomeDateCard(today, 2, 1, listOf("Julia", "Max")))), {}, {}, {}, onSettings = {})
+            "home" -> HomeScreen(HomeUiState(isLoading = false, dateCards = listOf(HomeDateCard(today, 2, 1, listOf("Julia", "Max")))), {}, {}, {}, onStatistics = {}, onSettings = {})
             "setup" -> MatchSetupScreen(MatchSetupUiState(players = listOf(DraftPlayer("julia", null, "Julia"), DraftPlayer("max", null, "Max"))), {}, {}, {}, {}, { _, _ -> }, {}, {}, {}, {}, {}, {}, {})
             "match", "picker", "score" -> MatchScreen(MatchUiState(isLoading = false, players = players, canAddPlayer = true, canReorderPlayers = true,
                 picker = if (screen == "picker") IndicatorPickerState(RoundId("round"), 1, PickerPurpose.EDIT, Rank.ACE, CardColor.RED) else null,
