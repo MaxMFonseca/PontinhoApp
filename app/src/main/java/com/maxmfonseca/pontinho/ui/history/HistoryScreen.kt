@@ -152,9 +152,9 @@ private fun DailyMetricCard(rows: List<DailyStanding>, victories: Boolean) {
             rows.forEach { row ->
                 Row(Modifier.fillMaxWidth().testTag("daily_${metric}_${row.playerKey.value}").semantics(mergeDescendants = true) {},
                     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.value.toString(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    Text(row.value.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
                         modifier = Modifier.widthIn(min = 24.dp))
-                    Text(row.displayName, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text(row.displayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -204,7 +204,7 @@ private fun HistoryMatchCard(
                     withStyle(SpanStyle(color = nameColor)) { append(player.displayName) }
                     append(" ")
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(player.total.toString()) }
-                }, style = MaterialTheme.typography.bodyLarge,
+                }, style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
                         if (resultDescription != null) stateDescription = resultDescription
                     })

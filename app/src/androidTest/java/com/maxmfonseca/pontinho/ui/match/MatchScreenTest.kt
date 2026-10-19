@@ -633,14 +633,14 @@ class MatchScreenTest {
         val winner = compose.onNodeWithText(context.getString(R.string.went_out)).assertIsNotEnabled()
         val inputBounds = input.fetchSemanticsNode().boundsInRoot
         val confirmBounds = confirm.fetchSemanticsNode().boundsInRoot
-        assertTrue("Confirm belongs alongside input", confirmBounds.center.y in inputBounds.top..inputBounds.bottom)
-        assertTrue(winner.fetchSemanticsNode().boundsInRoot.top > inputBounds.bottom)
+        assertTrue("Confirm belongs below input", confirmBounds.top > inputBounds.bottom)
+        assertTrue(winner.fetchSemanticsNode().boundsInRoot.top > confirmBounds.bottom)
         confirm.performClick()
         assertEquals(0, confirmed)
         compose.onNodeWithText(context.getString(R.string.camera)).assertDoesNotExist()
     }
 
-    @Test fun scoreDialogUsesIconOnlyCameraAndCompactBateuButton() {
+    @Test fun scoreDialogSeparatesInputConfirmCameraAndFinalActionsIntoRows() {
         var camera = 0
         var wentOut = 0
         compose.setContent { PontinhoTheme {
@@ -648,15 +648,22 @@ class MatchScreenTest {
         } }
 
         val cameraLabel = context.getString(R.string.camera)
-        val cameraAction = compose.onNodeWithTag("score_camera")
-            .assertContentDescriptionEquals(cameraLabel)
-            .assertHasClickAction()
-        compose.onNodeWithText(cameraLabel).assertDoesNotExist()
+        val input = compose.onNodeWithTag("score_input")
+        val confirm = compose.onNodeWithText(context.getString(R.string.confirm)).assertHasClickAction()
+        val cameraAction = compose.onNodeWithTag("score_camera").assertHasClickAction()
+        compose.onNodeWithText(cameraLabel).assertIsDisplayed()
         val wentOutAction = compose.onNodeWithText(context.getString(R.string.went_out)).assertHasClickAction()
+        val cancelAction = compose.onNodeWithText(context.getString(R.string.cancel)).assertHasClickAction()
+        val inputBounds = input.fetchSemanticsNode().boundsInRoot
+        val confirmBounds = confirm.fetchSemanticsNode().boundsInRoot
         val cameraBounds = cameraAction.fetchSemanticsNode().boundsInRoot
         val wentOutBounds = wentOutAction.fetchSemanticsNode().boundsInRoot
-        assertTrue("Camera and Bateu belong on the same action row",
-            wentOutBounds.center.y in cameraBounds.top..cameraBounds.bottom)
+        val cancelBounds = cancelAction.fetchSemanticsNode().boundsInRoot
+        assertTrue("Confirm belongs below input", confirmBounds.top > inputBounds.bottom)
+        assertTrue("Camera belongs below confirm", cameraBounds.top > confirmBounds.bottom)
+        assertTrue("Bateu belongs below camera", wentOutBounds.top > cameraBounds.bottom)
+        assertTrue("Bateu and Cancelar share the final row",
+            cancelBounds.center.y in wentOutBounds.top..wentOutBounds.bottom)
 
         cameraAction.performClick()
         wentOutAction.performClick()

@@ -137,9 +137,9 @@
     <string name="score_label">Points</string>
     <string name="camera">Camera</string>
     <string name="went_out">Went out</string>
-    <string name="setup_first_player_help">Add players in counter-clockwise order and tap the hand to choose who starts.</string>
-    <string name="setup_select_initial_hand">Set %1$s as the opening hand</string>
-    <string name="setup_initial_hand_selected">%1$s has the opening hand</string>
+    <string name="setup_first_player_help">Add players in counter-clockwise order and tap the hand to choose who deals the cards.</string>
+    <string name="setup_select_initial_hand">Set %1$s as the dealer</string>
+    <string name="setup_initial_hand_selected">%1$s deals the cards</string>
     <string name="setup_players_heading">Players</string>
     <string name="setup_add_player">Add player</string>
     <string name="setup_use_last_match">Use players from last match</string>

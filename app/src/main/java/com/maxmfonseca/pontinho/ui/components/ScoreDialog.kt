@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
@@ -13,7 +12,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -95,42 +92,33 @@ fun ScoreDialog(
                         Text(stringResource(R.string.confirm))
                     }
                 }
-                if (LocalDensity.current.fontScale >= 1.5f) {
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        input(Modifier.fillMaxWidth())
-                        confirm(Modifier.fillMaxWidth())
-                    }
-                } else {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        input(Modifier.weight(1f))
-                        confirm(Modifier)
+                input(Modifier.fillMaxWidth())
+                confirm(Modifier.fillMaxWidth())
+                onCamera?.takeUnless { readOnly }?.let {
+                    OutlinedButton(onClick = it, enabled = enabled,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("score_camera")) {
+                        Icon(painterResource(R.drawable.ic_camera), contentDescription = null)
+                        Text(stringResource(R.string.camera))
                     }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    onCamera?.takeUnless { readOnly }?.let {
-                        val cameraLabel = stringResource(R.string.camera)
-                        OutlinedIconButton(onClick = it, enabled = enabled,
-                            modifier = Modifier.size(48.dp).testTag("score_camera")
-                                .semantics { contentDescription = cameraLabel }) {
-                            Icon(painterResource(R.drawable.ic_camera), contentDescription = null)
-                        }
-                    }
-                    if (!isCorrection) Button(onClick = onWentOut, enabled = enabled && wentOutEnabled,
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    if (!isCorrection) OutlinedButton(onClick = onWentOut, enabled = enabled && wentOutEnabled,
                         modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
                         Text(stringResource(R.string.went_out))
                     }
                     if (isCorrection && onDelete != null) {
                         val deleteLabel = stringResource(R.string.score_delete)
                         OutlinedButton(onClick = onDelete, enabled = enabled,
-                            modifier = Modifier.semantics { contentDescription = deleteLabel }) {
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                .semantics { contentDescription = deleteLabel }) {
                             Icon(painterResource(R.drawable.ic_delete), contentDescription = null)
                             Text(deleteLabel)
                         }
+                    }
+                    TextButton(onClick = onDismiss, enabled = enabled,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.cancel))
                     }
                 }
                 if (isCorrection) Text(stringResource(R.string.score_correction_help))
@@ -140,9 +128,7 @@ fun ScoreDialog(
             }
         },
         confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = enabled) { Text(stringResource(R.string.cancel)) }
-        },
+        dismissButton = {},
     )
     LaunchedEffect(inputPlaced, readOnly) {
         if (inputPlaced && !readOnly) {

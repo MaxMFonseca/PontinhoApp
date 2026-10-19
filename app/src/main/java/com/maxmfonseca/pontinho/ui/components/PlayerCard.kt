@@ -41,8 +41,9 @@ fun PlayerCard(
             val cardMaxWidth = maxWidth
             val measurer = rememberTextMeasurer()
             val density = LocalDensity.current
-            val nameStyle = MaterialTheme.typography.titleMedium
-            val totalStyles = listOf(MaterialTheme.typography.headlineSmall, MaterialTheme.typography.titleLarge,
+            val nameStyle = MaterialTheme.typography.titleLarge
+            val totalStyles = listOf(MaterialTheme.typography.headlineMedium, MaterialTheme.typography.headlineSmall,
+                MaterialTheme.typography.titleLarge,
                 MaterialTheme.typography.titleMedium, MaterialTheme.typography.bodyMedium, MaterialTheme.typography.labelMedium)
             fun textWidth(text: String, style: TextStyle) = with(density) {
                 measurer.measure(text, style, softWrap = false, maxLines = 1).size.width.toDp()
@@ -113,7 +114,7 @@ fun PlayerCard(
                     .testTag("round_cell_${round.roundNumber}").then(editModifier).semantics(mergeDescendants = true) {},
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     RoundStatus(round.status, Modifier.testTag("round_dot_${round.roundNumber}"))
-                    Text(round.score?.toString() ?: "—", style = MaterialTheme.typography.labelMedium,
+                    Text(round.score?.toString() ?: "—", style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.testTag("round_score_${round.roundNumber}"))
                 }
             }
