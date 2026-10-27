@@ -2,6 +2,8 @@ package com.maxmfonseca.pontinho.ui.about
 
 import android.content.res.Configuration
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -45,7 +47,8 @@ class AboutScreenTest {
                 onBack = {},
                 onLearn = {},
                 onPrivacyLicenses = { opens++ },
-                onCameraEducationSeen = {},
+                experimentalCardScanningEnabled = false,
+                onExperimentalCardScanningEnabledChange = {},
             )
         }
 
@@ -56,7 +59,7 @@ class AboutScreenTest {
     @Test fun aboutContainsOnlyKnownFactsAndSupportAddress() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         composeRule.setContent {
-            AboutScreen(versionName = "1.0.0", onBack = {}, onLearn = {}, onPrivacyLicenses = {}, onCameraEducationSeen = {})
+            AboutScreen("1.0.0", {}, {}, false, {}, onPrivacyLicenses = {})
         }
 
         composeRule.onNodeWithTag("about_root").assertIsDisplayed()
@@ -80,7 +83,7 @@ class AboutScreenTest {
             CompositionLocalProvider(LocalContext provides context, LocalResources provides context.resources,
                 LocalDensity provides Density(base.resources.displayMetrics.density, scale)) {
                 Box(Modifier.size(320.dp, 568.dp)) {
-                    AboutScreen("1.0.0", {}, { learnClicks++ }, {})
+                    AboutScreen("1.0.0", {}, { learnClicks++ }, false, {})
                 }
             }
         }
@@ -114,7 +117,8 @@ class AboutScreenTest {
                         onBack = {},
                         onLearn = {},
                         onPrivacyLicenses = {},
-                        onCameraEducationSeen = {},
+                        experimentalCardScanningEnabled = false,
+                        onExperimentalCardScanningEnabledChange = {},
                     )
                 }
             }
@@ -123,75 +127,49 @@ class AboutScreenTest {
         composeRule.onNodeWithTag("about_support_email").performScrollTo().assertIsDisplayed()
     }
 
-    @Test fun firstScannerUseRoutesToEducationWithoutRunningAnAction() {
-        assertEquals(ScannerEntryRoute.Education, scannerEntryRoute(cameraEducationSeen = false))
-        assertEquals(ScannerEntryRoute.Capture, scannerEntryRoute(cameraEducationSeen = true))
-
-        var seenCalls = 0
-        var continueCalls = 0
-        var dismissCalls = 0
-        composeRule.setContent {
-            CameraEducationScreen(
-                onEducationSeen = { seenCalls++ },
-                onContinue = { continueCalls++ },
-                onDismiss = { dismissCalls++ },
-            )
-        }
-
-        composeRule.runOnIdle {
-            assertEquals(0, seenCalls)
-            assertEquals(0, continueCalls)
-            assertEquals(0, dismissCalls)
-        }
-    }
-
-    @Test fun educationMarksSeenOnlyOnContinueOrExplicitDismiss() {
+    @Test fun educationRequiresExplicitOptInAndCanBeDisabledAgain() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        var seenCalls = 0
-        var continueCalls = 0
-        var dismissCalls = 0
+        var enabled by mutableStateOf(false)
+        val changes = mutableListOf<Boolean>()
         composeRule.setContent {
             CameraEducationScreen(
-                onEducationSeen = { seenCalls++ },
-                onContinue = { continueCalls++ },
-                onDismiss = { dismissCalls++ },
+                experimentalCardScanningEnabled = enabled,
+                onExperimentalCardScanningEnabledChange = { changes += it; enabled = it },
+                onBack = {},
             )
         }
 
-        composeRule.onNodeWithText(context.getString(R.string.camera_education_continue)).performScrollTo().performClick()
-        composeRule.runOnIdle {
-            assertEquals(1, seenCalls)
-            assertEquals(1, continueCalls)
-            assertEquals(0, dismissCalls)
-        }
+        composeRule.onNodeWithText(context.getString(R.string.camera_education_experimental)).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("camera_experimental_toggle").performScrollTo().assertIsOff().performClick()
+        composeRule.onNodeWithTag("camera_experimental_toggle").assertIsOn().performClick()
+        composeRule.onNodeWithTag("camera_experimental_toggle").assertIsOff()
+        composeRule.runOnIdle { assertEquals(listOf(true, false), changes) }
     }
 
-    @Test fun systemBackExplicitlyDismissesEducationExactlyOnce() {
-        var seenCalls = 0
-        var dismissCalls = 0
+    @Test fun systemBackLeavesExperimentalPreferenceUnchanged() {
+        var backCalls = 0
+        var preferenceWrites = 0
         composeRule.setContent {
             CameraEducationScreen(
-                onEducationSeen = { seenCalls++ },
-                onContinue = {},
-                onDismiss = { dismissCalls++ },
+                experimentalCardScanningEnabled = false,
+                onExperimentalCardScanningEnabledChange = { preferenceWrites++ },
+                onBack = { backCalls++ },
             )
         }
 
         pressBack()
         composeRule.waitForIdle()
-        pressBack()
-        composeRule.waitForIdle()
 
         composeRule.runOnIdle {
-            assertEquals(1, seenCalls)
-            assertEquals(1, dismissCalls)
+            assertEquals(1, backCalls)
+            assertEquals(0, preferenceWrites)
         }
     }
 
     @Test fun aboutOpensReusableEducationWithCompleteCopyInBothLocales() {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         var locale by mutableStateOf("pt-BR")
-        var seenCalls = 0
+        var preferenceWrites = 0
         composeRule.setContent {
             val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
                 setLocale(Locale.forLanguageTag(locale))
@@ -202,7 +180,8 @@ class AboutScreenTest {
                     onBack = {},
                     onLearn = {},
                     onPrivacyLicenses = {},
-                    onCameraEducationSeen = { seenCalls++ },
+                    experimentalCardScanningEnabled = false,
+                    onExperimentalCardScanningEnabledChange = { preferenceWrites++ },
                 )
             }
         }
@@ -213,17 +192,19 @@ class AboutScreenTest {
                 "Para obter melhores resultados, use boa iluminação, evite reflexos e mantenha todas as cartas totalmente visíveis e sem sobreposição.",
                 "Revise sempre as cartas reconhecidas e o total antes de salvar. Essa revisão é obrigatória.",
                 "Se a leitura não funcionar, volte e digite a pontuação manualmente.",
+                "Recurso experimental. O reconhecimento foi treinado com variedade limitada de baralhos e pode errar cartas e totais. Ative somente se você concorda em conferir e corrigir todas as cartas antes de confirmar.",
             ),
             "en-US" to listOf(
                 "The photo is processed entirely on this device. The app does not upload or retain the image.",
                 "For best results, use good lighting, avoid glare, and keep every card fully visible and free of overlap.",
                 "Always review the recognized cards and total before saving. This review is required.",
                 "If scanning does not work, go back and enter the score manually.",
+                "Experimental feature. Recognition was trained with a limited variety of decks and may get cards and totals wrong. Enable it only if you agree to review and correct every card before confirming.",
             ),
         )
         for (tag in listOf("pt-BR", "en-US")) {
             composeRule.runOnIdle { locale = tag }
-            val seenBeforeOpen = seenCalls
+            val writesBeforeOpen = preferenceWrites
             val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
                 setLocale(Locale.forLanguageTag(tag))
             })
@@ -231,9 +212,9 @@ class AboutScreenTest {
             copies.getValue(tag).forEach { copy ->
                 composeRule.onNodeWithText(copy).performScrollTo().assertIsDisplayed()
             }
-            composeRule.runOnIdle { assertEquals(seenBeforeOpen, seenCalls) }
-            composeRule.onNodeWithText(localized.getString(R.string.camera_education_dismiss)).performScrollTo().performClick()
-            composeRule.runOnIdle { assertEquals(seenBeforeOpen + 1, seenCalls) }
+            composeRule.runOnIdle { assertEquals(writesBeforeOpen, preferenceWrites) }
+            composeRule.onNodeWithText(localized.getString(R.string.camera_education_done)).performScrollTo().performClick()
+            composeRule.runOnIdle { assertEquals(writesBeforeOpen, preferenceWrites) }
             composeRule.onNodeWithTag("about_root").assertIsDisplayed()
         }
     }

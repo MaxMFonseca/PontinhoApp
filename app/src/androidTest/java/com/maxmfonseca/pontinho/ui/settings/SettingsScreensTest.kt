@@ -58,7 +58,7 @@ class SettingsScreensTest {
                             "appearance" -> AppearanceScreen(preferences, { calls += "back" }, { preferences = preferences.copy(theme = it) })
                             "language" -> LanguageScreen(preferences.language, { calls += "back" }, { preferences = preferences.copy(language = it) })
                             "learn" -> LearnScreen({ calls += "back" })
-                            "about" -> AboutScreen("1.0.0", { calls += "back" }, { calls += "learn" }, {})
+                            "about" -> AboutScreen("1.0.0", { calls += "back" }, { calls += "learn" }, false, {})
                         }
                     }
                 } } }

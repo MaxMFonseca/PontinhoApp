@@ -138,8 +138,10 @@
     <string name="camera_education_capture">Para obter melhores resultados, use boa iluminação, evite reflexos e mantenha todas as cartas totalmente visíveis e sem sobreposição.</string>
     <string name="camera_education_review">Revise sempre as cartas reconhecidas e o total antes de salvar. Essa revisão é obrigatória.</string>
     <string name="camera_education_manual">Se a leitura não funcionar, volte e digite a pontuação manualmente.</string>
-    <string name="camera_education_continue">Continuar</string>
-    <string name="camera_education_dismiss">Agora não</string>
+    <string name="camera_education_experimental">Recurso experimental. O reconhecimento foi treinado com variedade limitada de baralhos e pode errar cartas e totais. Ative somente se você concorda em conferir e corrigir todas as cartas antes de confirmar.</string>
+    <string name="camera_education_enable">Ativar leitura experimental de cartas</string>
+    <string name="camera_education_enable_supporting">Quando desativada, a opção de câmera não aparece durante a partida.</string>
+    <string name="camera_education_done">Concluído</string>
     <string name="home_settings">Abrir configurações</string>
     <string name="history_summary_expanded">Resumo do dia expandido</string>
     <string name="history_summary_collapsed">Resumo do dia recolhido</string>

@@ -86,7 +86,7 @@ class MatchIntegrationTest {
     @Test fun restoredMatchWithoutScannerEntryReconcilesConsumedLaunchAndAllowsRetry() = runBlocking<Unit> {
         val repository = RoomMatchRepository(db)
         val id = repository.createMatch(CreateMatch("launch-recreation", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
-        val app = container(repository, scannerAvailable = true, educationSeen = true)
+        val app = container(repository, scannerAvailable = true)
         lateinit var nav: NavHostController
         var mounted by mutableStateOf(true)
         val restoration = StateRestorationTester(compose)
@@ -147,7 +147,7 @@ class MatchIntegrationTest {
                 committed.set(true)
             }
         }
-        val app = container(repository, scannerAvailable = true, educationSeen = true)
+        val app = container(repository, scannerAvailable = true)
         lateinit var nav: NavHostController
         val restoration = StateRestorationTester(compose)
         restoration.setContent {
@@ -206,11 +206,10 @@ class MatchIntegrationTest {
         } finally { observationGate.complete(Unit); image.delete() }
     }
 
-    @Test fun scannerEducationCancelAndRecreationKeepManualDialogAndStableToken() = runBlocking<Unit> {
+    @Test fun scannerIsHiddenUntilEnabledAndRecreationKeepsManualDialogAndStableToken() = runBlocking<Unit> {
         val repo = RoomMatchRepository(db)
         val id = repo.createMatch(CreateMatch("scan-cancel", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
-        val educationGate = CompletableDeferred<Unit>()
-        val app = container(repo, scannerAvailable = true, educationWriteGate = educationGate)
+        val app = container(repo, scannerAvailable = true, experimentalScanningEnabled = false)
         lateinit var nav: NavHostController
         val restoration = StateRestorationTester(compose)
         val base = InstrumentationRegistry.getInstrumentation().targetContext
@@ -251,19 +250,13 @@ class MatchIntegrationTest {
         compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
         compose.onNodeWithTag("score_input").performTextInput("17")
         val permissionBefore = deniedContext.checkSelfPermission(Manifest.permission.CAMERA)
-        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
-        selectCameraJoker(model)
-        awaitTag("camera_education_root")
+        compose.onNodeWithTag("score_camera").assertDoesNotExist()
         assertEquals(permissionBefore, deniedContext.checkSelfPermission(Manifest.permission.CAMERA))
         assertTrue(permissionRequests.isEmpty())
-        restoration.emulateSavedInstanceStateRestore()
-        awaitTag("camera_education_root")
-        compose.onNodeWithTag("camera_education_dismiss").performScrollTo().performClick()
-        compose.onNodeWithTag("score_input").assertTextContains("17")
-        compose.waitForIdle()
-        educationGate.complete(Unit)
-        compose.waitUntil(5_000) { runBlocking { app.preferencesRepository.preferences.first().cameraEducationSeen } }
+        app.preferencesRepository.setExperimentalCardScanningEnabled(true)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("score_camera").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("score_camera").performScrollTo().performClick()
+        selectCameraJoker(model)
         awaitTag("scanner_root")
         assertEquals(PackageManager.PERMISSION_DENIED, permissionBefore)
         compose.runOnIdle { assertEquals(listOf(Manifest.permission.CAMERA), permissionRequests) }
@@ -313,8 +306,6 @@ class MatchIntegrationTest {
                 compose.onNodeWithTag("score_camera").performScrollTo().performClick()
                 if (index == 0) {
                     selectCameraJoker(model)
-                    awaitTag("camera_education_root")
-                    compose.onNodeWithTag("camera_education_continue").performScrollTo().performClick()
                 }
                 awaitTag("scanner_root")
                 lateinit var scanner: ScannerViewModel
@@ -344,39 +335,6 @@ class MatchIntegrationTest {
             compose.runOnIdle { model.editScore(participant, 1); model.deleteScore() }
             compose.waitUntil { !model.uiState.value.isSaving && model.uiState.value.scoreDialog == null }
         } finally { image.delete() }
-    }
-
-    @Test fun scannerRevalidatesRoundAfterEducationBeforeConstructingViewModel() = runBlocking<Unit> {
-        val repo = RoomMatchRepository(db)
-        val id = repo.createMatch(CreateMatch("scan-stale", listOf("Ana", "Bruno", "Carla").map { CreateMatchPlayer(it, displayName = it) }))
-        val app = container(repo, scannerAvailable = true)
-        lateinit var nav: NavHostController
-        compose.setContent {
-            val controller = rememberNavController()
-            SideEffect { nav = controller }
-            PontinhoNavHost(app, navController = controller, startDestination = Destination.Match.createRoute(id.value))
-        }
-        compose.waitUntil { compose.onAllNodesWithText("Ana").fetchSemanticsNodes().isNotEmpty() }
-        lateinit var model: MatchViewModel
-        compose.runOnIdle {
-            model = ViewModelProvider(nav.currentBackStackEntry!!)[MatchViewModel::class.java]
-            model.addScore(model.uiState.value.players[0].id)
-        }
-        compose.waitUntil { model.uiState.value.scoreDialog != null && !model.uiState.value.isSaving }
-        val player = model.uiState.value.players[1].id
-        compose.onNodeWithTag("score_camera").performScrollTo().performClick()
-        selectCameraJoker(model)
-        awaitTag("camera_education_root")
-        val other = repo.prepareRound(PrepareRound(id, Indicator(Rank.FIVE, CardColor.RED)))
-        repo.submitScore(SubmitScore(id, other.id, player, 7, "other", other))
-        compose.onNodeWithTag("camera_education_continue").performScrollTo().performClick()
-        compose.waitUntil { nav.currentDestination?.route == Destination.Match.route }
-        compose.onNodeWithTag("scanner_root", useUnmergedTree = true).assertDoesNotExist()
-        compose.runOnIdle { model.addScore(model.uiState.value.players[0].id) }
-        compose.onNodeWithTag("score_input").performTextInput("8")
-        compose.runOnIdle { model.confirmScore() }
-        compose.waitUntil { !model.uiState.value.isSaving && model.uiState.value.scoreDialog == null }
-        assertEquals(2, repo.observeMatch(id).first()!!.rounds.single().draft.entries.values.count { it.origin == RoundEntryOrigin.EXPLICIT })
     }
 
     @Test fun unavailableRecognitionKeepsManualScoreEntryUsable() = runBlocking<Unit> {
@@ -817,18 +775,22 @@ class MatchIntegrationTest {
     private fun awaitTag(tag: String) {
         compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
     }
-    private fun container(repo: MatchRepository, scannerAvailable: Boolean = false, educationSeen: Boolean = false,
-        educationWriteGate: CompletableDeferred<Unit>? = null) = object : AppContainer {
+    private fun container(
+        repo: MatchRepository,
+        scannerAvailable: Boolean = false,
+        experimentalScanningEnabled: Boolean = scannerAvailable,
+    ) = object : AppContainer {
         override val playerRepository = RoomPlayerRepository(db)
         override val matchRepository = repo
         override val preferencesRepository = object : PreferencesRepository {
-            override val preferences = MutableStateFlow(AppPreferences(cameraEducationSeen = educationSeen))
+            override val preferences = MutableStateFlow(
+                AppPreferences(experimentalCardScanningEnabled = experimentalScanningEnabled),
+            )
             override suspend fun setTheme(theme: ThemePreference) = Unit
             override suspend fun setLanguage(language: LanguagePreference) = Unit
             override suspend fun setReducedMotion(reducedMotion: Boolean?) = Unit
-            override suspend fun setCameraEducationSeen(seen: Boolean) {
-                educationWriteGate?.await()
-                preferences.value = preferences.value.copy(cameraEducationSeen = seen)
+            override suspend fun setExperimentalCardScanningEnabled(enabled: Boolean) {
+                preferences.value = preferences.value.copy(experimentalCardScanningEnabled = enabled)
             }
         }
         override val cardRecognitionEngineProvider = object : CardRecognitionEngineProvider {

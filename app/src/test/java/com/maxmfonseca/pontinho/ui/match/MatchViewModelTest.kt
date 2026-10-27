@@ -212,6 +212,38 @@ class MatchViewModelTest {
         assertEquals(Indicator(Rank.KING, CardColor.BLACK), (vm.events.first() as MatchEvent.OpenScanner).request.indicator)
     }
 
+    @Test fun experimentalScanningGateHidesCameraRejectsLaunchAndInvalidatesRestoredRoute() = runTest {
+        val repo = ScoringRepository()
+        val enabled = MutableStateFlow(false)
+        val vm = MatchViewModel(
+            repo.snapshot.value!!.id,
+            repo,
+            StandardTestDispatcher(testScheduler),
+            recognitionAvailable = { true },
+            experimentalScanningEnabled = { enabled.value },
+            experimentalScanningChanges = enabled,
+        )
+        val events = mutableListOf<MatchEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+        runCurrent(); prepare(vm, repo.ids[0]); advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.scoreDialog!!.canScan)
+        vm.openScanner(); advanceUntilIdle()
+        assertTrue(events.isEmpty())
+        assertNull(vm.uiState.value.picker)
+
+        enabled.value = true
+        runCurrent()
+        assertTrue(vm.uiState.value.scoreDialog!!.canScan)
+        vm.openScanner(); advanceUntilIdle()
+        val request = (events.single() as MatchEvent.OpenScanner).request
+
+        enabled.value = false
+        runCurrent()
+        assertFalse(vm.uiState.value.scoreDialog!!.canScan)
+        assertNull(vm.validateScanner(com.maxmfonseca.pontinho.ui.navigation.ScannerContext.from(request)))
+    }
+
     @Test fun persistedCameraWaitsForCommittedIndicatorBeforeLaunching() = runTest {
         val storage = ScoringRepository()
         val round = storage.round(1, RoundDraft(storage.ids)).copy(indicator = null)

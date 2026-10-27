@@ -138,8 +138,10 @@
     <string name="camera_education_capture">For best results, use good lighting, avoid glare, and keep every card fully visible and free of overlap.</string>
     <string name="camera_education_review">Always review the recognized cards and total before saving. This review is required.</string>
     <string name="camera_education_manual">If scanning does not work, go back and enter the score manually.</string>
-    <string name="camera_education_continue">Continue</string>
-    <string name="camera_education_dismiss">Not now</string>
+    <string name="camera_education_experimental">Experimental feature. Recognition was trained with a limited variety of decks and may get cards and totals wrong. Enable it only if you agree to review and correct every card before confirming.</string>
+    <string name="camera_education_enable">Enable experimental card scanning</string>
+    <string name="camera_education_enable_supporting">When disabled, the camera option does not appear during a match.</string>
+    <string name="camera_education_done">Done</string>
     <string name="home_settings">Open settings</string>
     <string name="history_summary_expanded">Daily summary expanded</string>
     <string name="history_summary_collapsed">Daily summary collapsed</string>

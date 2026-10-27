@@ -21,11 +21,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.navigation.NavBackStackEntry
 import com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability
 import com.maxmfonseca.pontinho.domain.recognition.YoloRecognitionMetadata
-import com.maxmfonseca.pontinho.ui.about.CameraEducationScreen
-import com.maxmfonseca.pontinho.ui.about.ScannerEntryRoute
-import com.maxmfonseca.pontinho.ui.about.scannerEntryRoute
 import com.maxmfonseca.pontinho.ui.scanner.*
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import android.content.Context
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -65,6 +64,7 @@ import com.maxmfonseca.pontinho.ui.results.ResultsViewModel
 import com.maxmfonseca.pontinho.ui.statistics.StatisticsScreen
 import com.maxmfonseca.pontinho.ui.statistics.StatisticsViewModel
 import com.maxmfonseca.pontinho.ui.theme.LocalReducedMotion
+import com.maxmfonseca.pontinho.settings.AppPreferences
 import java.time.LocalDate
 import kotlinx.coroutines.launch
 
@@ -76,7 +76,14 @@ fun PontinhoNavHost(
     startDestination: String = Destination.Home.route,
 ) {
     val reducedMotion = LocalReducedMotion.current
-    val navigationScope = rememberCoroutineScope()
+    val preferencesState = container.preferencesRepository.preferences.collectAsStateWithLifecycle(
+        initialValue = AppPreferences(),
+    )
+    val experimentalScanningChanges = remember(container.preferencesRepository) {
+        container.preferencesRepository.preferences
+            .map { it.experimentalCardScanningEnabled }
+            .distinctUntilChanged()
+    }
     // Sequential fade-through: 75 ms out, then 75 ms in, in every direction.
     val enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(durationMillis = 75, delayMillis = 75))
     val exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(durationMillis = 75))
@@ -183,7 +190,9 @@ fun PontinhoNavHost(
                 initializer { MatchViewModel(matchId, container.matchRepository,
                     savedStateHandle = createSavedStateHandle(),
                     recognitionAvailable = { container.cardRecognitionEngineProvider.availability.value is RecognitionAvailability.Available },
-                    recognitionAvailabilityChanges = container.cardRecognitionEngineProvider.availability) }
+                    recognitionAvailabilityChanges = container.cardRecognitionEngineProvider.availability,
+                    experimentalScanningEnabled = { preferencesState.value.experimentalCardScanningEnabled },
+                    experimentalScanningChanges = experimentalScanningChanges) }
             })
             val state by matchViewModel.uiState.collectAsStateWithLifecycle()
             LaunchedEffect(matchViewModel) {
@@ -217,10 +226,13 @@ fun PontinhoNavHost(
         composable(Destination.Scanner.route, arguments = Destination.Scanner.argumentNames.map { name ->
             navArgument(name) { type = NavType.StringType; if (name == "correction") { nullable = true; defaultValue = null } }
         }) { entry ->
-            ScannerDestination(container, navController, entry, onEducationSeen = {
-                // Dismissing education pops its entry; the preference write must outlive that entry.
-                navigationScope.launch { container.preferencesRepository.setCameraEducationSeen(true) }
-            })
+            ScannerDestination(
+                container,
+                navController,
+                entry,
+                experimentalScanningEnabled = { preferencesState.value.experimentalCardScanningEnabled },
+                experimentalScanningChanges = experimentalScanningChanges,
+            )
         }
         composable(Destination.DayHistory.route, arguments = listOf(navArgument(Destination.DayHistory.LOCAL_DATE) { type = NavType.StringType })) { entry ->
             val localDate = LocalDate.parse(requireNotNull(entry.arguments?.getString(Destination.DayHistory.LOCAL_DATE)))
@@ -309,8 +321,9 @@ fun PontinhoNavHost(
             AboutScreen(versionName = version, onBack = { navController.popBackStack() },
                 onLearn = { navController.navigate(Destination.Learn.route) },
                 onPrivacyLicenses = { navController.navigate(Destination.PrivacyLicenses.route) },
-                onCameraEducationSeen = {
-                    scope.launch { container.preferencesRepository.setCameraEducationSeen(true) }
+                experimentalCardScanningEnabled = preferencesState.value.experimentalCardScanningEnabled,
+                onExperimentalCardScanningEnabledChange = { enabled ->
+                    scope.launch { container.preferencesRepository.setExperimentalCardScanningEnabled(enabled) }
                 })
         }
     }
@@ -319,7 +332,8 @@ fun PontinhoNavHost(
 /** Sole navigation owner for scanner completion; the device screen only emits events. */
 @Composable
 private fun ScannerDestination(container: AppContainer, nav: NavHostController, entry: NavBackStackEntry,
-    onEducationSeen: () -> Unit) {
+    experimentalScanningEnabled: () -> Boolean,
+    experimentalScanningChanges: kotlinx.coroutines.flow.Flow<Boolean>) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val route = remember(entry) { ScannerContext.decode { entry.arguments?.getString(it) } }
     val parent = remember(entry) { nav.previousBackStackEntry?.takeIf { it.destination.route == Destination.Match.route } }
@@ -331,10 +345,11 @@ private fun ScannerDestination(container: AppContainer, nav: NavHostController, 
         initializer { MatchViewModel(MatchId(route.match), container.matchRepository,
             savedStateHandle = createSavedStateHandle(),
             recognitionAvailable = { container.cardRecognitionEngineProvider.availability.value is RecognitionAvailability.Available },
-            recognitionAvailabilityChanges = container.cardRecognitionEngineProvider.availability) }
+            recognitionAvailabilityChanges = container.cardRecognitionEngineProvider.availability,
+            experimentalScanningEnabled = experimentalScanningEnabled,
+            experimentalScanningChanges = experimentalScanningChanges) }
     })
     var request by remember(entry) { mutableStateOf<ScanRequest?>(null) }
-    var education by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var captureReady by remember(entry) { mutableStateOf(false) }
     var scannerStarted by rememberSaveable { mutableStateOf(false) }
     var handled by rememberSaveable { mutableStateOf(false) }
@@ -354,17 +369,8 @@ private fun ScannerDestination(container: AppContainer, nav: NavHostController, 
         val validated = matchViewModel.validateScanner(route, allowCommitted = scannerStarted)
         if (validated == null) { cancel(); return@LaunchedEffect }
         request = validated
-        if (education == null) education = scannerEntryRoute(
-            container.preferencesRepository.preferences.first().cameraEducationSeen) == ScannerEntryRoute.Education
     }
-    if (request == null || education == null) { CircularProgressIndicator(); return }
-    if (education == true) {
-        CameraEducationScreen(
-            onEducationSeen = onEducationSeen,
-            onContinue = { education = false }, onDismiss = ::cancel,
-        )
-        return
-    }
+    if (request == null) { CircularProgressIndicator(); return }
     LaunchedEffect(entry) {
         val validated = matchViewModel.validateScanner(route, allowCommitted = scannerStarted)
         if (validated == null) cancel()

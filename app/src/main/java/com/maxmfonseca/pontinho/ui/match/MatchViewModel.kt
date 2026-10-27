@@ -20,6 +20,8 @@ class MatchViewModel(
     private val savedStateHandle: SavedStateHandle? = null,
     private val recognitionAvailable: () -> Boolean = { false },
     recognitionAvailabilityChanges: Flow<com.maxmfonseca.pontinho.domain.recognition.RecognitionAvailability>? = null,
+    private val experimentalScanningEnabled: () -> Boolean = { true },
+    experimentalScanningChanges: Flow<Boolean>? = null,
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableUiState = MutableStateFlow(MatchUiState())
@@ -40,6 +42,16 @@ class MatchViewModel(
         restoreDialog()
         recognitionAvailabilityChanges?.let { availability ->
             scope.launch { availability.collect { updateState { it } } }
+        }
+        experimentalScanningChanges?.let { enabled ->
+            scope.launch {
+                enabled.collect {
+                    updateState { state ->
+                        if (recognitionEnabled()) state
+                        else state.copy(picker = state.picker?.takeUnless { it.purpose == PickerPurpose.CAMERA })
+                    }
+                }
+            }
         }
         scope.launch {
             repository.observeMatch(matchId).catch { failure ->
@@ -74,7 +86,7 @@ class MatchViewModel(
 
     fun openScanner() {
         val dialog = uiState.value.scoreDialog ?: return
-        if (!recognitionAvailable() || dialog.readOnly || uiState.value.isSaving || uiState.value.picker != null || activeScanToken != null || scannerLaunching) return
+        if (!recognitionEnabled() || dialog.readOnly || uiState.value.isSaving || uiState.value.picker != null || activeScanToken != null || scannerLaunching) return
         if (dialog.indicator == null) {
             openPicker(dialog.roundId, dialog.roundNumber, null, PickerPurpose.CAMERA)
             return
@@ -99,12 +111,13 @@ class MatchViewModel(
 
     /** The navigation collector checks again: an event can outlive the dialog that emitted it. */
     suspend fun validateScanner(context: ScannerContext, allowCommitted: Boolean = false): ScanRequest? {
+        if (!experimentalScanningEnabled()) return null
         val dialog = uiState.value.scoreDialog ?: return null
         if (activeScanToken != context.token || scannerContext(dialog) != context || dialog.readOnly) return null
         val current = try { repository.observeMatch(matchId).first() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { return null }
-        if (uiState.value.scoreDialog != dialog || activeScanToken != context.token) return null
+        if (!experimentalScanningEnabled() || uiState.value.scoreDialog != dialog || activeScanToken != context.token) return null
         snapshot = current
         return context.resolve(current, allowCommitted)
     }
@@ -492,7 +505,7 @@ class MatchViewModel(
             val state = transform(old)
             val idle = !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
             state.copy(
-                scoreDialog = state.scoreDialog?.let { dialog -> dialog.copy(canScan = recognitionAvailable() &&
+                scoreDialog = state.scoreDialog?.let { dialog -> dialog.copy(canScan = recognitionEnabled() &&
                     !dialog.readOnly && (dialog.indicator == null || scannerContext(dialog)?.resolve(snapshot) != null)) },
                 canAddPlayer = canJoinMatch() && idle,
                 canReorderPlayers = canJoinMatch() && snapshot?.openRound == null && idle,
@@ -500,6 +513,8 @@ class MatchViewModel(
         }
         persistDialog()
     }
+
+    private fun recognitionEnabled(): Boolean = recognitionAvailable() && experimentalScanningEnabled()
 
     override fun onCleared() { scope.cancel() }
 }

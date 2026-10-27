@@ -55,27 +55,32 @@ class PreferencesRepositoryTest {
                 theme = ThemePreference.SYSTEM,
                 language = LanguagePreference.SYSTEM,
                 reducedMotion = null,
-                cameraEducationSeen = false,
+                experimentalCardScanningEnabled = false,
             ),
             repository.preferences.first(),
         )
     }
 
     @Test
-    fun cameraEducationDefaultsToUnseenAndPersistsWhenCompleted() = runBlocking {
-        assertFalse(repository.preferences.first().cameraEducationSeen)
+    fun experimentalCardScanningDefaultsOffAndCanBeEnabled() = runBlocking {
+        assertFalse(repository.preferences.first().experimentalCardScanningEnabled)
 
-        repository.setCameraEducationSeen(true)
-
-        val restored = DataStorePreferencesRepository(dataStore).preferences.first()
-        assertTrue(restored.cameraEducationSeen)
+        repository.setExperimentalCardScanningEnabled(true)
+        assertTrue(DataStorePreferencesRepository(dataStore).preferences.first().experimentalCardScanningEnabled)
     }
 
     @Test
-    fun corruptedCameraEducationPreferenceFallsBackToUnseen() = runBlocking {
+    fun experimentalCardScanningCanBeExplicitlyDisabled() = runBlocking {
+        repository.setExperimentalCardScanningEnabled(false)
+
+        assertFalse(DataStorePreferencesRepository(dataStore).preferences.first().experimentalCardScanningEnabled)
+    }
+
+    @Test
+    fun corruptedExperimentalCardScanningPreferenceFallsBackToDisabled() = runBlocking {
         val corruptedStore = object : DataStore<Preferences> {
             override val data: Flow<Preferences> = flow {
-                emit(mutablePreferencesOf(stringPreferencesKey("camera_education_seen") to "not-a-boolean"))
+                emit(mutablePreferencesOf(stringPreferencesKey("experimental_card_scanning_enabled") to "not-a-boolean"))
             }
             override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences =
                 error("not used")
@@ -83,7 +88,7 @@ class PreferencesRepositoryTest {
 
         val restored = DataStorePreferencesRepository(corruptedStore).preferences.first()
 
-        assertFalse(restored.cameraEducationSeen)
+        assertFalse(restored.experimentalCardScanningEnabled)
     }
 
     @Test

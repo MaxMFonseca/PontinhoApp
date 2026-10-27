@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,27 +31,22 @@ import androidx.compose.ui.unit.dp
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.ui.components.PontinhoTopBar
 
-enum class ScannerEntryRoute { Education, Capture }
-
-/** Evaluate only in response to a scanner action; choosing a route performs no camera work. */
-fun scannerEntryRoute(cameraEducationSeen: Boolean): ScannerEntryRoute =
-    if (cameraEducationSeen) ScannerEntryRoute.Capture else ScannerEntryRoute.Education
-
 @Composable
 fun AboutScreen(
     versionName: String,
     onBack: () -> Unit,
     onLearn: () -> Unit,
-    onCameraEducationSeen: () -> Unit,
+    experimentalCardScanningEnabled: Boolean,
+    onExperimentalCardScanningEnabledChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onPrivacyLicenses: () -> Unit = {},
 ) {
     var showCameraEducation by rememberSaveable { mutableStateOf(false) }
     if (showCameraEducation) {
         CameraEducationScreen(
-            onEducationSeen = onCameraEducationSeen,
-            onContinue = { showCameraEducation = false },
-            onDismiss = { showCameraEducation = false },
+            experimentalCardScanningEnabled = experimentalCardScanningEnabled,
+            onExperimentalCardScanningEnabledChange = onExperimentalCardScanningEnabledChange,
+            onBack = { showCameraEducation = false },
             modifier = modifier,
         )
         return
@@ -118,26 +114,19 @@ fun AboutScreen(
 
 @Composable
 fun CameraEducationScreen(
-    onEducationSeen: () -> Unit,
-    onContinue: () -> Unit,
-    onDismiss: () -> Unit,
+    experimentalCardScanningEnabled: Boolean,
+    onExperimentalCardScanningEnabledChange: (Boolean) -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var completed by rememberSaveable { mutableStateOf(false) }
-    fun complete(action: () -> Unit) {
-        if (completed) return
-        completed = true
-        onEducationSeen()
-        action()
-    }
-    BackHandler { complete(onDismiss) }
+    BackHandler(onBack = onBack)
 
     Column(
         modifier = modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
             .testTag("camera_education_root"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        PontinhoTopBar(R.string.camera_education_title, onBack = { complete(onDismiss) })
+        PontinhoTopBar(R.string.camera_education_title, onBack = onBack)
         Column(
             Modifier.padding(start = 16.dp, end = 16.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -146,17 +135,49 @@ fun CameraEducationScreen(
             EducationCard(R.string.camera_education_capture)
             EducationCard(R.string.camera_education_review)
             EducationCard(R.string.camera_education_manual)
-            Button(
-                onClick = { complete(onContinue) },
-                modifier = Modifier.fillMaxWidth().testTag("camera_education_continue"),
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.errorContainer,
             ) {
-                Text(stringResource(R.string.camera_education_continue))
+                Text(
+                    text = stringResource(R.string.camera_education_experimental),
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
             }
-            TextButton(
-                onClick = { complete(onDismiss) },
-                modifier = Modifier.fillMaxWidth().testTag("camera_education_dismiss"),
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
-                Text(stringResource(R.string.camera_education_dismiss))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.camera_education_enable), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            stringResource(R.string.camera_education_enable_supporting),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = experimentalCardScanningEnabled,
+                        onCheckedChange = onExperimentalCardScanningEnabledChange,
+                        modifier = Modifier.testTag("camera_experimental_toggle"),
+                    )
+                }
+            }
+            Button(
+                onClick = onBack,
+                modifier = Modifier.fillMaxWidth().testTag("camera_education_done"),
+            ) {
+                Text(stringResource(R.string.camera_education_done))
             }
         }
     }

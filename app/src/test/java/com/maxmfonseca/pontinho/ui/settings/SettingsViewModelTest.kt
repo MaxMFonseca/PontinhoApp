@@ -69,8 +69,8 @@ class SettingsViewModelTest {
             mutable.update { it.copy(reducedMotion = reducedMotion) }
         }
 
-        override suspend fun setCameraEducationSeen(seen: Boolean) {
-            mutable.update { it.copy(cameraEducationSeen = seen) }
+        override suspend fun setExperimentalCardScanningEnabled(enabled: Boolean) {
+            mutable.update { it.copy(experimentalCardScanningEnabled = enabled) }
         }
     }
 

@@ -39,7 +39,7 @@ class AboutNavigationTest {
         composeRule.onNodeWithTag("about_root").assertExists()
     }
 
-    @Test fun navHostPersistsEducationOnlyWhenSystemBackExplicitlyDismissesIt() {
+    @Test fun navHostPersistsOnlyExplicitExperimentalScanningChanges() {
         val preferences = RecordingPreferencesRepository()
         val container = container(preferences)
         composeRule.setContent {
@@ -49,20 +49,23 @@ class AboutNavigationTest {
         composeRule.onNodeWithTag("about_camera_education").performScrollTo().performClick()
         composeRule.onNodeWithTag("camera_education_root").assertExists()
         composeRule.runOnIdle {
-            assertEquals(0, preferences.educationWrites)
-            assertFalse(preferences.preferences.value.cameraEducationSeen)
+            assertEquals(0, preferences.experimentalWrites)
+            assertFalse(preferences.preferences.value.experimentalCardScanningEnabled)
         }
 
         pressBack()
-
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            preferences.preferences.value.cameraEducationSeen
-        }
         composeRule.onNodeWithTag("about_root").assertExists()
         composeRule.runOnIdle {
-            assertEquals(1, preferences.educationWrites)
-            assertTrue(preferences.preferences.value.cameraEducationSeen)
+            assertEquals(0, preferences.experimentalWrites)
+            assertFalse(preferences.preferences.value.experimentalCardScanningEnabled)
         }
+
+        composeRule.onNodeWithTag("about_camera_education").performScrollTo().performClick()
+        composeRule.onNodeWithTag("camera_experimental_toggle").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            preferences.preferences.value.experimentalCardScanningEnabled
+        }
+        composeRule.runOnIdle { assertEquals(1, preferences.experimentalWrites) }
     }
 
     private fun container(preferences: RecordingPreferencesRepository) = object : AppContainer {
@@ -73,14 +76,14 @@ class AboutNavigationTest {
 
     private class RecordingPreferencesRepository : PreferencesRepository {
         override val preferences = MutableStateFlow(AppPreferences())
-        var educationWrites = 0
+        var experimentalWrites = 0
 
         override suspend fun setTheme(theme: ThemePreference) = Unit
         override suspend fun setLanguage(language: LanguagePreference) = Unit
         override suspend fun setReducedMotion(reducedMotion: Boolean?) = Unit
-        override suspend fun setCameraEducationSeen(seen: Boolean) {
-            educationWrites++
-            preferences.update { it.copy(cameraEducationSeen = seen) }
+        override suspend fun setExperimentalCardScanningEnabled(enabled: Boolean) {
+            experimentalWrites++
+            preferences.update { it.copy(experimentalCardScanningEnabled = enabled) }
         }
     }
 }

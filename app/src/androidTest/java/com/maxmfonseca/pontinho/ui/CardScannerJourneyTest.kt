@@ -363,11 +363,13 @@ class CardScannerJourneyTest {
             override val playerRepository = RoomPlayerRepository(database)
             override val matchRepository = repository
             override val preferencesRepository = object : PreferencesRepository {
-                override val preferences = MutableStateFlow(AppPreferences(cameraEducationSeen = true))
+                override val preferences = MutableStateFlow(AppPreferences(experimentalCardScanningEnabled = true))
                 override suspend fun setTheme(theme: ThemePreference) = Unit
                 override suspend fun setLanguage(language: LanguagePreference) = Unit
                 override suspend fun setReducedMotion(reducedMotion: Boolean?) = Unit
-                override suspend fun setCameraEducationSeen(seen: Boolean) { preferences.value = preferences.value.copy(cameraEducationSeen = seen) }
+                override suspend fun setExperimentalCardScanningEnabled(enabled: Boolean) {
+                    preferences.value = preferences.value.copy(experimentalCardScanningEnabled = enabled)
+                }
             }
             override val cardRecognitionEngineProvider = object : CardRecognitionEngineProvider {
                 override fun get() = engine

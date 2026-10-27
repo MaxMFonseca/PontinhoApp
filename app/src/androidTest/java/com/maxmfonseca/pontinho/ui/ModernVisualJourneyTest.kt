@@ -202,7 +202,7 @@ class ModernVisualJourneyTest {
             "appearance" -> AppearanceScreen(AppPreferences(), {}, {})
             "language" -> LanguageScreen(LanguagePreference.SYSTEM, {}, {})
             "learn" -> LearnScreen({})
-            "about" -> AboutScreen("1.0.0", {}, onLearn, {})
+            "about" -> AboutScreen("1.0.0", {}, onLearn, false, {})
         }
     }
 

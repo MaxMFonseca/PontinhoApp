@@ -75,7 +75,7 @@ class LearnScreenTest {
             override suspend fun setTheme(theme: ThemePreference) = Unit
             override suspend fun setLanguage(language: LanguagePreference) = Unit
             override suspend fun setReducedMotion(reducedMotion: Boolean?) = Unit
-            override suspend fun setCameraEducationSeen(seen: Boolean) = Unit
+            override suspend fun setExperimentalCardScanningEnabled(enabled: Boolean) = Unit
         }
         val container = object : AppContainer {
             override val playerRepository = RoomPlayerRepository(db)

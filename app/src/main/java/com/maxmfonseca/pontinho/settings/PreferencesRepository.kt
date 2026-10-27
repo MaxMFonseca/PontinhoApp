@@ -16,7 +16,7 @@ interface PreferencesRepository {
     suspend fun setTheme(theme: ThemePreference)
     suspend fun setLanguage(language: LanguagePreference)
     suspend fun setReducedMotion(reducedMotion: Boolean?)
-    suspend fun setCameraEducationSeen(seen: Boolean)
+    suspend fun setExperimentalCardScanningEnabled(enabled: Boolean)
 }
 
 class DataStorePreferencesRepository(
@@ -34,7 +34,7 @@ class DataStorePreferencesRepository(
                 language = values[LANGUAGE]?.toEnumOrDefault(LanguagePreference.SYSTEM)
                     ?: LanguagePreference.SYSTEM,
                 reducedMotion = values[REDUCED_MOTION],
-                cameraEducationSeen = runCatching { values[CAMERA_EDUCATION_SEEN] }
+                experimentalCardScanningEnabled = runCatching { values[EXPERIMENTAL_CARD_SCANNING_ENABLED] }
                     .getOrNull() ?: false,
             )
         }
@@ -54,8 +54,8 @@ class DataStorePreferencesRepository(
         }
     }
 
-    override suspend fun setCameraEducationSeen(seen: Boolean) {
-        dataStore.edit { it[CAMERA_EDUCATION_SEEN] = seen }
+    override suspend fun setExperimentalCardScanningEnabled(enabled: Boolean) {
+        dataStore.edit { it[EXPERIMENTAL_CARD_SCANNING_ENABLED] = enabled }
     }
 
     private inline fun <reified T : Enum<T>> String.toEnumOrDefault(default: T): T =
@@ -65,6 +65,6 @@ class DataStorePreferencesRepository(
         val THEME = stringPreferencesKey("theme")
         val LANGUAGE = stringPreferencesKey("language")
         val REDUCED_MOTION = booleanPreferencesKey("reduced_motion")
-        val CAMERA_EDUCATION_SEEN = booleanPreferencesKey("camera_education_seen")
+        val EXPERIMENTAL_CARD_SCANNING_ENABLED = booleanPreferencesKey("experimental_card_scanning_enabled")
     }
 }
