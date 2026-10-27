@@ -7,6 +7,7 @@ import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -44,7 +45,7 @@ class StatisticsViewModelRuntimeTest {
 }
 
 private class RuntimeStatisticsRepository(private val players: List<LifetimePlayerStatistics>) : MatchRepository {
-    override fun observeLifetimeStatistics() = MutableStateFlow(players)
+    override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = MutableStateFlow(players)
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
     override fun observeDay(localDate: LocalDate) = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
     override fun observeMatch(matchId: MatchId) = MutableStateFlow<MatchSnapshot?>(null)

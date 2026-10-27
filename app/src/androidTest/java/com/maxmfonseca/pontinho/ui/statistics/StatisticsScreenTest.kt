@@ -32,6 +32,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.time.LocalDate
 import java.util.Locale
 
 class StatisticsScreenTest {
@@ -40,6 +41,65 @@ class StatisticsScreenTest {
     private val player = LifetimePlayerStatistics(PlayerNameKey("joão"), "João", 8, 5, 3_000_000_123L)
     private val populated = StatisticsUiState(players = listOf(player), hasStatistics = true, isLoading = false)
     private val fields = listOf("name", "matches", "wins", "win_rate", "points")
+
+    @Test fun completionDateControlsOpenPickersAndClearTheInclusiveRange() {
+        var state by mutableStateOf(populated.copy(
+            startDate = LocalDate.parse("2026-10-13"),
+            endDate = LocalDate.parse("2026-10-14"),
+        ))
+        var cleared = 0
+        compose.setContent {
+            LocalizedSurface {
+                StatisticsScreen(
+                    state = state,
+                    onBack = {},
+                    onSettings = {},
+                    onQueryChange = {},
+                    onClearQuery = {},
+                    onSelectSort = {},
+                    onStartDateChange = {},
+                    onEndDateChange = {},
+                    onClearDateRange = { cleared++; state = state.copy(startDate = null, endDate = null) },
+                )
+            }
+        }
+
+        val root = compose.onNodeWithTag("statistics_root")
+        root.performScrollToNode(hasTestTag("statistics_date_start"))
+        compose.onNodeWithTag("statistics_date_start").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            .assertTextContains("2026", substring = true).performClick()
+        compose.onNodeWithText("Selecionar data inicial").assertIsDisplayed()
+        compose.onNodeWithText("Cancelar").performClick()
+
+        root.performScrollToNode(hasTestTag("statistics_date_end"))
+        compose.onNodeWithTag("statistics_date_end").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            .assertTextContains("2026", substring = true).performClick()
+        compose.onNodeWithText("Selecionar data final").assertIsDisplayed()
+        compose.onNodeWithText("Cancelar").performClick()
+
+        compose.onNodeWithTag("statistics_date_clear").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, cleared) }
+        compose.onNodeWithTag("statistics_date_clear").assertDoesNotExist()
+        compose.onNodeWithTag("statistics_date_start").assertTextContains("Todas")
+        compose.onNodeWithTag("statistics_date_end").assertTextContains("Todas")
+    }
+
+    @Test fun emptyCompletionRangeHasSpecificFeedback() {
+        val state = StatisticsUiState(
+            startDate = LocalDate.parse("2026-10-13"),
+            endDate = LocalDate.parse("2026-10-14"),
+            isLoading = false,
+        )
+        compose.setContent {
+            LocalizedSurface {
+                StatisticsScreen(state, {}, {}, {}, {}, {}, {}, {}, {})
+            }
+        }
+
+        compose.onNodeWithTag("statistics_root")
+            .performScrollToNode(hasText("Nenhuma partida concluída no período selecionado."))
+        compose.onNodeWithText("Nenhuma partida concluída no período selecionado.").assertIsDisplayed()
+    }
 
     @Test fun searchAndVisibleClearForwardTheirEvents() {
         var state by mutableStateOf(populated)

@@ -3,6 +3,7 @@ package com.maxmfonseca.pontinho.ui.test
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.time.Instant
@@ -36,7 +37,7 @@ class FakeMatchRepository(
     val updatedScans = mutableListOf<UpdateScannedScore>()
 
     override fun observeHome(): Flow<List<DaySummary>> = home
-    override fun observeLifetimeStatistics(): Flow<List<LifetimePlayerStatistics>> = lifetimeStatistics
+    override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange): Flow<List<LifetimePlayerStatistics>> = lifetimeStatistics
     override fun observeDay(localDate: LocalDate): Flow<DayHistory> = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
     override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = MutableStateFlow(null)
     override suspend fun createMatch(command: CreateMatch): MatchId {

@@ -9,6 +9,7 @@ import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.local.entity.*
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.domain.recognition.ConfirmedCard
 import com.maxmfonseca.pontinho.domain.recognition.NormalizedRect
@@ -1248,6 +1249,28 @@ class RoomMatchRepositoryTest {
             collection.cancelAndJoin()
             emissions.close()
         }
+    }
+
+    @Test fun lifetimeStatisticsCanBeLimitedByInclusiveCompletionDates() = runBlocking {
+        clock.time = Instant.parse("2026-10-13T12:00:00Z")
+        val older = create(2)
+        val olderRound = start(older)
+        submit(older, olderRound, 0, 101)
+        submit(older, olderRound, 1, 0)
+
+        clock.time = Instant.parse("2026-10-14T12:00:00Z")
+        val newer = create(2)
+        val newerRound = start(newer)
+        submit(newer, newerRound, 0, 0)
+        submit(newer, newerRound, 1, 101)
+
+        assertEquals(listOf(
+            LifetimePlayerStatistics(PlayerNameKey("player 1"), "Player 1", 1, 1, 0L),
+            LifetimePlayerStatistics(PlayerNameKey("player 2"), "Player 2", 1, 0, 101L),
+        ), repo.observeLifetimeStatistics(CompletedDateRange(
+            startInclusive = LocalDate.parse("2026-10-14"),
+            endInclusive = LocalDate.parse("2026-10-14"),
+        )).first())
     }
 
     private class TestClock(var time: Instant, var zoneId: ZoneId) : Clock() {

@@ -3,10 +3,12 @@ package com.maxmfonseca.pontinho.ui.statistics
 import androidx.lifecycle.SavedStateHandle
 import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.MatchRepository
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.ui.test.FakeMatchRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -16,12 +18,84 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class StatisticsViewModelTest {
+    @Test fun completionDateRangeFiltersRowsPersistsAndClearsBackToAllTime() = runTest {
+        val allRows = samplePlayers()
+        val rangeRows = listOf(player("ana", "Ana", 1, 1, 10))
+        val requested = mutableListOf<CompletedDateRange>()
+        val repo = object : MatchRepository by repository(allRows) {
+            override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = flowOf(
+                if (completedDateRange == CompletedDateRange(
+                        LocalDate.parse("2026-10-13"), LocalDate.parse("2026-10-14"),
+                    )) rangeRows else allRows,
+            ).also { requested += completedDateRange }
+        }
+        val saved = SavedStateHandle()
+        val vm = StatisticsViewModel(saved, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+
+        vm.setStartDate(LocalDate.parse("2026-10-13"))
+        vm.setEndDate(LocalDate.parse("2026-10-14"))
+
+        assertEquals(LocalDate.parse("2026-10-13"), vm.uiState.value.startDate)
+        assertEquals(LocalDate.parse("2026-10-14"), vm.uiState.value.endDate)
+        runCurrent()
+        assertEquals(listOf("ana"), vm.keys())
+        assertEquals(CompletedDateRange(LocalDate.parse("2026-10-13"), LocalDate.parse("2026-10-14")), requested.last())
+
+        val recreated = StatisticsViewModel(saved, repo, StandardTestDispatcher(testScheduler))
+        assertEquals(LocalDate.parse("2026-10-13"), recreated.uiState.value.startDate)
+        assertEquals(LocalDate.parse("2026-10-14"), recreated.uiState.value.endDate)
+        runCurrent()
+        assertEquals(listOf("ana"), recreated.keys())
+
+        recreated.clearDateRange()
+
+        assertEquals(null, recreated.uiState.value.startDate)
+        assertEquals(null, recreated.uiState.value.endDate)
+        runCurrent()
+        assertEquals(allRows.map { it.playerKey.value }.sorted(), recreated.keys().sorted())
+        assertEquals(CompletedDateRange(), requested.last())
+    }
+
+    @Test fun selectingCrossedCompletionBoundsKeepsAnOrderedInclusiveRange() = runTest {
+        val vm = StatisticsViewModel(SavedStateHandle(), repository(), StandardTestDispatcher(testScheduler))
+        runCurrent()
+
+        vm.setEndDate(LocalDate.parse("2026-10-10"))
+        vm.setStartDate(LocalDate.parse("2026-10-12"))
+        assertEquals(LocalDate.parse("2026-10-12"), vm.uiState.value.startDate)
+        assertEquals(LocalDate.parse("2026-10-12"), vm.uiState.value.endDate)
+
+        vm.setEndDate(LocalDate.parse("2026-10-09"))
+        assertEquals(LocalDate.parse("2026-10-09"), vm.uiState.value.startDate)
+        assertEquals(LocalDate.parse("2026-10-09"), vm.uiState.value.endDate)
+    }
+
+    @Test fun changingTheCompletionRangeHidesStaleRowsWhileTheNewRangeLoads() = runTest {
+        val repo = object : MatchRepository by repository() {
+            override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) =
+                if (completedDateRange.isAllTime) flowOf(samplePlayers()) else emptyFlow()
+        }
+        val vm = StatisticsViewModel(SavedStateHandle(), repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertTrue(vm.uiState.value.players.isNotEmpty())
+
+        vm.setStartDate(LocalDate.parse("2026-10-13"))
+
+        assertTrue(vm.uiState.value.isLoading)
+        assertTrue(vm.uiState.value.players.isEmpty())
+        assertFalse(vm.uiState.value.hasStatistics)
+        runCurrent()
+        assertTrue(vm.uiState.value.isLoading)
+    }
+
     @Test fun queryIsPublishedSynchronouslyBeforeTheSourceEmits() = runTest {
         val repo = object : MatchRepository by repository() {
-            override fun observeLifetimeStatistics() = emptyFlow<List<LifetimePlayerStatistics>>()
+            override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = emptyFlow<List<LifetimePlayerStatistics>>()
         }
         val saved = SavedStateHandle()
         val vm = StatisticsViewModel(saved, repo, StandardTestDispatcher(testScheduler))
@@ -39,7 +113,7 @@ class StatisticsViewModelTest {
 
     @Test fun clearIsPublishedSynchronouslyWhileTheSourceHasNotEmitted() = runTest {
         val repo = object : MatchRepository by repository() {
-            override fun observeLifetimeStatistics() = emptyFlow<List<LifetimePlayerStatistics>>()
+            override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = emptyFlow<List<LifetimePlayerStatistics>>()
         }
         val saved = SavedStateHandle()
         StatisticsViewModel(saved, repo, StandardTestDispatcher(testScheduler)).updateQuery("Ana")

@@ -4,6 +4,7 @@ import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
 import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -194,7 +195,7 @@ private class HistoryRepository(
     }
     override fun observeDay(localDate: LocalDate) = day
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
-    override fun observeLifetimeStatistics() = MutableStateFlow(emptyList<LifetimePlayerStatistics>())
+    override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = MutableStateFlow(emptyList<LifetimePlayerStatistics>())
     override fun observeMatch(matchId: MatchId) = MutableStateFlow(null)
     override suspend fun createMatch(command: CreateMatch) = error("unused")
     override suspend fun addParticipant(command: AddParticipant) = error("unused")

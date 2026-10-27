@@ -127,6 +127,9 @@ fun PontinhoNavHost(
                 onQueryChange = statisticsViewModel::updateQuery,
                 onClearQuery = statisticsViewModel::clearQuery,
                 onSelectSort = statisticsViewModel::selectSort,
+                onStartDateChange = statisticsViewModel::setStartDate,
+                onEndDateChange = statisticsViewModel::setEndDate,
+                onClearDateRange = statisticsViewModel::clearDateRange,
             )
         }
         composable(Destination.Setup.route) {

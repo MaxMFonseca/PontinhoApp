@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.match
 
 import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.domain.rules.RoundEngine
 import com.maxmfonseca.pontinho.domain.rules.RoundTransition
@@ -1059,7 +1060,7 @@ private class ScoringRepository(
     var lateJoinAttempts = 0
     override fun observeMatch(matchId: MatchId) = snapshot
     override fun observeHome() = MutableStateFlow(emptyList<DaySummary>())
-    override fun observeLifetimeStatistics() = MutableStateFlow(emptyList<LifetimePlayerStatistics>())
+    override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = MutableStateFlow(emptyList<LifetimePlayerStatistics>())
     override fun observeDay(localDate: LocalDate) = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
     override suspend fun prepareRound(command: PrepareRound): PreparedRound {
         check(snapshot.value!!.rounds.none { it.status != RoundStatus.COMPLETE })

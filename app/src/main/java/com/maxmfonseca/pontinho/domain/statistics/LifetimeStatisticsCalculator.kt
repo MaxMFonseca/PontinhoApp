@@ -2,6 +2,29 @@ package com.maxmfonseca.pontinho.domain.statistics
 
 import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.MatchSnapshot
+import java.time.LocalDate
+import java.time.ZoneId
+
+data class CompletedDateRange(
+    val startInclusive: LocalDate? = null,
+    val endInclusive: LocalDate? = null,
+) {
+    init {
+        require(startInclusive == null || endInclusive == null || !startInclusive.isAfter(endInclusive)) {
+            "Completion date range must be ordered"
+        }
+    }
+
+    val isAllTime: Boolean get() = startInclusive == null && endInclusive == null
+
+    fun includes(match: MatchSnapshot): Boolean {
+        if (!match.isFinished) return false
+        if (isAllTime) return true
+        val completedDate = match.finishedAt?.atZone(ZoneId.of(match.timeZoneId))?.toLocalDate() ?: return false
+        return (startInclusive == null || !completedDate.isBefore(startInclusive)) &&
+            (endInclusive == null || !completedDate.isAfter(endInclusive))
+    }
+}
 
 data class LifetimePlayerStatistics(
     val playerKey: PlayerNameKey,
@@ -13,9 +36,12 @@ data class LifetimePlayerStatistics(
     val winRate: Double get() = wins.toDouble() / completedMatches
 }
 
-fun calculateLifetimeStatistics(matches: List<MatchSnapshot>): List<LifetimePlayerStatistics> {
+fun calculateLifetimeStatistics(
+    matches: List<MatchSnapshot>,
+    completedDateRange: CompletedDateRange = CompletedDateRange(),
+): List<LifetimePlayerStatistics> {
     val statistics = mutableMapOf<PlayerNameKey, LifetimePlayerStatistics>()
-    val completed = matches.filter { it.isFinished }.sortedWith(
+    val completed = matches.filter(completedDateRange::includes).sortedWith(
         compareByDescending<MatchSnapshot> { it.createdAt }.thenByDescending { it.id.value },
     )
     completed.forEach { match ->

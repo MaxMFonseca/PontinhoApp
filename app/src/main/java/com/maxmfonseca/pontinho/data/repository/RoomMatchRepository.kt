@@ -9,6 +9,7 @@ import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.domain.repository.*
 import com.maxmfonseca.pontinho.domain.rules.*
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.calculateLifetimeStatistics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -53,10 +54,10 @@ class RoomMatchRepository(
         }
     }.distinctUntilChanged()
 
-    override fun observeLifetimeStatistics(): Flow<List<LifetimePlayerStatistics>> = changes().map {
+    override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange): Flow<List<LifetimePlayerStatistics>> = changes().map {
         db.withTransaction {
             val snapshots = matches.matches().map { requireNotNull(snapshot(it.id)) }
-            calculateLifetimeStatistics(snapshots)
+            calculateLifetimeStatistics(snapshots, completedDateRange)
         }
     }.distinctUntilChanged()
 

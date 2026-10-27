@@ -18,6 +18,7 @@ import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.di.AppContainer
 import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
 import com.maxmfonseca.pontinho.domain.repository.MatchRepository
+import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
 import kotlinx.coroutines.flow.flowOf
@@ -42,7 +43,7 @@ class NavigationMotionTest {
         lateinit var controller: NavHostController
         val applicationContainer = (compose.activity.application as PontinhoApplication).container
         val repository = object : MatchRepository by applicationContainer.matchRepository {
-            override fun observeLifetimeStatistics() = flowOf(listOf(
+            override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange) = flowOf(listOf(
                 LifetimePlayerStatistics(PlayerNameKey.from("Ana"), "Ana", 3, 1, 30),
                 LifetimePlayerStatistics(PlayerNameKey.from("Bruno"), "Bruno", 3, 2, 15),
             ))

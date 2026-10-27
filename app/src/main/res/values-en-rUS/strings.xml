@@ -4,6 +4,13 @@
     <string name="home_statistics">Statistics</string>
     <string name="statistics_search">Search player</string>
     <string name="statistics_clear">Clear search</string>
+    <string name="statistics_start_date">Start date</string>
+    <string name="statistics_end_date">End date</string>
+    <string name="statistics_all_dates">All</string>
+    <string name="statistics_clear_dates">Clear date range</string>
+    <string name="statistics_select_start_date">Select start date</string>
+    <string name="statistics_select_end_date">Select end date</string>
+    <string name="statistics_range_empty">No completed matches in the selected date range.</string>
     <string name="statistics_name">Name</string>
     <string name="statistics_matches">Completed matches</string>
     <string name="statistics_wins">Wins</string>

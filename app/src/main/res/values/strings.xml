@@ -4,6 +4,13 @@
     <string name="home_statistics">Estatísticas</string>
     <string name="statistics_search">Buscar jogador</string>
     <string name="statistics_clear">Limpar busca</string>
+    <string name="statistics_start_date">Data inicial</string>
+    <string name="statistics_end_date">Data final</string>
+    <string name="statistics_all_dates">Todas</string>
+    <string name="statistics_clear_dates">Limpar período</string>
+    <string name="statistics_select_start_date">Selecionar data inicial</string>
+    <string name="statistics_select_end_date">Selecionar data final</string>
+    <string name="statistics_range_empty">Nenhuma partida concluída no período selecionado.</string>
     <string name="statistics_name">Nome</string>
     <string name="statistics_matches">Partidas concluídas</string>
     <string name="statistics_wins">Vitórias</string>

@@ -10,6 +10,7 @@ import com.maxmfonseca.pontinho.domain.repository.MatchSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 
 class LifetimeStatisticsCalculatorTest {
@@ -63,11 +64,34 @@ class LifetimeStatisticsCalculatorTest {
         ), calculateLifetimeStatistics(listOf(first, second)))
     }
 
+    @Test fun completionDateRangeIsInclusiveAndUsesTheMatchTimeZone() {
+        val before = match("before", "2026-10-01T12:00:00Z", listOf("Ana" to 50, "Bruno" to 10), setOf(1),
+            finishedAt = "2026-10-13T02:59:59Z", timeZoneId = "America/Sao_Paulo")
+        val lowerBoundary = match("lower", "2026-10-02T12:00:00Z", listOf("Ana" to 20, "Bruno" to 30), setOf(0),
+            finishedAt = "2026-10-13T03:00:00Z", timeZoneId = "America/Sao_Paulo")
+        val upperBoundary = match("upper", "2026-10-03T12:00:00Z", listOf("Ana" to 5, "Bruno" to 40), setOf(0),
+            finishedAt = "2026-10-15T02:59:59Z", timeZoneId = "America/Sao_Paulo")
+        val after = match("after", "2026-10-04T12:00:00Z", listOf("Ana" to 99, "Bruno" to 1), setOf(1),
+            finishedAt = "2026-10-15T03:00:00Z", timeZoneId = "America/Sao_Paulo")
+
+        val result = calculateLifetimeStatistics(
+            listOf(before, lowerBoundary, upperBoundary, after),
+            CompletedDateRange(LocalDate.parse("2026-10-13"), LocalDate.parse("2026-10-14")),
+        )
+
+        assertEquals(listOf(
+            LifetimePlayerStatistics(PlayerNameKey("ana"), "Ana", 2, 2, 25L),
+            LifetimePlayerStatistics(PlayerNameKey("bruno"), "Bruno", 2, 0, 70L),
+        ), result)
+    }
+
     private fun match(
         id: String,
         createdAt: String,
         players: List<Pair<String, Int>>,
         winnerIndices: Set<Int>?,
+        finishedAt: String = createdAt,
+        timeZoneId: String = "UTC",
     ): MatchSnapshot {
         val instant = Instant.parse(createdAt)
         val participants = players.mapIndexed { index, (name, _) ->
@@ -77,7 +101,7 @@ class LifetimeStatisticsCalculatorTest {
         return MatchSnapshot(
             id = MatchId(id),
             localDate = instant.atZone(ZoneOffset.UTC).toLocalDate(),
-            timeZoneId = "UTC",
+            timeZoneId = timeZoneId,
             createdAt = instant,
             lastPlayedAt = instant,
             participants = participants,
@@ -85,7 +109,7 @@ class LifetimeStatisticsCalculatorTest {
             totals = totals,
             dealerParticipantId = participants.first().id,
             isFinished = winnerIndices != null,
-            finishedAt = instant.takeIf { winnerIndices != null },
+            finishedAt = finishedAt.takeIf { winnerIndices != null }?.let(Instant::parse),
             outcome = winnerIndices?.let { indices ->
                 MatchOutcome(indices.map { participants[it].id }.toSet(),
                     totals.filterValues { it == totals.values.max() }.keys,
