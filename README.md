@@ -50,10 +50,8 @@ the device. Backups are disabled, temporary camera files are excluded from
 Android backup rules, and the release manifest contains no internet permission.
 The scanner uses the camera only while its screen is open.
 
-The repository includes a publication draft of the
-[privacy policy](docs/legal/privacy-policy-draft.md). A release publisher must
-set its effective date, publish it at a stable public URL, and use that URL in
-the store listing.
+The bilingual [privacy policy](https://maxmfonseca.github.io/PontinhoApp/privacy-policy/)
+is published at a stable public URL for the Google Play store listing.
 
 ## Technology
 
@@ -96,23 +94,9 @@ requires the publisher's protected upload key and Play App Signing setup.
 - `app/` contains the Android application, resources, tests, and bundled model.
 - `ml/card-recognition/` contains training, evaluation, export, and provenance tooling.
 - `docs/licenses/` records model and dataset provenance and release limitations.
-- `docs/legal/` contains the privacy-policy publication draft.
+- `docs/privacy-policy/` contains the published bilingual privacy policy.
 - `artwork/` contains source artwork for the application icon.
 - `design/` contains retained product design references.
-
-## Distribution checklist
-
-Before publishing a build, the publisher must:
-
-- keep the complete corresponding source and model materials publicly available
-  at [`github.com/MaxMFonseca/PontinhoApp`](https://github.com/MaxMFonseca/PontinhoApp);
-- publish the privacy policy and add its active URL to the store listing;
-- review and complete the Play Console Data safety and App content declarations;
-- build and upload a signed Android App Bundle with the publisher's keys;
-- provide the required store listing, screenshots, contact details, and testing
-  track information; and
-- preserve the license, notices, model provenance, and complete source required
-  by the AGPL.
 
 ## License and provenance
 
