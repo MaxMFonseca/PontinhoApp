@@ -53,6 +53,8 @@ fun MatchScreen(
     onCamera: () -> Unit = {},
     onEditJoker: (Int) -> Unit = {},
     onRemoveIndicator: () -> Unit = {},
+    onBeginDealerSelection: () -> Unit = {},
+    onSelectDealer: (ParticipantId) -> Unit = {},
 ) {
     val historyScroll = rememberScrollState()
     val textMeasurer = rememberTextMeasurer()
@@ -62,7 +64,7 @@ fun MatchScreen(
     val columnWidth = with(LocalDensity.current) { largestScoreWidth.toDp() + 12.dp }.coerceAtLeast(48.dp)
     val listState = rememberLazyListState()
     var listTop by remember { mutableFloatStateOf(0f) }
-    val canMove = state.canReorderPlayers && !state.isFinished && !state.isCorrectingRound &&
+    val canMove = state.canReorderPlayers && !state.isSelectingDealer && !state.isFinished && !state.isCorrectingRound &&
         state.pausedRoundNumbers.isEmpty() && !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
     val reorderState = rememberReorderableListState(listState, state.players.map { it.id },
         enabled = canMove, itemKey = { it.value }, onReorder = onReorderPlayers)
@@ -118,7 +120,8 @@ fun MatchScreen(
                     val dragging = reorderState.draggedKey == player.id
                     var handleTop by remember(player.id) { mutableFloatStateOf(0f) }
                     PlayerCard(player.name, player.total, player.isDealer, player.history,
-                        onAddScore = if (player.canAddScore && !state.isSaving) ({ onAddScore(player.id) }) else null,
+                        onAddScore = if (player.canAddScore && !state.isSaving && !state.isSelectingDealer)
+                            ({ onAddScore(player.id) }) else null,
                         modifier = Modifier.fillMaxWidth().testTag("match_player_${player.id.value}")
                             .zIndex(if (dragging) 1f else 0f)
                             .graphicsLayer {
@@ -131,6 +134,12 @@ fun MatchScreen(
                         historyScrollState = historyScroll, showScoreAction = !state.isFinished,
                         historyColumnWidth = columnWidth,
                         onEditScore = if (!state.isSaving) ({ onEditScore(player.id, it) }) else null,
+                        dealerSelectionActive = state.isSelectingDealer,
+                        onDealerClick = when {
+                            state.isSelectingDealer -> ({ onSelectDealer(player.id) })
+                            player.isDealer && state.canChangeDealer -> onBeginDealerSelection
+                            else -> null
+                        },
                         dragHandle = {
                             ImmediateDragHandle(canMove, dragLabel,
                                 onDragStart = { offset ->
@@ -144,7 +153,7 @@ fun MatchScreen(
                         })
                 }
                 if (!state.isFinished) item(key = "add_player") {
-                    OutlinedButton(onClick = onAddPlayer, enabled = state.canAddPlayer,
+                    OutlinedButton(onClick = onAddPlayer, enabled = state.canAddPlayer && !state.isSelectingDealer,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("match_add_player")) {
                         Icon(Icons.Filled.Add, null, Modifier.padding(end = 8.dp))
                         Text(stringResource(R.string.setup_add_player))

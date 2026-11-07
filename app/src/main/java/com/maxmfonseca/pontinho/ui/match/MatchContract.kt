@@ -37,6 +37,7 @@ data class MatchUiState(
     val isSaving: Boolean = false, val hasError: Boolean = false,
     val picker: IndicatorPickerState? = null, val scoreDialog: MatchScoreDialogState? = null,
     val canAddPlayer: Boolean = false, val canReorderPlayers: Boolean = false,
+    val canChangeDealer: Boolean = false, val isSelectingDealer: Boolean = false,
     val playerName: String? = null,
     val duplicateNameError: Boolean = false,
     val pausedRoundNumbers: List<Int> = emptyList(), val isCorrectingRound: Boolean = false,

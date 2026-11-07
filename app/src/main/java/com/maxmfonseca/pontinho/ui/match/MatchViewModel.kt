@@ -133,6 +133,31 @@ class MatchViewModel(
         } else persistDialog()
     }
 
+    fun beginDealerSelection() {
+        updateState { state ->
+            if (state.canChangeDealer) state.copy(isSelectingDealer = true, hasError = false) else state
+        }
+    }
+
+    fun selectDealer(participantId: ParticipantId) {
+        val state = uiState.value
+        if (!state.canChangeDealer || !state.isSelectingDealer || state.players.none { it.id == participantId }) return
+        updateState { it.copy(isSelectingDealer = false, hasError = false) }
+        if (state.players.singleOrNull { it.isDealer }?.id == participantId) return
+        scope.launch {
+            updateState { it.copy(isSaving = true) }
+            try {
+                repository.changeDealer(ChangeDealer(matchId, participantId))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                updateState { it.copy(hasError = true) }
+            } finally {
+                updateState { it.copy(isSaving = false) }
+            }
+        }
+    }
+
     /** Run after state restoration using the actual navigation stack, never inferred timing. */
     fun reconcileScannerNavigation(destinationToken: String?) {
         val active = activeScanToken ?: return
@@ -504,11 +529,14 @@ class MatchViewModel(
         mutableUiState.update { old ->
             val state = transform(old)
             val idle = !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
+            val canChangeDealer = canJoinMatch() && snapshot?.openRound == null && idle
             state.copy(
                 scoreDialog = state.scoreDialog?.let { dialog -> dialog.copy(canScan = recognitionEnabled() &&
                     !dialog.readOnly && (dialog.indicator == null || scannerContext(dialog)?.resolve(snapshot) != null)) },
                 canAddPlayer = canJoinMatch() && idle,
                 canReorderPlayers = canJoinMatch() && snapshot?.openRound == null && idle,
+                canChangeDealer = canChangeDealer,
+                isSelectingDealer = state.isSelectingDealer && canChangeDealer,
             )
         }
         persistDialog()

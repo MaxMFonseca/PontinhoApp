@@ -152,6 +152,9 @@
     <string name="round_status_empty">Pontos ainda não registrados</string>
     <string name="round_status_not_participating">Não participou desta rodada</string>
     <string name="deals_cards">Dá as cartas</string>
+    <string name="match_change_dealer">Trocar quem dá as cartas</string>
+    <string name="match_select_dealer">Escolher %1$s para dar as cartas</string>
+    <string name="match_keep_dealer">Manter %1$s dando as cartas</string>
     <string name="player_name_title">Nome do jogador</string>
     <string name="player_name_label">Nome</string>
     <string name="player_name_duplicate_error">Já existe um jogador com esse nome nesta partida.</string>

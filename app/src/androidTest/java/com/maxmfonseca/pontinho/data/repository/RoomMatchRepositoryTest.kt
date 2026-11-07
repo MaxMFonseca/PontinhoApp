@@ -621,6 +621,49 @@ class RoomMatchRepositoryTest {
         assertEquals(state.participants.last().id, snapshot(id).rounds[0].dealerParticipantId)
     }
 
+    @Test fun dealerCanChangeBetweenRoundsAndControlsUpcomingRotation() = runBlocking {
+        val id = create(3)
+        val roster = snapshot(id).participants
+        val selected = roster[1].id
+
+        clock.time = clock.time.plusSeconds(30)
+        repo.changeDealer(ChangeDealer(id, selected))
+
+        val changed = snapshot(id)
+        assertEquals(selected, changed.dealerParticipantId)
+        assertEquals(clock.time, changed.lastPlayedAt)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        assertEquals(selected, snapshot(id).rounds.single().dealerParticipantId)
+        submit(id, round, 1, 20)
+        assertEquals(roster[2].id, snapshot(id).dealerParticipantId)
+    }
+
+    @Test fun dealerChangeRejectsForeignStartedAndPausedRoundsWithoutMutation() = runBlocking {
+        val id = create(3)
+        val foreign = snapshot(create()).participants.first().id
+        val roster = snapshot(id).participants
+
+        val beforeForeign = snapshot(id)
+        rejected { repo.changeDealer(ChangeDealer(id, foreign)) }
+        assertEquals(beforeForeign, snapshot(id))
+
+        val first = start(id)
+        submit(id, first, 0, 10)
+        val whileStarted = snapshot(id)
+        rejected { repo.changeDealer(ChangeDealer(id, roster[1].id)) }
+        assertEquals(whileStarted, snapshot(id))
+
+        submit(id, first, 1, 20)
+        val second = start(id)
+        submit(id, second, 0, 7)
+        repo.removeRoundEntry(RemoveRoundEntry(id, first, roster[2].id))
+        val whilePaused = snapshot(id)
+        assertTrue(whilePaused.pausedRounds.isNotEmpty())
+        rejected { repo.changeDealer(ChangeDealer(id, roster[1].id)) }
+        assertEquals(whilePaused, snapshot(id))
+    }
+
     @Test fun namedLateJoinRollsBackGlobalPlayerWhenParticipantInsertFails() = runBlocking {
         val id = create()
         val before = snapshot(id)

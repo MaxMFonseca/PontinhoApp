@@ -25,6 +25,7 @@ data class AddPlayerToMatch(val matchId: MatchId, val operationToken: String, va
 class DuplicatePlayerNameException : IllegalArgumentException("Duplicate player name")
 
 data class ReorderParticipants(val matchId: MatchId, val participantIds: List<ParticipantId>)
+data class ChangeDealer(val matchId: MatchId, val participantId: ParticipantId)
 data class PrepareRound(val matchId: MatchId, val indicator: Indicator? = null)
 data class UpdateRoundIndicator(val matchId: MatchId, val roundId: RoundId, val indicator: Indicator?)
 /** Transient round preparation. Discarding it changes no persistent match state. */
@@ -143,6 +144,8 @@ interface MatchRepository {
      */
     suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId
     suspend fun reorderParticipants(command: ReorderParticipants)
+    /** Changes the dealer for the upcoming round. Rejected after that round has started. */
+    suspend fun changeDealer(command: ChangeDealer): Unit = error("Changing dealer is not implemented")
     /** Reads and prepares the next round; only its first score/designation persists it. */
     suspend fun prepareRound(command: PrepareRound): PreparedRound
     /** Updates only round metadata, including for completed rounds and finished matches. */

@@ -393,6 +393,52 @@ class MatchScreenTest {
         compose.onNodeWithTag("match_add_player").assertDoesNotExist()
     }
 
+    @Test fun dealerHandEntersInlineSelectionAndAnyPlayerHandCompletesIt() {
+        var state by mutableStateOf(fixture(3).copy(canChangeDealer = true))
+        var selected: ParticipantId? = null
+        var entries = 0
+        compose.setContent { PontinhoTheme {
+            MatchScreen(state, {}, {}, {}, {}, {}, {}, {}, {}, {},
+                onBeginDealerSelection = {
+                    entries++
+                    state = state.copy(isSelectingDealer = true)
+                },
+                onSelectDealer = {
+                    selected = it
+                    state = state.copy(isSelectingDealer = false)
+                })
+        } }
+
+        fun playerBounds(id: String) = listOf(
+            "match_player_$id",
+            "player_identity",
+            "player_name",
+            "player_total",
+            "player_action",
+            "player_round_history",
+        ).map { tag ->
+            compose.onNode(hasTestTag(tag) and if (tag == "match_player_$id")
+                SemanticsMatcher("root card") { true }
+            else hasAnyAncestor(hasTestTag("match_player_$id")))
+                .fetchSemanticsNode().boundsInRoot
+        }
+
+        compose.onAllNodesWithTag("dealer_hand").assertCountEquals(1)
+        val beforeSelection = playerBounds("p1")
+        compose.onNode(hasTestTag("dealer_hand") and hasAnyAncestor(hasTestTag("match_player_p0")))
+            .assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals(1, entries) }
+        compose.onAllNodesWithTag("dealer_hand").assertCountEquals(3)
+        assertEquals("Dealer selection must not move or resize card content", beforeSelection, playerBounds("p1"))
+        compose.onNode(hasTestTag("dealer_hand") and hasAnyAncestor(hasTestTag("match_player_p1")))
+            .assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals(ParticipantId("p1"), selected) }
+        compose.onAllNodesWithTag("dealer_hand").assertCountEquals(1)
+
+        compose.runOnIdle { state = state.copy(canChangeDealer = false) }
+        compose.onNodeWithTag("dealer_hand").assertIsDisplayed().assertHasNoClickAction()
+    }
+
     @Test fun lateNameDialogFocusCopyValidationAndConfirmation() {
         var name by mutableStateOf("")
         var confirmed = false

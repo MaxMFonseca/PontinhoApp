@@ -910,6 +910,59 @@ class MatchViewModelTest {
         assertFalse(vm.uiState.value.canReorderPlayers)
     }
 
+    @Test fun dealerSelectionChangesTheUpcomingDealerAndSelectingCurrentDealerOnlyCloses() = runTest {
+        val storage = ScoringRepository()
+        val commands = mutableListOf<ChangeDealer>()
+        val repository = object : MatchRepository by storage {
+            override suspend fun changeDealer(command: ChangeDealer) {
+                commands += command
+                storage.snapshot.value = storage.snapshot.value!!.copy(dealerParticipantId = command.participantId)
+            }
+        }
+        val vm = MatchViewModel(storage.snapshot.value!!.id, repository, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        val original = storage.snapshot.value!!.dealerParticipantId
+        val replacement = storage.ids[1]
+
+        assertTrue(vm.uiState.value.canChangeDealer)
+        vm.beginDealerSelection()
+        assertTrue(vm.uiState.value.isSelectingDealer)
+        vm.selectDealer(original)
+        assertFalse(vm.uiState.value.isSelectingDealer)
+        assertTrue(commands.isEmpty())
+
+        vm.beginDealerSelection()
+        vm.selectDealer(replacement)
+        runCurrent()
+        assertFalse(vm.uiState.value.isSelectingDealer)
+        assertEquals(listOf(ChangeDealer(storage.snapshot.value!!.id, replacement)), commands)
+        assertEquals(replacement, vm.uiState.value.players.single { it.isDealer }.id)
+    }
+
+    @Test fun dealerSelectionClosesOnFailureAndWhenTheRoundIsNoLongerNew() = runTest {
+        val storage = ScoringRepository()
+        val initial = storage.snapshot.value!!
+        val repository = object : MatchRepository by storage {
+            override suspend fun changeDealer(command: ChangeDealer) = error("Unavailable")
+        }
+        val vm = MatchViewModel(initial.id, repository, StandardTestDispatcher(testScheduler))
+        runCurrent()
+
+        vm.beginDealerSelection()
+        vm.selectDealer(storage.ids[1])
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.isSelectingDealer)
+        assertTrue(vm.uiState.value.hasError)
+        assertEquals(initial.dealerParticipantId, vm.uiState.value.players.single { it.isDealer }.id)
+
+        vm.beginDealerSelection()
+        assertTrue(vm.uiState.value.isSelectingDealer)
+        storage.snapshot.value = initial.copy(rounds = listOf(storage.round(1, RoundDraft(storage.ids))))
+        runCurrent()
+        assertFalse(vm.uiState.value.canChangeDealer)
+        assertFalse(vm.uiState.value.isSelectingDealer)
+    }
+
     @Test fun correctionsPreloadExplicitScoreAndProtectAutomaticZero() = runTest {
         val repo = ScoringRepository()
         val vm = MatchViewModel(repo.snapshot.value!!.id, repo, StandardTestDispatcher(testScheduler))

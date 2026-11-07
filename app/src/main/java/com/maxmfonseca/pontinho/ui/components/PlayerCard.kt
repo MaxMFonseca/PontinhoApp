@@ -32,6 +32,7 @@ fun PlayerCard(
     modifier: Modifier = Modifier, historyScrollState: ScrollState = rememberScrollState(),
     showScoreAction: Boolean = true, historyColumnWidth: Dp = 48.dp,
     onEditScore: ((Int) -> Unit)? = null, dragHandle: (@Composable () -> Unit)? = null,
+    dealerSelectionActive: Boolean = false, onDealerClick: (() -> Unit)? = null,
 ) {
     Card(modifier = modifier, shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -49,7 +50,10 @@ fun PlayerCard(
                 measurer.measure(text, style, softWrap = false, maxLines = 1).size.width.toDp()
             }
             val nameWidth = textWidth(playerName, nameStyle).coerceAtMost(100.dp)
-            val dealerWidth = if (isDealer) 24.dp else 0.dp
+            val showDealerHand = isDealer || dealerSelectionActive
+            // Keep this slot measured at one size in every state. The larger touch target
+            // may overflow it, but entering dealer selection must never reflow the card.
+            val dealerWidth = 24.dp
             val controlsWidth = (if (dragHandle != null) 48.dp else 0.dp) +
                 (if (showScoreAction) 48.dp else 0.dp)
             val compact = controlsWidth + 24.dp + nameWidth + dealerWidth + 8.dp +
@@ -66,10 +70,28 @@ fun PlayerCard(
                     Text(playerName, style = nameStyle, maxLines = 1, softWrap = false,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.width(renderedNameWidth).alignByBaseline().testTag("player_name"))
-                    if (isDealer) {
-                        Spacer(Modifier.width(4.dp))
-                        Icon(painterResource(R.drawable.ic_dealer_hand), stringResource(R.string.deals_cards),
-                            Modifier.size(20.dp).testTag("dealer_hand"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(4.dp))
+                    Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                        if (showDealerHand) {
+                            val handTint = if (isDealer) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            if (onDealerClick != null) {
+                                val label = stringResource(when {
+                                    dealerSelectionActive && isDealer -> R.string.match_keep_dealer
+                                    dealerSelectionActive -> R.string.match_select_dealer
+                                    else -> R.string.match_change_dealer
+                                }, playerName)
+                                IconButton(onClick = onDealerClick,
+                                    modifier = Modifier.requiredSize(48.dp).testTag("dealer_hand")
+                                        .semantics { selected = isDealer }) {
+                                    Icon(painterResource(R.drawable.ic_dealer_hand), label,
+                                        Modifier.size(20.dp), tint = handTint)
+                                }
+                            } else {
+                                Icon(painterResource(R.drawable.ic_dealer_hand), stringResource(R.string.deals_cards),
+                                    Modifier.size(20.dp).testTag("dealer_hand"), tint = handTint)
+                            }
+                        }
                     }
                     Spacer(Modifier.weight(1f))
                     Text(total.toString(), style = totalStyle, maxLines = 1, softWrap = false,

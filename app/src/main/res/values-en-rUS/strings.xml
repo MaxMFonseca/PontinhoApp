@@ -152,6 +152,9 @@
     <string name="round_status_empty">Score not entered yet</string>
     <string name="round_status_not_participating">Did not participate in this round</string>
     <string name="deals_cards">Deals the cards</string>
+    <string name="match_change_dealer">Change dealer</string>
+    <string name="match_select_dealer">Set %1$s as dealer</string>
+    <string name="match_keep_dealer">Keep %1$s as dealer</string>
     <string name="player_name_title">Player name</string>
     <string name="player_name_label">Name</string>
     <string name="player_name_duplicate_error">A player with this name is already in this match.</string>

@@ -183,6 +183,18 @@ class RoomMatchRepository(
         matches.updateMatch(match.copy(lastPlayedAt = clock.millis()))
     }
 
+    override suspend fun changeDealer(command: ChangeDealer) = db.withTransaction {
+        val match = activeMatch(command.matchId)
+        betweenRounds(match.id)
+        require(matches.participants(match.id).any { it.id == command.participantId.value }) {
+            "Dealer must belong to the match"
+        }
+        matches.updateMatch(match.copy(
+            dealerParticipantId = command.participantId.value,
+            lastPlayedAt = clock.millis(),
+        ))
+    }
+
     override suspend fun prepareRound(command: PrepareRound): PreparedRound = db.withTransaction {
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
