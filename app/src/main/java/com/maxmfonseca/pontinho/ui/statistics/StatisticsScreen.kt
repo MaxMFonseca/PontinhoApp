@@ -64,6 +64,13 @@ fun StatisticsScreen(
             maximumFractionDigits = 1
         }
     }
+    val averageFormat = remember(localeTag) {
+        NumberFormat.getNumberInstance(Locale.forLanguageTag(localeTag)).apply {
+            minimumFractionDigits = 1
+            maximumFractionDigits = 1
+            isGroupingUsed = false
+        }
+    }
     val locale = remember(localeTag) { Locale.forLanguageTag(localeTag) }
     val dateFormat = remember(localeTag) { DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale) }
     var datePickerTarget by remember { mutableStateOf<DatePickerTarget?>(null) }
@@ -101,7 +108,7 @@ fun StatisticsScreen(
             )
         }
         item {
-            Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
                 StatisticsSortField.entries.forEach { field ->
                     SortControl(field, state, { onSelectSort(field) }, Modifier.weight(1f))
                 }
@@ -123,7 +130,11 @@ fun StatisticsScreen(
                 PontinhoInfoBanner(R.string.statistics_no_results, Modifier.padding(horizontal = 16.dp))
             }
             else -> items(state.players, key = { it.playerKey.value }) { player ->
-                StatisticsPlayerCard(player, percentFormat.format(player.winRate))
+                StatisticsPlayerCard(
+                    player = player,
+                    winRate = percentFormat.format(player.winRate),
+                    averagePoints = averageFormat.format(player.averagePointsPerMatch),
+                )
             }
         }
     }
@@ -263,6 +274,7 @@ private fun SortControl(field: StatisticsSortField, state: StatisticsUiState, on
                 StatisticsSortField.WINS -> Icon(Icons.Filled.Star, null, iconModifier)
                 StatisticsSortField.WIN_RATE -> Icon(painterResource(R.drawable.ic_percent), null, iconModifier)
                 StatisticsSortField.POINTS -> Icon(painterResource(R.drawable.ic_points), null, iconModifier)
+                StatisticsSortField.AVERAGE_POINTS -> Icon(painterResource(R.drawable.ic_average_points), null, iconModifier)
             }
             if (isSelected) {
                 Icon(if (direction == StatisticsSortDirection.ASCENDING) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -279,10 +291,11 @@ private fun StatisticsSortField.labelResource(): Int = when (this) {
     StatisticsSortField.WINS -> R.string.statistics_wins
     StatisticsSortField.WIN_RATE -> R.string.statistics_win_rate
     StatisticsSortField.POINTS -> R.string.statistics_points
+    StatisticsSortField.AVERAGE_POINTS -> R.string.statistics_average_points
 }
 
 @Composable
-private fun StatisticsPlayerCard(player: LifetimePlayerStatistics, winRate: String) {
+private fun StatisticsPlayerCard(player: LifetimePlayerStatistics, winRate: String, averagePoints: String) {
     val stackMetrics = LocalDensity.current.fontScale >= 1.5f
     Card(
         modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth().testTag("statistics_player_${player.playerKey.value}"),
@@ -297,6 +310,7 @@ private fun StatisticsPlayerCard(player: LifetimePlayerStatistics, winRate: Stri
                 StatisticsMetric(R.string.statistics_wins, player.wins.toString())
                 StatisticsMetric(R.string.statistics_win_rate, winRate)
                 StatisticsMetric(R.string.statistics_points, player.points.toString())
+                StatisticsMetric(R.string.statistics_average_points, averagePoints)
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     StatisticsMetric(R.string.statistics_matches, player.completedMatches.toString(), Modifier.weight(1f))
@@ -306,6 +320,7 @@ private fun StatisticsPlayerCard(player: LifetimePlayerStatistics, winRate: Stri
                     StatisticsMetric(R.string.statistics_win_rate, winRate, Modifier.weight(1f))
                     StatisticsMetric(R.string.statistics_points, player.points.toString(), Modifier.weight(1f))
                 }
+                StatisticsMetric(R.string.statistics_average_points, averagePoints)
             }
         }
     }

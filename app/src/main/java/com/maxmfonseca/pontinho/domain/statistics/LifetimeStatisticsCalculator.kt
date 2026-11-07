@@ -34,6 +34,7 @@ data class LifetimePlayerStatistics(
     val points: Long,
 ) {
     val winRate: Double get() = wins.toDouble() / completedMatches
+    val averagePointsPerMatch: Double get() = if (completedMatches == 0) 0.0 else points.toDouble() / completedMatches
 }
 
 fun calculateLifetimeStatistics(

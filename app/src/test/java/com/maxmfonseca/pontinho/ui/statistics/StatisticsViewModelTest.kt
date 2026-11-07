@@ -203,6 +203,7 @@ class StatisticsViewModelTest {
             StatisticsSortField.WINS to listOf("ana", "carla", "bruno", "dora"),
             StatisticsSortField.WIN_RATE to listOf("ana", "dora", "carla", "bruno"),
             StatisticsSortField.POINTS to listOf("bruno", "ana", "carla", "dora"),
+            StatisticsSortField.AVERAGE_POINTS to listOf("bruno", "dora", "ana", "carla"),
         )
         for ((field, expected) in cases) {
             val vm = StatisticsViewModel(SavedStateHandle(), repository(), StandardTestDispatcher(testScheduler))
@@ -223,6 +224,7 @@ class StatisticsViewModelTest {
             StatisticsSortField.WINS to listOf("dora", "bruno", "ana", "carla"),
             StatisticsSortField.WIN_RATE to listOf("bruno", "carla", "ana", "dora"),
             StatisticsSortField.POINTS to listOf("dora", "ana", "carla", "bruno"),
+            StatisticsSortField.AVERAGE_POINTS to listOf("carla", "ana", "dora", "bruno"),
         )
         for ((field, expected) in cases) {
             val vm = StatisticsViewModel(SavedStateHandle(), repository(), StandardTestDispatcher(testScheduler))
@@ -290,6 +292,42 @@ class StatisticsViewModelTest {
         vm.selectSort(StatisticsSortField.WIN_RATE)
         runCurrent()
         assertEquals(listOf("ana", "zeta"), vm.keys())
+    }
+
+    @Test fun averagePointsUsesExactRatiosBeforePlayerKeysWhenDisplayedValuesAreEqual() = runTest {
+        val repo = repository(listOf(
+            player("zeta", "Zeta", 3_000, 0, 10_001),
+            player("bruno", "Bruno", 6, 0, 20),
+            player("ana", "Ana", 3, 0, 10),
+        ))
+        val vm = StatisticsViewModel(SavedStateHandle(), repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+
+        vm.selectSort(StatisticsSortField.AVERAGE_POINTS)
+        runCurrent()
+        assertEquals(listOf("zeta", "ana", "bruno"), vm.keys())
+
+        vm.selectSort(StatisticsSortField.AVERAGE_POINTS)
+        runCurrent()
+        assertEquals(listOf("ana", "bruno", "zeta"), vm.keys())
+    }
+
+    @Test fun averagePointsCrossProductsDoNotOverflowForLargeTotals() = runTest {
+        val repo = repository(listOf(
+            player("ana", "Ana", 3, 0, Long.MAX_VALUE),
+            player("zeta", "Zeta", 2, 0, Long.MAX_VALUE - 1),
+            player("empty", "Empty", 0, 0, Long.MAX_VALUE),
+        ))
+        val vm = StatisticsViewModel(SavedStateHandle(), repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+
+        vm.selectSort(StatisticsSortField.AVERAGE_POINTS)
+        runCurrent()
+        assertEquals(listOf("zeta", "ana", "empty"), vm.keys())
+
+        vm.selectSort(StatisticsSortField.AVERAGE_POINTS)
+        runCurrent()
+        assertEquals(listOf("empty", "ana", "zeta"), vm.keys())
     }
 
     @Test fun queryIgnoresCaseAccentsAndOuterWhitespaceWithoutMergingIdentities() = runTest {
@@ -434,6 +472,23 @@ class StatisticsViewModelTest {
         assertEquals(StatisticsSortField.POINTS, recreated.uiState.value.sortField)
         assertEquals(StatisticsSortDirection.ASCENDING, recreated.uiState.value.sortDirection)
         assertEquals(listOf("dora", "ana", "carla"), recreated.keys())
+    }
+
+    @Test fun averagePointsSortAndDirectionRestoreFromSavedState() = runTest {
+        val saved = SavedStateHandle()
+        val repo = repository()
+        val vm = StatisticsViewModel(saved, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.selectSort(StatisticsSortField.AVERAGE_POINTS)
+        vm.selectSort(StatisticsSortField.AVERAGE_POINTS)
+        runCurrent()
+
+        val recreated = StatisticsViewModel(saved, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+
+        assertEquals(StatisticsSortField.AVERAGE_POINTS, recreated.uiState.value.sortField)
+        assertEquals(StatisticsSortDirection.ASCENDING, recreated.uiState.value.sortDirection)
+        assertEquals(listOf("carla", "ana", "dora", "bruno"), recreated.keys())
     }
 
     private fun StatisticsViewModel.keys() = uiState.value.players.map { it.playerKey.value }

@@ -16,6 +16,7 @@
     <string name="statistics_wins">Vitórias</string>
     <string name="statistics_win_rate">Taxa de vitórias</string>
     <string name="statistics_points">Pontos acumulados</string>
+    <string name="statistics_average_points">Média de pontos por partida</string>
     <string name="statistics_ascending">crescente</string>
     <string name="statistics_descending">decrescente</string>
     <string name="statistics_sort_description">Ordenar por %1$s, %2$s</string>

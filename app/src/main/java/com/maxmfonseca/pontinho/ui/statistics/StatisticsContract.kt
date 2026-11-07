@@ -3,7 +3,7 @@ package com.maxmfonseca.pontinho.ui.statistics
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import java.time.LocalDate
 
-enum class StatisticsSortField { NAME, MATCHES, WINS, WIN_RATE, POINTS }
+enum class StatisticsSortField { NAME, MATCHES, WINS, WIN_RATE, POINTS, AVERAGE_POINTS }
 
 enum class StatisticsSortDirection { ASCENDING, DESCENDING }
 

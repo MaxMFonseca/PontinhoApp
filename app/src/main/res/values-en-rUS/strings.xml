@@ -16,6 +16,7 @@
     <string name="statistics_wins">Wins</string>
     <string name="statistics_win_rate">Win rate</string>
     <string name="statistics_points">Accumulated points</string>
+    <string name="statistics_average_points">Average points per match</string>
     <string name="statistics_ascending">ascending</string>
     <string name="statistics_descending">descending</string>
     <string name="statistics_sort_description">Sort by %1$s, %2$s</string>

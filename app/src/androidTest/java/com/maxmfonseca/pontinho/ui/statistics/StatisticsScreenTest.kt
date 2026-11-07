@@ -40,7 +40,7 @@ class StatisticsScreenTest {
 
     private val player = LifetimePlayerStatistics(PlayerNameKey("joão"), "João", 8, 5, 3_000_000_123L)
     private val populated = StatisticsUiState(players = listOf(player), hasStatistics = true, isLoading = false)
-    private val fields = listOf("name", "matches", "wins", "win_rate", "points")
+    private val fields = listOf("name", "matches", "wins", "win_rate", "points", "average_points")
 
     @Test fun completionDateControlsOpenPickersAndClearTheInclusiveRange() {
         var state by mutableStateOf(populated.copy(
@@ -122,7 +122,7 @@ class StatisticsScreenTest {
         compose.onNodeWithTag("statistics_clear").assertDoesNotExist()
     }
 
-    @Test fun fiveAccessibleSortTargetsShareOneRowAndForwardTheCorrectField() {
+    @Test fun sixAccessibleSortTargetsShareOneRowAndForwardTheCorrectField() {
         val selected = mutableListOf<StatisticsSortField>()
         compose.setContent { LocalizedSurface { StatisticsScreen(populated, {}, {}, {}, {}, selected::add) } }
         val root = compose.onNodeWithTag("statistics_root")
@@ -130,7 +130,7 @@ class StatisticsScreenTest {
         compose.onAllNodes(SemanticsMatcher("sort control") {
             it.config.getOrElse(SemanticsProperties.TestTag) { "" }
                 .startsWith("statistics_sort_")
-        }).assertCountEquals(5)
+        }).assertCountEquals(6)
         val bounds = fields.map { field ->
             val control = compose.onNodeWithTag("statistics_sort_$field")
                 .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
@@ -141,7 +141,7 @@ class StatisticsScreenTest {
         assertTrue(bounds.zipWithNext().all { (left, right) -> left.right <= right.left })
         compose.runOnIdle {
             assertEquals(listOf(StatisticsSortField.NAME, StatisticsSortField.MATCHES, StatisticsSortField.WINS,
-                StatisticsSortField.WIN_RATE, StatisticsSortField.POINTS), selected)
+                StatisticsSortField.WIN_RATE, StatisticsSortField.POINTS, StatisticsSortField.AVERAGE_POINTS), selected)
         }
     }
 
@@ -155,6 +155,8 @@ class StatisticsScreenTest {
             .assertContentDescriptionEquals("Ordenar por Nome, crescente")
         compose.onNodeWithTag("statistics_sort_points").assertIsNotSelected()
             .assertContentDescriptionEquals("Ordenar por Pontos acumulados, decrescente")
+        compose.onNodeWithTag("statistics_sort_average_points").assertIsNotSelected()
+            .assertContentDescriptionEquals("Ordenar por Média de pontos por partida, decrescente")
         compose.runOnIdle { state = state.copy(sortField = StatisticsSortField.POINTS, sortDirection = StatisticsSortDirection.ASCENDING) }
         compose.onNodeWithTag("statistics_sort_wins").assertIsNotSelected()
         compose.onNodeWithTag("statistics_sort_points").assertIsSelected()
@@ -202,9 +204,9 @@ class StatisticsScreenTest {
             root.performScrollToNode(hasTestTag("statistics_player_joão"))
             compose.onAllNodesWithTag("statistics_player_joão").assertCountEquals(1)
             val expected = if (language == "pt-BR") {
-                listOf("João", "Partidas concluídas", "8", "Vitórias", "5", "Taxa de vitórias", "62,5%", "Pontos acumulados", "3000000123")
+                listOf("João", "Partidas concluídas", "8", "Vitórias", "5", "Taxa de vitórias", "62,5%", "Pontos acumulados", "3000000123", "Média de pontos por partida", "375000015,4")
             } else {
-                listOf("João", "Completed matches", "8", "Wins", "5", "Win rate", "62.5%", "Accumulated points", "3000000123")
+                listOf("João", "Completed matches", "8", "Wins", "5", "Win rate", "62.5%", "Accumulated points", "3000000123", "Average points per match", "375000015.4")
             }
             expected.forEach { text ->
                 val node = compose.onNodeWithText(text).performScrollTo().assertIsDisplayed()

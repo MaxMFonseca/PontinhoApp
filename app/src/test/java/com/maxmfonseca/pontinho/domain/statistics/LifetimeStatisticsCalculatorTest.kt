@@ -14,6 +14,14 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 class LifetimeStatisticsCalculatorTest {
+    @Test fun averagePointsPerMatchUsesAccumulatedPointsAndGuardsEmptyRows() {
+        val player = LifetimePlayerStatistics(PlayerNameKey("ana"), "Ana", 2, 1, 25L)
+        val empty = LifetimePlayerStatistics(PlayerNameKey("bruno"), "Bruno", 0, 0, 0L)
+
+        assertEquals(12.5, player.averagePointsPerMatch, 0.0)
+        assertEquals(0.0, empty.averagePointsPerMatch, 0.0)
+    }
+
     @Test fun aggregatesCompletedMatchesAcrossDaysAndExcludesActiveMatches() {
         val older = match("older", "2026-10-13T12:00:00Z", listOf("Ana" to 10, "Bruno" to 110), setOf(0))
         val newer = match("newer", "2026-10-14T12:00:00Z", listOf("Ana" to 20, "Bruno" to 101), setOf(0))

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.math.BigInteger
 import java.text.Normalizer
 import java.time.LocalDate
 import java.util.Locale
@@ -181,6 +182,13 @@ class StatisticsViewModel(
                     StatisticsSortField.WIN_RATE -> (left.wins.toLong() * right.completedMatches)
                         .compareTo(right.wins.toLong() * left.completedMatches)
                     StatisticsSortField.POINTS -> left.points.compareTo(right.points)
+                    StatisticsSortField.AVERAGE_POINTS -> {
+                        val leftPoints = if (left.completedMatches == 0) BigInteger.ZERO else BigInteger.valueOf(left.points)
+                        val rightPoints = if (right.completedMatches == 0) BigInteger.ZERO else BigInteger.valueOf(right.points)
+                        leftPoints.multiply(BigInteger.valueOf(right.completedMatches.coerceAtLeast(1).toLong())).compareTo(
+                            rightPoints.multiply(BigInteger.valueOf(left.completedMatches.coerceAtLeast(1).toLong())),
+                        )
+                    }
                     StatisticsSortField.NAME -> error("Name sorting is handled separately")
                 }
             }
