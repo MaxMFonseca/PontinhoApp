@@ -173,7 +173,7 @@
     <string name="setup_create_match">Create match</string>
     <string name="setup_blank_name_error">Enter a name.</string>
     <string name="setup_replace_title">Replace players?</string>
-    <string name="setup_replace_message">The current list will be replaced with the players from the last match.</string>
+    <string name="setup_replace_message">The player list and opening dealer will be replaced with the data from the last match.</string>
     <string name="setup_replace_action">Replace</string>
     <string name="setup_remove_player">Remove %1$s</string>
     <string name="setup_move_up">Move %1$s up</string>

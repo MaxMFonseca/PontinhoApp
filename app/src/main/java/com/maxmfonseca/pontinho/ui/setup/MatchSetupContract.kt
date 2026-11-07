@@ -22,6 +22,7 @@ data class MatchSetupUiState(
     val initialDealerDraftId: String? = players.firstOrNull()?.draftId,
     val nameDialog: PlayerNameDialogState? = null,
     val latestMatchPlayers: List<DraftPlayer> = emptyList(),
+    val latestMatchDealerPlayerId: PlayerId? = null,
     val showReplaceConfirmation: Boolean = false,
     val isCreating: Boolean = false,
     val createError: Boolean = false,

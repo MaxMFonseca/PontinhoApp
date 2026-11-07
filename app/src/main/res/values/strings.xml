@@ -174,7 +174,7 @@
     <string name="setup_create_match">Criar partida</string>
     <string name="setup_blank_name_error">Digite um nome.</string>
     <string name="setup_replace_title">Substituir jogadores?</string>
-    <string name="setup_replace_message">A lista atual será substituída pelos jogadores da última partida.</string>
+    <string name="setup_replace_message">A lista de jogadores e a mão inicial serão substituídas pelos dados da última partida.</string>
     <string name="setup_replace_action">Substituir</string>
     <string name="setup_remove_player">Remover %1$s</string>
     <string name="setup_move_up">Mover %1$s para cima</string>

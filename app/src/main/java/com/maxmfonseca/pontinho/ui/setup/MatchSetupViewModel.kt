@@ -49,7 +49,15 @@ class MatchSetupViewModel(
                 val latestPlayers = latest?.participants?.sortedBy { it.rosterOrder }?.map { participant ->
                     DraftPlayer(newDraftId(), participant.playerId, participant.displayName)
                 }.orEmpty()
-                mutableUiState.update { it.copy(latestMatchPlayers = latestPlayers) }
+                val latestDealerPlayerId = latest?.participants
+                    ?.firstOrNull { it.id == latest.dealerParticipantId }
+                    ?.playerId
+                mutableUiState.update {
+                    it.copy(
+                        latestMatchPlayers = latestPlayers,
+                        latestMatchDealerPlayerId = latestDealerPlayerId,
+                    )
+                }
             }
         }
         val committed = savedStateHandle.get<String>(COMMITTED_MATCH_ID)
@@ -143,14 +151,16 @@ class MatchSetupViewModel(
     fun requestUseLastMatch() {
         val state = mutableUiState.value
         if (state.isCreating || state.latestMatchPlayers.isEmpty()) return
-        if (state.players.isEmpty()) replaceWithLatest(state.latestMatchPlayers)
+        if (state.players.isEmpty()) replaceWithLatest(state.latestMatchPlayers, state.latestMatchDealerPlayerId)
         else mutableUiState.update { it.copy(showReplaceConfirmation = true) }
     }
 
     fun dismissUseLastMatchConfirmation() = updateIfEditable { it.copy(showReplaceConfirmation = false) }
     fun confirmUseLastMatch() {
-        val latest = mutableUiState.value.latestMatchPlayers
-        if (latest.isNotEmpty()) replaceWithLatest(latest)
+        val state = mutableUiState.value
+        if (state.latestMatchPlayers.isNotEmpty()) {
+            replaceWithLatest(state.latestMatchPlayers, state.latestMatchDealerPlayerId)
+        }
     }
 
     fun cancel() { eventChannel.trySend(MatchSetupEvent.Close) }
@@ -198,9 +208,24 @@ class MatchSetupViewModel(
         }
     }
 
-    private fun replaceWithLatest(latest: List<DraftPlayer>) {
-        changePlayers { latest.map { it.copy(draftId = newDraftId()) } }
-        mutableUiState.update { it.copy(showReplaceConfirmation = false) }
+    private fun replaceWithLatest(latest: List<DraftPlayer>, dealerPlayerId: PlayerId?) {
+        var persisted: Pair<List<DraftPlayer>, String?>? = null
+        mutableUiState.update { state ->
+            if (state.isCreating) state else {
+                val players = latest.map { it.copy(draftId = newDraftId()) }
+                val selected = dealerPlayerId
+                    ?.let { playerId -> players.firstOrNull { it.playerId == playerId } }
+                    ?.draftId
+                    ?: players.firstOrNull()?.draftId
+                persisted = players to selected
+                state.copy(
+                    players = players,
+                    initialDealerDraftId = selected,
+                    showReplaceConfirmation = false,
+                )
+            }
+        }
+        persisted?.let { (players, selected) -> persistDraft(players, selected) }
     }
 
     private fun changePlayers(transform: (List<DraftPlayer>) -> List<DraftPlayer>) {

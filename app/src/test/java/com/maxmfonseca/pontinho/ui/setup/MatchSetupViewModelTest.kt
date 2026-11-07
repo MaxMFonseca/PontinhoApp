@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.setup
 
 import androidx.lifecycle.SavedStateHandle
 import com.maxmfonseca.pontinho.domain.model.MatchId
+import com.maxmfonseca.pontinho.domain.model.ParticipantId
 import com.maxmfonseca.pontinho.domain.model.PlayerId
 import com.maxmfonseca.pontinho.domain.repository.DaySummary
 import com.maxmfonseca.pontinho.ui.test.FakeMatchRepository
@@ -260,13 +261,14 @@ class MatchSetupViewModelTest {
     }
 
     @Test
-    fun lastMatchReplacesEmptyDraftImmediatelyAndNonemptyDraftAfterConfirmation() {
-        val latest = matchSnapshot(
+    fun lastMatchReusesAdvancedDealerImmediatelyAfterConfirmationAndRestoration() {
+        val latestWithoutDealer = matchSnapshot(
             id = "latest",
             date = LocalDate.parse("2026-10-14"),
             lastPlayedEpochSecond = 20,
             players = listOf("p1" to "Ana", "p2" to "Bruno"),
         )
+        val latest = latestWithoutDealer.copy(dealerParticipantId = latestWithoutDealer.participants[1].id)
         val older = matchSnapshot(
             id = "older",
             date = LocalDate.parse("2026-10-13"),
@@ -281,10 +283,14 @@ class MatchSetupViewModelTest {
                 ),
             ),
         )
-        val viewModel = viewModel(matches = matches)
+        val saved = SavedStateHandle()
+        val viewModel = MatchSetupViewModel(saved, matches, Dispatchers.Unconfined)
 
         viewModel.requestUseLastMatch()
         assertEquals(listOf("Ana", "Bruno"), viewModel.uiState.value.players.map { it.displayName })
+        assertEquals(PlayerId("p2"), viewModel.uiState.value.players.single {
+            it.draftId == viewModel.uiState.value.initialDealerDraftId
+        }.playerId)
         add(viewModel, "Eva")
         viewModel.requestUseLastMatch()
 
@@ -292,6 +298,31 @@ class MatchSetupViewModelTest {
         assertEquals(listOf("Ana", "Bruno", "Eva"), viewModel.uiState.value.players.map { it.displayName })
         viewModel.confirmUseLastMatch()
         assertEquals(listOf("Ana", "Bruno"), viewModel.uiState.value.players.map { it.displayName })
+        assertEquals(PlayerId("p2"), viewModel.uiState.value.players.single {
+            it.draftId == viewModel.uiState.value.initialDealerDraftId
+        }.playerId)
+
+        val restored = MatchSetupViewModel(saved, matches, Dispatchers.Unconfined)
+        assertEquals(PlayerId("p2"), restored.uiState.value.players.single {
+            it.draftId == restored.uiState.value.initialDealerDraftId
+        }.playerId)
+    }
+
+    @Test fun lastMatchDealerFallsBackToFirstPlayerWhenTheSnapshotIsInconsistent() {
+        val latest = matchSnapshot(
+            id = "latest",
+            date = LocalDate.parse("2026-10-14"),
+            lastPlayedEpochSecond = 20,
+            players = listOf("p1" to "Ana", "p2" to "Bruno"),
+        ).copy(dealerParticipantId = ParticipantId("missing"))
+        val matches = FakeMatchRepository(MutableStateFlow(listOf(DaySummary(latest.localDate, listOf(latest)))))
+        val viewModel = viewModel(matches = matches)
+
+        viewModel.requestUseLastMatch()
+
+        assertEquals("Ana", viewModel.uiState.value.players.single {
+            it.draftId == viewModel.uiState.value.initialDealerDraftId
+        }.displayName)
     }
 
     @Test
