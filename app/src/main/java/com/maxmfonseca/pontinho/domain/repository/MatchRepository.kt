@@ -24,6 +24,8 @@ data class AddPlayerToMatch(val matchId: MatchId, val operationToken: String, va
 /** A roster command would include the same normalized name more than once in a match. */
 class DuplicatePlayerNameException : IllegalArgumentException("Duplicate player name")
 
+data class DeactivateParticipant(val matchId: MatchId, val participantId: ParticipantId)
+data class ReactivateParticipant(val matchId: MatchId, val participantId: ParticipantId)
 data class ReorderParticipants(val matchId: MatchId, val participantIds: List<ParticipantId>)
 data class ChangeDealer(val matchId: MatchId, val participantId: ParticipantId)
 data class PrepareRound(val matchId: MatchId, val indicator: Indicator? = null)
@@ -143,6 +145,8 @@ interface MatchRepository {
      * duplicate normalized names within a match throw [DuplicatePlayerNameException].
      */
     suspend fun addPlayerToMatch(command: AddPlayerToMatch): ParticipantId
+    suspend fun deactivateParticipant(command: DeactivateParticipant): Unit = error("Not implemented")
+    suspend fun reactivateParticipant(command: ReactivateParticipant): Unit = error("Not implemented")
     suspend fun reorderParticipants(command: ReorderParticipants)
     /** Changes the dealer for the upcoming round. Rejected after that round has started. */
     suspend fun changeDealer(command: ChangeDealer): Unit = error("Changing dealer is not implemented")

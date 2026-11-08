@@ -8,7 +8,7 @@ import java.time.Instant
 
 internal fun PlayerEntity.toDomain() = Player(PlayerId(id), displayName)
 internal fun MatchParticipantEntity.toDomain() = MatchParticipant(
-    ParticipantId(id), PlayerId(playerId), nameSnapshot, rosterOrder, eligibleFromRoundOrdinal,
+    ParticipantId(id), PlayerId(playerId), nameSnapshot, rosterOrder, eligibleFromRoundOrdinal, isActive,
 )
 
 internal fun RoundEntity.toDomain(
@@ -20,9 +20,13 @@ internal fun RoundEntity.toDomain(
     indicator = indicatorOrNull(),
     dealerParticipantId = ParticipantId(dealerParticipantId),
     draft = RoundDraft(
-        eligibleParticipants = participants.filter { it.eligibleFromRoundOrdinal <= ordinal }.map { ParticipantId(it.id) },
+        eligibleParticipants = participants.map { ParticipantId(it.id) },
         entries = scores.associate { ParticipantId(it.participantId) to RoundEntry(
-            it.points, if (it.origin == "AUTO_WINNER") RoundEntryOrigin.AUTOMATIC_WINNER else RoundEntryOrigin.EXPLICIT,
+            it.points, when (it.origin) {
+                "AUTO_WINNER" -> RoundEntryOrigin.AUTOMATIC_WINNER
+                "WITHDRAWN" -> RoundEntryOrigin.WITHDRAWN
+                else -> RoundEntryOrigin.EXPLICIT
+            },
         ) },
         winner = designatedWinnerParticipantId?.let {
             WinnerDesignation(ParticipantId(it), WinnerDesignationOrigin.valueOf(requireNotNull(designationOrigin)))

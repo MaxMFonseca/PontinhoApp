@@ -76,6 +76,8 @@ class DestinationTest {
 
     @Test
     fun parameterizedDestinationsEncodeArguments() {
+        assertEquals("manage-players/{matchId}", Destination.ManagePlayers.route)
+        assertEquals("manage-players/m%2Fa%20%2B%2525", Destination.ManagePlayers.createRoute("m/a +%25"))
         assertEquals("match/{matchId}", Destination.Match.route)
         assertEquals("match/match%2Fone", Destination.Match.createRoute("match/one"))
         assertEquals("day/{localDate}", Destination.DayHistory.route)

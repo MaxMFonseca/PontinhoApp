@@ -33,9 +33,12 @@ fun PlayerCard(
     showScoreAction: Boolean = true, historyColumnWidth: Dp = 48.dp,
     onEditScore: ((Int) -> Unit)? = null, dragHandle: (@Composable () -> Unit)? = null,
     dealerSelectionActive: Boolean = false, onDealerClick: (() -> Unit)? = null,
+    isActive: Boolean = true, onInactiveClick: (() -> Unit)? = null,
 ) {
-    Card(modifier = modifier, shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    val inactiveLabel = stringResource(R.string.match_inactive)
+    Card(modifier = modifier.then(if (!isActive) Modifier.semantics { stateDescription = inactiveLabel } else Modifier)
+        .then(if (onInactiveClick != null) Modifier.clickable(onClick = onInactiveClick) else Modifier), shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = if (isActive) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceVariant),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
@@ -99,7 +102,8 @@ fun PlayerCard(
                 }
             }
             val trailingControls: @Composable () -> Unit = {
-                if (showScoreAction) {
+                if (showScoreAction && !isActive) { Spacer(Modifier.size(48.dp)) }
+                else if (showScoreAction) {
                     val label = stringResource(R.string.match_add_score, playerName)
                     IconButton(onClick = { onAddScore?.invoke() }, enabled = onAddScore != null,
                         modifier = Modifier.size(48.dp).testTag("player_action").semantics { contentDescription = label }) {

@@ -26,6 +26,11 @@ sealed interface Destination {
         override val route = "match/{$MATCH_ID}"
         fun createRoute(matchId: String) = "match/${matchId.routeEncoded()}"
     }
+    data object ManagePlayers : Destination {
+        const val MATCH_ID = "matchId"
+        override val route = "manage-players/{$MATCH_ID}"
+        fun createRoute(matchId: String) = "manage-players/${matchId.routeEncoded()}"
+    }
     data object DayHistory : Destination {
         const val LOCAL_DATE = "localDate"
         override val route = "day/{$LOCAL_DATE}"

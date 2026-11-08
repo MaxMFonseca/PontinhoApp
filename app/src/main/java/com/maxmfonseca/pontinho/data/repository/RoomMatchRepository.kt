@@ -40,7 +40,7 @@ class RoomMatchRepository(
     private val rounds = db.roundDao()
 
     // Observe all snapshot inputs, then read the complete aggregate in one transaction.
-    private fun changes() = db.invalidationTracker.createFlow("matches", "participants", "rounds", "scores")
+    private fun changes() = db.invalidationTracker.createFlow("matches", "participants", "rounds", "round_participants", "scores")
 
     override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = changes().map {
         db.withTransaction { snapshot(matchId.value) }
@@ -140,7 +140,8 @@ class RoomMatchRepository(
         val player = resolvePlayer(name, playerId, now, roster.map { it.playerId }.toSet())
         matches.insertParticipant(MatchParticipantEntity(participantId, match.id, player.id, name, roster.size, ordinal, now))
         if (openRound != null) {
-            rounds.updateRound(openRound.copy(eligibleParticipantCount = matches.eligibleParticipants(match.id, ordinal).size))
+            rounds.insertParticipants(listOf(RoundParticipantEntity(match.id, openRound.id, participantId)))
+            rounds.updateRound(openRound.copy(eligibleParticipantCount = rounds.participants(openRound.id).size))
         }
         matches.updateMatch(match.copy(lastPlayedAt = now))
         ParticipantId(participantId)
@@ -168,17 +169,82 @@ class RoomMatchRepository(
         matches.updateMatch(match.copy(lastPlayedAt = clock.millis()))
     }
 
+    override suspend fun deactivateParticipant(command: DeactivateParticipant) = db.withTransaction {
+        val match = activeMatch(command.matchId)
+        val roster = matches.participants(match.id)
+        val participant = requireNotNull(roster.singleOrNull { it.id == command.participantId.value }) { "Unknown participant" }
+        require(participant.isActive) { "Participant is already inactive" }
+        require(roster.count { it.isActive } > 2) { "At least two active players are required" }
+        matches.updateParticipant(participant.copy(isActive = false))
+        val current = rounds.rounds(match.id).singleOrNull { it.status == "OPEN" }
+        val dealer = if (match.dealerParticipantId == participant.id) nextActiveDealer(participant.id, roster.map {
+            if (it.id == participant.id) it.copy(isActive = false) else it
+        }) else match.dealerParticipantId
+        val updatedMatch = match.copy(dealerParticipantId = dealer)
+        for (paused in rounds.rounds(match.id).filter { it.status == "PAUSED" && !it.isCorrection }) {
+            val before = draft(paused)
+            if (command.participantId in before.eligibleParticipants &&
+                command.participantId !in before.entries && before.designatedWinner != command.participantId) {
+                persistTransition(updatedMatch, paused, applied(RoundEngine.withdrawParticipant(before, command.participantId)), recomputeAfter = false)
+            }
+        }
+        if (current != null) {
+            val before = draft(current)
+            val after = if (command.participantId in before.eligibleParticipants &&
+                command.participantId !in before.entries && before.designatedWinner != command.participantId) {
+                applied(RoundEngine.withdrawParticipant(before, command.participantId))
+            } else before
+            persistTransition(updatedMatch, current, after, preserveDealer = !after.isComplete)
+        } else {
+            recompute(updatedMatch, correction = false, now = clock.millis(), preserveDealer = true)
+        }
+    }
+
+    override suspend fun reactivateParticipant(command: ReactivateParticipant) = db.withTransaction {
+        val match = activeMatch(command.matchId)
+        val participant = requireNotNull(matches.participants(match.id).singleOrNull { it.id == command.participantId.value }) { "Unknown participant" }
+        require(!participant.isActive) { "Participant is already active" }
+        matches.updateParticipant(participant.copy(isActive = true))
+        val current = rounds.rounds(match.id).singleOrNull { it.status == "OPEN" }
+        for (paused in rounds.rounds(match.id).filter { it.status == "PAUSED" && !it.isCorrection }) {
+            val before = draft(paused)
+            if (before.entries[command.participantId]?.origin == RoundEntryOrigin.WITHDRAWN) {
+                persistTransition(match, paused, applied(RoundEngine.restoreWithdrawnParticipant(before, command.participantId)), recomputeAfter = false)
+            }
+        }
+        if (current != null) {
+            val before = draft(current)
+            val after = if (before.entries[command.participantId]?.origin == RoundEntryOrigin.WITHDRAWN) {
+                applied(RoundEngine.restoreWithdrawnParticipant(before, command.participantId))
+            } else before
+            persistTransition(match, current, after, preserveDealer = true)
+        } else {
+            recompute(match, correction = false, now = clock.millis(), preserveDealer = true)
+        }
+    }
+
+    private fun nextActiveDealer(current: String, roster: List<MatchParticipantEntity>): String {
+        val start = roster.indexOfFirst { it.id == current }
+        require(start >= 0) { "Unknown dealer" }
+        return (1..roster.size).map { roster[(start + it) % roster.size] }.first { it.isActive }.id
+    }
+
+    private suspend fun requireActiveParticipant(matchId: String, participantId: ParticipantId) {
+        require(matches.participants(matchId).any { it.id == participantId.value && it.isActive }) { "Participant is inactive or unknown" }
+    }
+
     override suspend fun reorderParticipants(command: ReorderParticipants) = db.withTransaction {
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
         val roster = matches.participants(match.id)
-        require(command.participantIds.size == roster.size && command.participantIds.toSet() == roster.map { ParticipantId(it.id) }.toSet()) {
-            "Order must contain every participant exactly once"
+        val active = roster.filter { it.isActive }
+        require(command.participantIds.size == active.size && command.participantIds.toSet() == active.map { ParticipantId(it.id) }.toSet()) {
+            "Order must contain every active participant exactly once"
         }
-        // Temporary negative positions avoid uniqueness collisions when swapping.
-        roster.forEachIndexed { index, row -> matches.updateParticipant(row.copy(rosterOrder = -index - 1)) }
+        val positions = active.map { it.rosterOrder }
+        active.forEachIndexed { index, row -> matches.updateParticipant(row.copy(rosterOrder = -index - 1)) }
         command.participantIds.forEachIndexed { index, id ->
-            matches.updateParticipant(roster.single { it.id == id.value }.copy(rosterOrder = index))
+            matches.updateParticipant(active.single { it.id == id.value }.copy(rosterOrder = positions[index]))
         }
         matches.updateMatch(match.copy(lastPlayedAt = clock.millis()))
     }
@@ -186,7 +252,7 @@ class RoomMatchRepository(
     override suspend fun changeDealer(command: ChangeDealer) = db.withTransaction {
         val match = activeMatch(command.matchId)
         betweenRounds(match.id)
-        require(matches.participants(match.id).any { it.id == command.participantId.value }) {
+        require(matches.participants(match.id).any { it.id == command.participantId.value && it.isActive }) {
             "Dealer must belong to the match"
         }
         matches.updateMatch(match.copy(
@@ -213,6 +279,7 @@ class RoomMatchRepository(
 
     override suspend fun designateWinner(command: DesignateWinner) = db.withTransaction {
         val match = activeMatch(command.matchId)
+        requireActiveParticipant(match.id, command.participantId)
         val round = writableRound(match, command.roundId, command.preparedRound)
         val draft = draft(round)
         val after = RoundEngine.designateWinner(draft, command.participantId)
@@ -227,6 +294,7 @@ class RoomMatchRepository(
             return@withTransaction
         }
         val match = activeMatch(command.matchId)
+        requireActiveParticipant(match.id, command.participantId)
         val round = writableRound(match, command.roundId, command.preparedRound)
         val after = applied(RoundEngine.submitScore(draft(round), command.participantId, command.points))
         persistTransition(
@@ -253,6 +321,7 @@ class RoomMatchRepository(
             return@withTransaction
         }
         val match = activeMatch(command.matchId)
+        requireActiveParticipant(match.id, command.participantId)
         val round = writableRound(match, command.roundId, command.preparedRound)
         val points = scannedPoints(command.cards, round)
         val before = draft(round)
@@ -286,6 +355,9 @@ class RoomMatchRepository(
         val match = requireMatch(command.matchId)
         val round = ownedRound(match, command.roundId)
         val before = draft(round)
+        if (before.entries[command.participantId]?.origin == RoundEntryOrigin.WITHDRAWN) {
+            requireActiveParticipant(match.id, command.participantId)
+        }
         val after = applied(RoundEngine.removeEntry(before, command.participantId))
         val correctingRound = if (round.status == "COMPLETE") {
             pauseOpenRounds(match.id)
@@ -361,6 +433,8 @@ class RoomMatchRepository(
         after: RoundDraft,
         correction: Boolean = false,
         scoreWrite: ScoreWrite? = null,
+        recomputeAfter: Boolean = true,
+        preserveDealer: Boolean = false,
     ) {
         val now = clock.millis()
         val oldScores = rounds.scores(round.id).associateBy { ParticipantId(it.participantId) }
@@ -371,6 +445,7 @@ class RoomMatchRepository(
             val origin = when {
                 targetWrite != null -> targetWrite.origin
                 entry.origin == RoundEntryOrigin.AUTOMATIC_WINNER -> "AUTO_WINNER"
+                entry.origin == RoundEntryOrigin.WITHDRAWN -> "WITHDRAWN"
                 old != null -> old.origin
                 else -> "MANUAL"
             }
@@ -430,7 +505,7 @@ class RoomMatchRepository(
             }
         }
         val nextDealer = if (after.isComplete && round.status != "COMPLETE") {
-            DealerRotation.next(ParticipantId(round.dealerParticipantId), after.eligibleParticipants).value
+            nextActiveDealer(round.dealerParticipantId, matches.participants(match.id))
         } else round.nextDealerParticipantId
         val status = when {
             after.isComplete -> "COMPLETE"
@@ -447,10 +522,10 @@ class RoomMatchRepository(
             isCorrection = !after.isComplete && round.isCorrection,
             pauseOrder = if (status == "PAUSED") round.pauseOrder else null,
         ))
-        recompute(match, correction, now)
+        if (recomputeAfter) recompute(match, correction, now, preserveDealer)
     }
 
-    private suspend fun recompute(match: MatchEntity, correction: Boolean, now: Long) {
+    private suspend fun recompute(match: MatchEntity, correction: Boolean, now: Long, preserveDealer: Boolean = false) {
         val roster = matches.participants(match.id)
         var history = rounds.rounds(match.id)
         var totals = roster.associate { ParticipantId(it.id) to 0 }
@@ -465,7 +540,7 @@ class RoomMatchRepository(
         // Only an intentionally reopened correction defers results. An unrelated
         // unfinished draft must not hide a threshold crossing in completed history.
         val hasIncompleteCorrection = history.any { it.isCorrection && it.status != "COMPLETE" }
-        val outcome = if (hasIncompleteCorrection) null else MatchOutcomeCalculator.evaluate(totals)
+        val outcome = if (hasIncompleteCorrection) null else MatchOutcomeCalculator.evaluate(totals.filterKeys { id -> roster.any { it.id == id.value && it.isActive } })
         val finished = outcome != null
         if (finished) {
             pauseOpenRounds(match.id)
@@ -478,7 +553,11 @@ class RoomMatchRepository(
         history = rounds.rounds(match.id)
         val open = history.singleOrNull { it.status == "OPEN" }
         val resultChanged = (finished && match.status != "FINISHED") || (correction && (finished || match.status == "FINISHED"))
-        val dealer = open?.dealerParticipantId ?: history.lastOrNull { it.status == "COMPLETE" }?.nextDealerParticipantId ?: match.dealerParticipantId
+        val candidateDealer = if (preserveDealer) match.dealerParticipantId
+            else if (open != null && roster.any { it.id == open.dealerParticipantId && it.isActive }) open.dealerParticipantId
+            else if (open != null) match.dealerParticipantId
+            else history.lastOrNull { it.status == "COMPLETE" }?.nextDealerParticipantId ?: match.dealerParticipantId
+        val dealer = if (roster.any { it.id == candidateDealer && it.isActive }) candidateDealer else nextActiveDealer(candidateDealer, roster)
         matches.updateMatch(match.copy(
             lastPlayedAt = now,
             status = if (finished) "FINISHED" else "ACTIVE",
@@ -496,15 +575,15 @@ class RoomMatchRepository(
         return MatchSnapshot(
             MatchId(id), LocalDate.parse(match.localDate), match.timeZoneId, Instant.ofEpochMilli(match.createdAt),
             Instant.ofEpochMilli(match.lastPlayedAt), roster.map { it.toDomain() },
-            rounds.rounds(id).map { it.toDomain(roster, rounds.scores(it.id)) }, totals,
+            rounds.rounds(id).map { it.toDomain(rounds.participants(it.id), rounds.scores(it.id)) }, totals,
             ParticipantId(match.dealerParticipantId), match.status == "FINISHED",
             match.finishedAt?.let(Instant::ofEpochMilli),
-            if (match.status == "FINISHED") MatchOutcomeCalculator.evaluate(totals) else null,
+            if (match.status == "FINISHED") MatchOutcomeCalculator.evaluate(totals.filterKeys { id -> roster.any { it.id == id.value && it.isActive } }) else null,
             match.resultRevision, match.acknowledgedResultRevision,
         )
     }
 
-    private suspend fun draft(round: RoundEntity) = round.toDomain(matches.participants(round.matchId), rounds.scores(round.id)).draft
+    private suspend fun draft(round: RoundEntity) = round.toDomain(rounds.participants(round.id), rounds.scores(round.id)).draft
     private suspend fun requireMatch(id: MatchId) = requireNotNull(matches.get(id.value)) { "Unknown match" }
     private suspend fun activeMatch(id: MatchId) = requireMatch(id).also { require(it.status == "ACTIVE") { "Match is finished" } }
     private suspend fun betweenRounds(id: String) { require(rounds.rounds(id).all { it.status == "COMPLETE" }) { "A round is unfinished" } }
@@ -536,6 +615,7 @@ class RoomMatchRepository(
         )
         // This insert shares the caller's transaction with the first score or designation.
         rounds.insertRound(round)
+        rounds.insertParticipants(roster.map { RoundParticipantEntity(match.id, round.id, it.id) })
         return round
     }
 
@@ -686,7 +766,7 @@ class RoomMatchRepository(
                 id = match.id,
                 createdAtEpochMillis = match.createdAt.toEpochMilli(),
                 isFinished = match.isFinished,
-                players = match.participants.sortedWith(
+                players = match.participants.filter { it.isActive }.sortedWith(
                     compareByDescending<MatchParticipant> { match.totals.getValue(it.id) }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
                         .thenBy { it.displayName }

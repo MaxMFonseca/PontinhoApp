@@ -83,9 +83,9 @@ object RoundEngine {
                 events += RoundEvent.RoundCompleted(existingWinner.participantId)
             }
         } else {
-            val explicitParticipants = nextState.explicitParticipantIds()
-            if (explicitParticipants.size == nextState.eligibleParticipants.size - 1) {
-                val inferredWinner = nextState.eligibleParticipants.single { it !in explicitParticipants }
+            val resolvedParticipants = nextState.resolvedParticipantIds()
+            if (resolvedParticipants.size == nextState.eligibleParticipants.size - 1) {
+                val inferredWinner = nextState.eligibleParticipants.single { it !in resolvedParticipants }
                 nextState = complete(
                     nextState.copy(
                         winner = WinnerDesignation(
@@ -106,6 +106,35 @@ object RoundEngine {
         return RoundTransition.Applied(nextState, events.toList())
     }
 
+    fun withdrawParticipant(state: RoundDraft, participantId: ParticipantId): RoundTransition {
+        if (state.designatedWinner == participantId) return RoundTransition.Applied(state, emptyList())
+        if (state.isComplete) return RoundTransition.Rejected(state, RoundFailure.RoundAlreadyComplete)
+        if (participantId !in state.eligibleParticipants) return RoundTransition.Rejected(state, RoundFailure.ParticipantNotEligible(participantId))
+        if (state.entries.containsKey(participantId)) return RoundTransition.Rejected(state, RoundFailure.DuplicateExplicitSubmission(participantId))
+        val next = state.copy(
+            entries = state.entries + (participantId to RoundEntry(0, RoundEntryOrigin.WITHDRAWN)),
+        )
+        val winner = next.designatedWinner
+        if (winner != null && allOtherEligiblePlayersSubmitted(next, winner)) {
+            return RoundTransition.Applied(complete(next, winner), listOf(RoundEvent.RoundCompleted(winner)))
+        }
+        val missing = next.eligibleParticipants.filterNot { it in next.resolvedParticipantIds() }
+        if (winner == null && missing.size == 1) {
+            val inferred = missing.single()
+            return RoundTransition.Applied(
+                complete(next.copy(winner = WinnerDesignation(inferred, WinnerDesignationOrigin.INFERRED)), inferred),
+                listOf(RoundEvent.WinnerDesignated(inferred, WinnerDesignationOrigin.INFERRED), RoundEvent.RoundCompleted(inferred)),
+            )
+        }
+        return RoundTransition.Applied(next, emptyList())
+    }
+
+    fun restoreWithdrawnParticipant(state: RoundDraft, participantId: ParticipantId): RoundTransition {
+        if (state.isComplete) return RoundTransition.Rejected(state, RoundFailure.RoundAlreadyComplete)
+        if (state.entries[participantId]?.origin != RoundEntryOrigin.WITHDRAWN) return RoundTransition.Rejected(state, RoundFailure.EntryNotFound(participantId))
+        return RoundTransition.Applied(state.copy(entries = state.entries - participantId), listOf(RoundEvent.EntryRemoved(participantId)))
+    }
+
     fun removeEntry(state: RoundDraft, participantId: ParticipantId): RoundTransition {
         val entry = state.entries[participantId]
         if (entry == null) {
@@ -119,6 +148,9 @@ object RoundEngine {
             }
         }
 
+        if (state.isComplete && entry.origin == RoundEntryOrigin.WITHDRAWN) {
+            return RoundTransition.Rejected(state, RoundFailure.RoundAlreadyComplete)
+        }
         if (!state.isComplete) {
             return RoundTransition.Applied(
                 state = state.copy(entries = state.entries - participantId),
@@ -154,7 +186,7 @@ object RoundEngine {
         state.isComplete -> RoundFailure.RoundAlreadyComplete
         participantId !in state.eligibleParticipants -> RoundFailure.ParticipantNotEligible(participantId)
         state.winner != null -> RoundFailure.WinnerAlreadyDesignated
-        state.entries[participantId]?.origin == RoundEntryOrigin.EXPLICIT ->
+        state.entries[participantId]?.origin in setOf(RoundEntryOrigin.EXPLICIT, RoundEntryOrigin.WITHDRAWN) ->
             RoundFailure.DuplicateExplicitSubmission(participantId)
         else -> null
     }
@@ -164,7 +196,7 @@ object RoundEngine {
         participantId: ParticipantId,
         points: Int,
     ): RoundFailure? = when {
-        state.entries[participantId]?.origin == RoundEntryOrigin.EXPLICIT ->
+        state.entries[participantId]?.origin in setOf(RoundEntryOrigin.EXPLICIT, RoundEntryOrigin.WITHDRAWN) ->
             RoundFailure.DuplicateExplicitSubmission(participantId)
         state.isComplete -> RoundFailure.RoundAlreadyComplete
         participantId !in state.eligibleParticipants -> RoundFailure.ParticipantNotEligible(participantId)
@@ -174,15 +206,14 @@ object RoundEngine {
         else -> null
     }
 
-    private fun RoundDraft.explicitParticipantIds(): Set<ParticipantId> = entries
-        .filterValues { it.origin == RoundEntryOrigin.EXPLICIT }
-        .keys
+    private fun RoundDraft.resolvedParticipantIds(): Set<ParticipantId> = entries
+        .filterValues { it.origin == RoundEntryOrigin.EXPLICIT || it.origin == RoundEntryOrigin.WITHDRAWN }.keys
 
     private fun allOtherEligiblePlayersSubmitted(
         state: RoundDraft,
         winnerId: ParticipantId,
     ): Boolean {
-        val explicitParticipants = state.explicitParticipantIds()
+        val explicitParticipants = state.resolvedParticipantIds()
         return state.eligibleParticipants
             .filterNot { it == winnerId }
             .all { it in explicitParticipants }

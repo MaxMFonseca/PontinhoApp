@@ -11,4 +11,5 @@ data class MatchParticipant(
     val displayName: String,
     val rosterOrder: Int,
     val eligibleFromRoundOrdinal: Int,
+    val isActive: Boolean = true,
 )

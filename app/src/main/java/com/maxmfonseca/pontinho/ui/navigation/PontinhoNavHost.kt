@@ -56,6 +56,9 @@ import com.maxmfonseca.pontinho.domain.model.MatchId
 import com.maxmfonseca.pontinho.ui.match.MatchViewModel
 import com.maxmfonseca.pontinho.ui.match.MatchScreen
 import com.maxmfonseca.pontinho.ui.match.MatchEvent
+import com.maxmfonseca.pontinho.ui.match.ManagePlayersViewModel
+import com.maxmfonseca.pontinho.ui.match.ManagePlayersScreen
+import com.maxmfonseca.pontinho.ui.match.ManagePlayersEvent
 import com.maxmfonseca.pontinho.ui.history.HistoryScreen
 import com.maxmfonseca.pontinho.ui.history.HistoryViewModel
 import com.maxmfonseca.pontinho.ui.results.ResultsEvent
@@ -223,7 +226,23 @@ fun PontinhoNavHost(
                 onCamera = matchViewModel::openScanner,
                 onEditJoker = matchViewModel::editJoker, onRemoveIndicator = matchViewModel::removeIndicator,
                 onBeginDealerSelection = matchViewModel::beginDealerSelection,
-                onSelectDealer = matchViewModel::selectDealer)
+                onSelectDealer = matchViewModel::selectDealer,
+                onManagePlayers = { if (matchViewModel.uiState.value.canManagePlayers) navController.navigate(Destination.ManagePlayers.createRoute(matchId.value)) },
+                onRequestReactivation = matchViewModel::requestReactivation,
+                onCancelReactivation = matchViewModel::cancelReactivation, onConfirmReactivation = matchViewModel::confirmReactivation)
+        }
+        composable(Destination.ManagePlayers.route, arguments = listOf(navArgument(Destination.ManagePlayers.MATCH_ID) { type = NavType.StringType })) { entry ->
+            val id = MatchId(requireNotNull(entry.arguments?.getString(Destination.ManagePlayers.MATCH_ID)))
+            val vm: ManagePlayersViewModel = viewModel(factory = viewModelFactory { initializer { ManagePlayersViewModel(id, container.matchRepository) } })
+            val state by vm.uiState.collectAsStateWithLifecycle()
+            LaunchedEffect(vm, entry) {
+                vm.events.collect { event ->
+                    if (event == ManagePlayersEvent.ReturnToMatch && navController.currentBackStackEntry == entry) {
+                        navController.popBackStack()
+                    }
+                }
+            }
+            ManagePlayersScreen(state, { navController.popBackStack() }, vm::select, vm::cancel, vm::confirm)
         }
         composable(Destination.Scanner.route, arguments = Destination.Scanner.argumentNames.map { name ->
             navArgument(name) { type = NavType.StringType; if (name == "correction") { nullable = true; defaultValue = null } }

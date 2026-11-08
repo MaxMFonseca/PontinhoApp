@@ -3,6 +3,7 @@ package com.maxmfonseca.pontinho.domain.model
 enum class RoundEntryOrigin {
     EXPLICIT,
     AUTOMATIC_WINNER,
+    WITHDRAWN,
 }
 
 data class RoundEntry(

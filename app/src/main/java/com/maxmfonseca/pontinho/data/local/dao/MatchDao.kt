@@ -19,7 +19,7 @@ interface MatchDao {
     @Query("SELECT * FROM matches ORDER BY createdAt DESC, id DESC") fun observeMatches(): Flow<List<MatchEntity>>
     @Query("SELECT * FROM participants WHERE matchId = :matchId ORDER BY rosterOrder") suspend fun participants(matchId: String): List<MatchParticipantEntity>
     @Query("SELECT * FROM participants ORDER BY matchId, rosterOrder") suspend fun allParticipants(): List<MatchParticipantEntity>
-    @Query("SELECT * FROM participants WHERE matchId = :matchId AND eligibleFromRoundOrdinal <= :ordinal ORDER BY rosterOrder")
+    @Query("SELECT * FROM participants WHERE matchId = :matchId AND eligibleFromRoundOrdinal <= :ordinal AND isActive = 1 ORDER BY rosterOrder")
     suspend fun eligibleParticipants(matchId: String, ordinal: Int): List<MatchParticipantEntity>
     @Query("SELECT * FROM corrections WHERE matchId = :matchId ORDER BY timestamp, id")
     suspend fun corrections(matchId: String): List<CorrectionEventEntity>

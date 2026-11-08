@@ -8,7 +8,9 @@ import com.maxmfonseca.pontinho.domain.rules.RoundEngine
 import com.maxmfonseca.pontinho.domain.rules.RoundTransition
 import com.maxmfonseca.pontinho.ui.components.RoundStatusKind
 import com.maxmfonseca.pontinho.ui.test.matchSnapshot
+import com.maxmfonseca.pontinho.ui.test.FakeMatchRepository
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -24,6 +26,177 @@ import com.maxmfonseca.pontinho.ui.scanner.ScanRequest
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MatchViewModelTest {
+    @Test fun reactivatedPlayerCannotEditCompletedWithdrawal() = runTest {
+        val repo = ScoringRepository()
+        val original = repo.snapshot.value!!
+        val player = original.participants[0].id
+        val round = repo.round(1, RoundDraft(repo.ids,
+            entries = mapOf(player to RoundEntry(0, RoundEntryOrigin.WITHDRAWN)), isComplete = true))
+            .copy(status = RoundStatus.COMPLETE)
+        repo.snapshot.value = original.copy(rounds = listOf(round), participants = original.participants.map {
+            if (it.id == player) it.copy(isActive = false) else it
+        })
+        val vm = MatchViewModel(original.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        repo.snapshot.value = original.copy(rounds = listOf(round))
+        runCurrent()
+        assertTrue(vm.uiState.value.players.single { it.id == player }.isActive)
+        assertFalse(vm.uiState.value.players.single { it.id == player }.history.single { it.roundNumber == 1 }.canEdit)
+        vm.editScore(player, 1); vm.deleteScore(); vm.openScanner()
+        assertNull(vm.uiState.value.scoreDialog)
+    }
+
+    @Test fun scoreAndJokerDialogsBlockReactivation() = runTest {
+        val repo = FakeMatchRepository()
+        val initial = matchSnapshot("dialogs", LocalDate.of(2026, 10, 14), 2,
+            listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        val round = RoundSnapshot(RoundId("r"), 1, null, initial.dealerParticipantId,
+            RoundDraft(initial.participants.map { it.id }), Instant.EPOCH, null, RoundStatus.OPEN, false)
+        repo.match.value = initial.copy(participants = initial.participants.mapIndexed { i, p -> p.copy(isActive = i != 0) }, rounds = listOf(round))
+        val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.addScore(initial.participants[1].id)
+        assertNotNull(vm.uiState.value.scoreDialog)
+        assertFalse(vm.uiState.value.canManagePlayers); vm.requestReactivation(initial.participants[0].id)
+        assertNull(vm.uiState.value.reactivationTarget)
+        vm.dismissDialog(); vm.editJoker(1)
+        assertNotNull(vm.uiState.value.picker)
+        assertFalse(vm.uiState.value.canManagePlayers); vm.requestReactivation(initial.participants[0].id)
+        assertNull(vm.uiState.value.reactivationTarget)
+    }
+
+    @Test fun managementSavingPreventsRepeatAndCancellation() = runTest {
+        val storage = FakeMatchRepository()
+        val initial = matchSnapshot("save-guard", LocalDate.of(2026, 10, 14), 2,
+            listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        storage.match.value = initial
+        val gate = CompletableDeferred<Unit>(); var calls = 0
+        val repo = object : MatchRepository by storage {
+            override suspend fun deactivateParticipant(command: DeactivateParticipant) {
+                calls++; gate.await(); storage.deactivateParticipant(command)
+            }
+        }
+        val vm = ManagePlayersViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); vm.select(initial.participants[0].id); vm.confirm(); runCurrent()
+        assertTrue(vm.uiState.value.isSaving)
+        vm.cancel(); vm.confirm(); vm.select(initial.participants[1].id); runCurrent()
+        assertEquals(1, calls); assertEquals(initial.participants[0].id, vm.uiState.value.selected?.id)
+        gate.complete(Unit); advanceUntilIdle()
+        assertFalse(storage.match.value!!.participants[0].isActive)
+    }
+
+    @Test fun reactivationGuardsDialogsCorrectionFinishedAndSaving() = runTest {
+        val storage = FakeMatchRepository()
+        val initial = matchSnapshot("guard", LocalDate.of(2026, 10, 14), 2,
+            listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        val inactive = initial.participants[0].id
+        val snapshot = initial.copy(participants = initial.participants.mapIndexed { i, p -> p.copy(isActive = i != 0) })
+        storage.match.value = snapshot
+        val gate = CompletableDeferred<Unit>()
+        var calls = 0
+        val repo = object : MatchRepository by storage {
+            override suspend fun reactivateParticipant(command: ReactivateParticipant) {
+                calls++; gate.await(); storage.reactivateParticipant(command)
+            }
+        }
+        val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.requestReactivation(inactive); vm.cancelReactivation(); vm.confirmReactivation(); runCurrent()
+        assertEquals(0, calls)
+        vm.openAddPlayer(); vm.requestReactivation(inactive)
+        assertNull(vm.uiState.value.reactivationTarget); assertFalse(vm.uiState.value.canManagePlayers)
+        vm.dismissDialog()
+        val round = RoundSnapshot(RoundId("r"), 1, null, initial.dealerParticipantId,
+            RoundDraft(initial.participants.map { it.id }), Instant.EPOCH, null, RoundStatus.OPEN, true)
+        storage.match.value = snapshot.copy(rounds = listOf(round)); runCurrent()
+        assertFalse(vm.uiState.value.canManagePlayers); vm.requestReactivation(inactive)
+        assertNull(vm.uiState.value.reactivationTarget)
+        storage.match.value = snapshot.copy(isFinished = true); runCurrent()
+        assertFalse(vm.uiState.value.canManagePlayers); vm.requestReactivation(inactive)
+        assertNull(vm.uiState.value.reactivationTarget)
+        storage.match.value = snapshot; runCurrent()
+        vm.requestReactivation(inactive); vm.confirmReactivation(); runCurrent()
+        assertTrue(vm.uiState.value.isSaving); assertFalse(vm.uiState.value.canManagePlayers)
+        vm.confirmReactivation(); vm.cancelReactivation(); runCurrent()
+        assertEquals(1, calls); assertNotNull(vm.uiState.value.reactivationTarget)
+        gate.complete(Unit); advanceUntilIdle()
+        assertTrue(storage.match.value!!.participants[0].isActive)
+    }
+
+    @Test fun managementRejectsCorrectionFinishedAndSurfacesRepositoryError() = runTest {
+        val storage = FakeMatchRepository()
+        val initial = matchSnapshot("manage-guard", LocalDate.of(2026, 10, 14), 2,
+            listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        storage.match.value = initial
+        var calls = 0
+        val repo = object : MatchRepository by storage {
+            override suspend fun deactivateParticipant(command: DeactivateParticipant) { calls++; error("failure") }
+        }
+        val vm = ManagePlayersViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        val round = RoundSnapshot(RoundId("r"), 1, null, initial.dealerParticipantId,
+            RoundDraft(initial.participants.map { it.id }), Instant.EPOCH, null, RoundStatus.OPEN, true)
+        for (blocked in listOf(initial.copy(rounds = listOf(round)), initial.copy(isFinished = true))) {
+            storage.match.value = blocked; runCurrent(); assertFalse(vm.uiState.value.canRemove)
+            vm.select(initial.participants[0].id); vm.confirm(); runCurrent(); assertEquals(0, calls)
+        }
+        storage.match.value = initial; runCurrent()
+        vm.select(initial.participants[0].id); vm.cancel(); vm.confirm(); runCurrent(); assertEquals(0, calls)
+        vm.select(initial.participants[0].id); vm.confirm(); advanceUntilIdle()
+        assertEquals(1, calls); assertTrue(vm.uiState.value.hasError); assertNotNull(vm.uiState.value.selected)
+        assertEquals(3, storage.match.value!!.participants.count { it.isActive })
+    }
+
+    @Test fun removalRequiresConfirmationAndKeepsTwoActivePlayers() = runTest {
+        val repo = FakeMatchRepository()
+        val initial = matchSnapshot("manage", LocalDate.of(2026, 10, 14), 2, listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        repo.match.value = initial
+        val vm = ManagePlayersViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        vm.select(initial.participants[0].id); vm.cancel(); advanceUntilIdle()
+        assertEquals(3, repo.match.value!!.participants.count { it.isActive })
+        vm.select(initial.participants[0].id); vm.confirm(); advanceUntilIdle()
+        assertEquals(2, repo.match.value!!.participants.count { it.isActive })
+        assertFalse(vm.uiState.value.canRemove)
+        vm.select(initial.participants[1].id); vm.confirm(); advanceUntilIdle()
+        assertEquals(2, repo.match.value!!.participants.count { it.isActive })
+    }
+
+    @Test fun successfulRemovalEmitsReturnToMatchEvent() = runTest {
+        val repo = FakeMatchRepository()
+        val initial = matchSnapshot("manage-return", LocalDate.of(2026, 10, 14), 2,
+            listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        repo.match.value = initial
+        val vm = ManagePlayersViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        val event = async { vm.events.first() }
+        vm.select(initial.participants[0].id)
+        vm.confirm()
+        advanceUntilIdle()
+        assertEquals(ManagePlayersEvent.ReturnToMatch, event.await())
+    }
+
+    @Test fun reactivationRequiresConfirmationAndRestoresRosterPosition() = runTest {
+        val repo = FakeMatchRepository()
+        val initial = matchSnapshot("match", LocalDate.of(2026, 10, 14), 2, listOf("a" to "Ana", "b" to "Bruno", "c" to "Carla"))
+        repo.match.value = initial.copy(participants = initial.participants.mapIndexed { i, p -> p.copy(isActive = i != 0) })
+        val vm = MatchViewModel(initial.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent(); vm.requestReactivation(initial.participants[0].id); vm.cancelReactivation(); advanceUntilIdle()
+        assertFalse(repo.match.value!!.participants[0].isActive)
+        vm.requestReactivation(initial.participants[0].id); vm.confirmReactivation(); advanceUntilIdle()
+        assertTrue(repo.match.value!!.participants[0].isActive)
+        assertEquals(initial.participants.map { it.id }, vm.uiState.value.players.map { it.id })
+    }
+
+    @Test fun inactivePlayersAppearAfterActivePlayers() = runTest {
+        val repo = ScoringRepository()
+        val original = repo.snapshot.value!!
+        repo.snapshot.value = original.copy(participants = original.participants.mapIndexed { index, player -> player.copy(isActive = index != 0) })
+        val vm = MatchViewModel(original.id, repo, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertEquals(listOf(original.participants[1].id, original.participants[2].id, original.participants[0].id), vm.uiState.value.players.map { it.id })
+    }
+
     @Test fun manualScoreAndWentOutPrepareNullIndicatorWithoutPicker() = runTest {
         for (wentOut in listOf(false, true)) {
             val repo = ScoringRepository()

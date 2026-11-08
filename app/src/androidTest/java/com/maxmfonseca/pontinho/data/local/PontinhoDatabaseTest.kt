@@ -35,6 +35,7 @@ class PontinhoDatabaseTest {
         db.matchDao().insertParticipant(MatchParticipantEntity("a", "m", "p1", "Ana", 0, 1, 1))
         db.matchDao().insertParticipant(MatchParticipantEntity("b", "m", "p2", "Ana", 1, 2, 1))
         db.roundDao().insertRound(RoundEntity("r", "m", 1, "ACE", "RED", "a", 2, createdAt = 1))
+        db.roundDao().insertParticipants(listOf(RoundParticipantEntity("m", "r", "a"), RoundParticipantEntity("m", "r", "b")))
     }
 
     private suspend fun constraint(block: suspend () -> Unit) {
@@ -80,6 +81,8 @@ class PontinhoDatabaseTest {
         db.matchDao().insertParticipant(MatchParticipantEntity("c", "other", "p1", "Ana", 0, 1, 1))
         constraint { db.roundDao().insertScore(RoundScoreEntity("s", "m", "r", "c", 5, "MANUAL", 1, "cross")) }
     }
+
+    @Test fun versionThreeMigratesMembershipAndActiveFlags() = verifyMigration(3)
 
     @Test fun versionOneMigratesThroughVersionThree() = verifyMigration(1)
 
@@ -136,6 +139,10 @@ class PontinhoDatabaseTest {
         legacy.execSQL("INSERT INTO players VALUES ('player1','Ana','ana',1,1,NULL),('player2','Bruno','bruno',1,1,NULL)")
         legacy.execSQL("INSERT INTO matches VALUES ('m','2026-10-13','America/Sao_Paulo',1,11,'ACTIVE',NULL,'p1',0,0,NULL,NULL)")
         legacy.execSQL("INSERT INTO participants VALUES ('p1','m','player1','Ana',0,1,1,17),('p2','m','player2','Bruno',1,1,1,0)")
+        if (version == 3) {
+            legacy.execSQL("INSERT INTO players VALUES ('player3','Caio','caio',1,1,NULL)")
+            legacy.execSQL("INSERT INTO participants VALUES ('p3','m','player3','Caio',2,2,1,0)")
+        }
         legacy.execSQL("INSERT INTO rounds VALUES ('r','m',1,'ACE','RED','p1',2,'p2','INFERRED','COMPLETE',NULL,1,11,'p2',0,NULL)")
         legacy.execSQL("INSERT INTO scores (id,matchId,roundId,participantId,points,origin,submittedAt,submissionToken) VALUES ('manual','m','r','p1',17,'MANUAL',10,'token-manual')")
         legacy.execSQL("INSERT INTO scores (id,matchId,roundId,participantId,points,origin,submittedAt,submissionToken) VALUES ('winner','m','r','p2',0,'AUTO_WINNER',11,NULL)")
@@ -154,16 +161,23 @@ class PontinhoDatabaseTest {
         helper.close()
         // Room performs the real upgrade and validates every table, index and FK.
         db = Room.databaseBuilder(context, PontinhoDatabase::class.java, name)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
         val migrated = db.openHelper.writableDatabase
-        assertEquals(3, migrated.version)
+        assertEquals(4, migrated.version)
+        assertTrue(db.matchDao().participants("m").all { it.isActive })
+        assertEquals(listOf("p1", "p2"), db.roundDao().participants("r").map { it.id })
         assertEquals(originalRounds, rows(migrated, "rounds"))
         migrated.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
         if (version == 2) assertEquals("existing", rows(migrated, "card_observations").single().first())
         val repository = RoomMatchRepository(db)
         val snapshot = requireNotNull(repository.observeMatch(MatchId("m")).first())
-        assertEquals(listOf("Ana", "Bruno"), snapshot.participants.map { it.displayName })
-        assertEquals(mapOf(ParticipantId("p1") to 17, ParticipantId("p2") to 0), snapshot.totals)
+        assertEquals(if (version == 3) listOf("Ana", "Bruno", "Caio") else listOf("Ana", "Bruno"), snapshot.participants.map { it.displayName })
+        assertEquals(if (version == 3) mapOf(ParticipantId("p1") to 17, ParticipantId("p2") to 0, ParticipantId("p3") to 0) else mapOf(ParticipantId("p1") to 17, ParticipantId("p2") to 0), snapshot.totals)
+        if (version == 3) {
+            migrated.execSQL("UPDATE participants SET eligibleFromRoundOrdinal=1 WHERE id='p3'")
+            assertEquals(listOf(ParticipantId("p1"), ParticipantId("p2")), repository.observeMatch(MatchId("m")).first()!!.rounds.single().draft.eligibleParticipants)
+            migrated.execSQL("UPDATE participants SET eligibleFromRoundOrdinal=2 WHERE id='p3'")
+        }
         val round = snapshot.rounds.single()
         assertEquals(RoundStatus.COMPLETE, round.status)
         assertEquals(Indicator(Rank.ACE, CardColor.RED), round.indicator)

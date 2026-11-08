@@ -46,9 +46,9 @@ fun calculateLifetimeStatistics(
         compareByDescending<MatchSnapshot> { it.createdAt }.thenByDescending { it.id.value },
     )
     completed.forEach { match ->
-        val winnerKeys = match.participants.filter { it.id in match.outcome?.winners.orEmpty() }
+        val winnerKeys = match.participants.filter { it.isActive && it.id in match.outcome?.winners.orEmpty() }
             .map { PlayerNameKey.from(it.displayName) }.toSet()
-        match.participants.groupBy { PlayerNameKey.from(it.displayName) }.forEach { (key, participants) ->
+        match.participants.filter { it.isActive }.groupBy { PlayerNameKey.from(it.displayName) }.forEach { (key, participants) ->
             val previous = statistics[key] ?: LifetimePlayerStatistics(key, participants.first().displayName, 0, 0, 0L)
             statistics[key] = previous.copy(
                 completedMatches = previous.completedMatches + 1,

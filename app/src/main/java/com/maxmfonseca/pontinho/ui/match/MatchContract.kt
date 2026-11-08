@@ -4,7 +4,7 @@ import com.maxmfonseca.pontinho.domain.model.*
 import com.maxmfonseca.pontinho.ui.components.PlayerRoundHistory
 
 data class MatchPlayer(val id: ParticipantId, val name: String, val total: Int,
-    val isDealer: Boolean, val history: List<PlayerRoundHistory>, val canAddScore: Boolean)
+    val isDealer: Boolean, val history: List<PlayerRoundHistory>, val canAddScore: Boolean, val isActive: Boolean = true)
 enum class MatchPhase { NOT_STARTED, COUNTING, EDITING, FINISHED }
 data class RoundJokerUi(val roundId: RoundId?, val roundNumber: Int, val indicator: Indicator?)
 enum class PickerPurpose { EDIT, CAMERA }
@@ -40,6 +40,7 @@ data class MatchUiState(
     val canChangeDealer: Boolean = false, val isSelectingDealer: Boolean = false,
     val playerName: String? = null,
     val duplicateNameError: Boolean = false,
+    val reactivationTarget: MatchPlayer? = null, val canManagePlayers: Boolean = false,
     val pausedRoundNumbers: List<Int> = emptyList(), val isCorrectingRound: Boolean = false,
 )
 sealed interface MatchEvent {

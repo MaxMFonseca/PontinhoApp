@@ -70,3 +70,24 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         db.execSQL("CREATE INDEX index_rounds_matchId_designatedWinnerParticipantId ON rounds(matchId, designatedWinnerParticipantId)")
     }
 }
+
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE participants ADD COLUMN isActive INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS round_participants (
+                matchId TEXT NOT NULL, roundId TEXT NOT NULL, participantId TEXT NOT NULL,
+                PRIMARY KEY(roundId, participantId),
+                FOREIGN KEY(matchId, roundId) REFERENCES rounds(matchId, id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                FOREIGN KEY(matchId, participantId) REFERENCES participants(matchId, id) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_round_participants_matchId_roundId ON round_participants(matchId, roundId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_round_participants_matchId_participantId ON round_participants(matchId, participantId)")
+        db.execSQL("""
+            INSERT INTO round_participants (matchId, roundId, participantId)
+            SELECT r.matchId, r.id, p.id FROM rounds r JOIN participants p
+                ON p.matchId = r.matchId AND p.eligibleFromRoundOrdinal <= r.ordinal
+        """.trimIndent())
+    }
+}

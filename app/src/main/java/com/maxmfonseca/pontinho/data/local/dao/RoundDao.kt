@@ -5,6 +5,9 @@ import com.maxmfonseca.pontinho.data.local.entity.*
 @Dao
 interface RoundDao {
     @Insert suspend fun insertRound(round: RoundEntity)
+    @Insert suspend fun insertParticipants(participants: List<RoundParticipantEntity>)
+    @Query("SELECT p.* FROM participants p JOIN round_participants rp ON rp.matchId = p.matchId AND rp.participantId = p.id WHERE rp.roundId = :roundId ORDER BY p.rosterOrder")
+    suspend fun participants(roundId: String): List<MatchParticipantEntity>
     @Update suspend fun updateRound(round: RoundEntity)
     @Insert suspend fun insertScore(score: RoundScoreEntity)
     @Update suspend fun updateScore(score: RoundScoreEntity)

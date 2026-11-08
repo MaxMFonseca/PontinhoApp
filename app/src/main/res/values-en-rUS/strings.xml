@@ -304,4 +304,13 @@
     <string name="learn_final_table_maria">Maria|72</string>
     <string name="learn_final_table_pedro">Pedro|103</string>
     <string name="learn_final_table_ana">Ana|61</string>
+    <string name="match_inactive">Inactive</string>
+    <string name="match_remove_player">Remove player</string>
+    <string name="match_minimum_players">At least two active players must remain.</string>
+    <string name="match_remove_title">Remove player?</string>
+    <string name="match_remove_message">Remove %1$s from the match?</string>
+    <string name="match_remove_confirm">Remove</string>
+    <string name="match_reactivate_title">Reactivate player?</string>
+    <string name="match_reactivate_message">Reactivate %1$s in the match?</string>
+    <string name="match_reactivate_confirm">Reactivate</string>
 </resources>

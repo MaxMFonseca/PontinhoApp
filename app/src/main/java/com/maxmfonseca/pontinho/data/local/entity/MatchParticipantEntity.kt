@@ -20,4 +20,5 @@ data class MatchParticipantEntity(
     val eligibleFromRoundOrdinal: Int,
     val joinedAt: Long,
     val total: Int = 0,
+    @ColumnInfo(defaultValue = "1") val isActive: Boolean = true,
 )

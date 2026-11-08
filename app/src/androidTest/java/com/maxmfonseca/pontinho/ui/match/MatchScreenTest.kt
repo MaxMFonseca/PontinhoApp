@@ -2,6 +2,7 @@ package com.maxmfonseca.pontinho.ui.match
 
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
@@ -33,6 +34,105 @@ import androidx.compose.ui.text.TextLayoutResult
 import com.maxmfonseca.pontinho.settings.ThemePreference
 
 class MatchScreenTest {
+    @Test fun rosterActionsShareOneEqualWidthRowAndRemoveInvokesNavigation() {
+        var navigated = 0
+        compose.setContent { PontinhoTheme {
+            MatchScreen(fixture(2).copy(canAddPlayer = true, canManagePlayers = true), {}, {}, {}, {}, {}, {}, {}, {}, {},
+                onManagePlayers = { navigated++ })
+        } }
+        compose.onNodeWithTag("match_players").performScrollToNode(hasTestTag("match_player_actions"))
+        compose.onNodeWithTag("match_player_actions").assertIsDisplayed()
+        val add = compose.onNodeWithTag("match_add_player").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val remove = compose.onNodeWithTag("match_remove_player").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertEquals(add.top, remove.top)
+        assertEquals(add.bottom, remove.bottom)
+        assertEquals(add.width, remove.width, 1f)
+        assertTrue(remove.left > add.right)
+        compose.onNodeWithTag("match_remove_player").performClick()
+        compose.runOnIdle { assertEquals(1, navigated) }
+    }
+
+    @Test fun inactiveMatchCardRetainsHistoryAndOnlyOffersReactivation() {
+        val inactive = MatchPlayer(ParticipantId("gone"), "Ana", 42, false,
+            listOf(PlayerRoundHistory(1, RoundStatusKind.LOSS, 42, canEdit = true)), true, isActive = false)
+        var state by mutableStateOf(MatchUiState(isLoading = false, players = listOf(inactive),
+            canManagePlayers = true, canReorderPlayers = true, canChangeDealer = true))
+        var score = 0; var edit = 0; var dealer = 0; var reorder = 0
+        compose.setContent { PontinhoTheme {
+            MatchScreen(state, {}, { score++ }, {}, {}, {}, {}, {}, {}, {},
+                onEditScore = { _, _ -> edit++ }, onBeginDealerSelection = { dealer++ },
+                onReorderPlayers = { reorder++ }, onRequestReactivation = { state = state.copy(reactivationTarget = inactive) },
+                onCancelReactivation = { state = state.copy(reactivationTarget = null) })
+        } }
+        val card = compose.onNodeWithTag("match_player_gone")
+        card.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.match_inactive)))
+        val ancestor = hasAnyAncestor(hasTestTag("match_player_gone"))
+        compose.onNode(hasTestTag("player_total") and ancestor, useUnmergedTree = true).assertTextEquals("42")
+        compose.onNode(hasTestTag("round_score_1") and ancestor, useUnmergedTree = true).assertTextEquals("42")
+        compose.onNode(hasTestTag("round_cell_1") and ancestor, useUnmergedTree = true).assertHasNoClickAction()
+        compose.onNode(hasTestTag("player_action") and ancestor, useUnmergedTree = true).assertDoesNotExist()
+        compose.onNode(hasTestTag("dealer_hand") and ancestor, useUnmergedTree = true).assertDoesNotExist()
+        compose.onNode(hasTestTag("match_drag_gone") and ancestor, useUnmergedTree = true).assertDoesNotExist()
+        assertTrue(card.fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions).isNullOrEmpty())
+        card.performClick()
+        compose.onNodeWithText(context.getString(R.string.match_reactivate_title)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        compose.runOnIdle { assertNull(state.reactivationTarget); assertEquals(0, score + edit + dealer + reorder) }
+    }
+
+    @Test fun manageScreenBackAndTwoPlayerLimit() {
+        val players = listOf(MatchParticipant(ParticipantId("a"), PlayerId("a"), "Ana", 0, 1),
+            MatchParticipant(ParticipantId("b"), PlayerId("b"), "Bruno", 1, 1))
+        var back = 0; var selected = 0
+        compose.setContent { PontinhoTheme { ManagePlayersScreen(ManagePlayersState(players = players),
+            { back++ }, { selected++ }, {}, {}) } }
+        compose.onNodeWithTag("remove_player_a").assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.match_minimum_players)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(context.getString(R.string.match_back)).performClick()
+        compose.runOnIdle { assertEquals(1, back); assertEquals(0, selected) }
+    }
+
+    @Test fun manageScreenShowsRepositoryErrorInsideConfirmation() {
+        val player = MatchParticipant(ParticipantId("a"), PlayerId("a"), "Ana", 0, 1)
+        compose.setContent { PontinhoTheme { ManagePlayersScreen(ManagePlayersState(players = listOf(player),
+            selected = player, canRemove = true, hasError = true), {}, {}, {}, {}) } }
+        compose.onAllNodesWithText(context.getString(R.string.match_save_error)).assertCountEquals(2)
+        compose.onNodeWithText(context.getString(R.string.match_remove_title)).assertIsDisplayed()
+    }
+
+    @Test fun inactiveCardKeepsIdentityGeometryAndExposesReactivation() {
+        var active by mutableStateOf(true)
+        var taps = 0
+        compose.setContent { PontinhoTheme {
+            PlayerCard("Ana", 12, false, listOf(PlayerRoundHistory(1, RoundStatusKind.LOSS, 12)),
+                onAddScore = if (active) ({}) else null, modifier = Modifier.testTag("card"),
+                dragHandle = { androidx.compose.foundation.layout.Spacer(Modifier.size(48.dp)) },
+                isActive = active, onInactiveClick = if (active) null else ({ taps++ }))
+        } }
+        val before = compose.onNodeWithTag("player_identity", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        compose.runOnIdle { active = false }
+        val after = compose.onNodeWithTag("player_identity", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertEquals(before, after)
+        compose.onNodeWithTag("card").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.match_inactive))).performClick()
+        compose.onNodeWithTag("player_action", useUnmergedTree = true).assertDoesNotExist()
+        compose.runOnIdle { assertEquals(1, taps) }
+    }
+
+    @Test fun removalScreenRequiresConfirmation() {
+        val player = MatchParticipant(ParticipantId("a"), PlayerId("a"), "Ana", 0, 1)
+        var state by mutableStateOf(ManagePlayersState(players = listOf(player), canRemove = true))
+        var confirmed = false
+        compose.setContent { PontinhoTheme { ManagePlayersScreen(state, {}, { state = state.copy(selected = player) },
+            { state = state.copy(selected = null) }, { confirmed = true; state = state.copy(selected = null) }) } }
+        compose.onNodeWithTag("remove_player_a").performClick()
+        compose.runOnIdle { assertFalse(confirmed) }
+        compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        compose.runOnIdle { assertFalse(confirmed) }
+        compose.onNodeWithTag("remove_player_a").performClick()
+        compose.onNodeWithText(context.getString(R.string.match_remove_confirm), useUnmergedTree = true).performClick()
+        compose.runOnIdle { assertTrue(confirmed) }
+    }
+
     @get:Rule val compose = createComposeRule()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 

@@ -72,6 +72,175 @@ class RoomMatchRepositoryTest {
         bounds: NormalizedRect? = NormalizedRect(.1f, .2f, .3f, .4f),
     ) = ConfirmedCard(Card.Suited(rank, suit), confidence, corrected, bounds)
 
+    @Test fun withdrawalAndRestorationPreserveOpenRoundMembership() = runBlocking {
+        val id = create(4)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        val before = snapshot(id)
+        val leaving = before.participants[1].id
+        repo.deactivateParticipant(DeactivateParticipant(id, leaving))
+        val withdrawn = snapshot(id)
+        assertFalse(withdrawn.participants[1].isActive)
+        assertEquals(RoundEntryOrigin.WITHDRAWN, withdrawn.openRound!!.draft.entries.getValue(leaving).origin)
+        assertEquals(before.openRound!!.draft.eligibleParticipants, withdrawn.openRound!!.draft.eligibleParticipants)
+        rejected { submit(id, round, 1, 7) }
+        repo.reactivateParticipant(ReactivateParticipant(id, leaving))
+        assertTrue(snapshot(id).participants[1].isActive)
+        assertFalse(snapshot(id).openRound!!.draft.entries.containsKey(leaving))
+    }
+
+    @Test fun withdrawalCompletesRoundAndReactivationDoesNotReopenIt() = runBlocking {
+        val id = create(3)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        val leaving = snapshot(id).participants[1].id
+        repo.deactivateParticipant(DeactivateParticipant(id, leaving))
+        assertTrue(snapshot(id).rounds.single().draft.isComplete)
+        repo.reactivateParticipant(ReactivateParticipant(id, leaving))
+        assertTrue(snapshot(id).rounds.single().draft.isComplete)
+        assertEquals(RoundEntryOrigin.WITHDRAWN, snapshot(id).rounds.single().draft.entries.getValue(leaving).origin)
+    }
+
+    @Test fun minimumRosterRejectionIsAtomic() = runBlocking {
+        val id = create(2)
+        val before = snapshot(id)
+        rejected { repo.deactivateParticipant(DeactivateParticipant(id, before.participants[0].id)) }
+        assertEquals(before, snapshot(id))
+    }
+
+    @Test fun scoredDealerDepartureKeepsScoreAndRotatesDealer() = runBlocking {
+        val id = create(4)
+        val round = start(id)
+        submit(id, round, 0, 12)
+        val before = snapshot(id)
+        val dealer = before.participants[0].id
+        repo.deactivateParticipant(DeactivateParticipant(id, dealer))
+        val after = snapshot(id)
+        assertEquals(before.openRound!!.draft.entries.getValue(dealer), after.openRound!!.draft.entries.getValue(dealer))
+        assertEquals(dealer, after.openRound!!.dealerParticipantId)
+        assertEquals(after.participants[1].id, after.dealerParticipantId)
+        rejected { repo.changeDealer(ChangeDealer(id, dealer)) }
+    }
+
+    @Test fun repeatWithdrawalRestorationAndFutureMembership() = runBlocking {
+        val id = create(4)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        val leaving = snapshot(id).participants[1].id
+        repeat(2) {
+            repo.deactivateParticipant(DeactivateParticipant(id, leaving))
+            repo.reactivateParticipant(ReactivateParticipant(id, leaving))
+        }
+        repo.deactivateParticipant(DeactivateParticipant(id, leaving))
+        submit(id, round, 2, 20)
+        val next = start(id)
+        submit(id, next, 0, 2)
+        assertFalse(leaving in snapshot(id).openRound!!.draft.eligibleParticipants)
+        rejected { repo.changeDealer(ChangeDealer(id, leaving)) }
+    }
+
+    @Test fun winnerDeparturePreservesDesignation() = runBlocking {
+        val id = create(4)
+        val round = start(id)
+        val winner = snapshot(id).participants[0].id
+        designate(DesignateWinner(id, round, winner))
+        repo.deactivateParticipant(DeactivateParticipant(id, winner))
+        val after = snapshot(id)
+        assertEquals(winner, after.openRound!!.draft.designatedWinner)
+        assertFalse(after.openRound!!.draft.entries.containsKey(winner))
+    }
+
+    @Test fun withdrawalFailureRollsBackActivityAndRound() = runBlocking {
+        val id = create(4)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        val before = snapshot(id)
+        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_withdraw BEFORE INSERT ON scores WHEN NEW.origin = 'WITHDRAWN' BEGIN SELECT RAISE(ABORT, 'reject'); END")
+        try {
+            repo.deactivateParticipant(DeactivateParticipant(id, before.participants[1].id))
+            fail("Expected database failure")
+        } catch (_: android.database.sqlite.SQLiteException) { }
+        assertEquals(before, snapshot(id))
+    }
+
+    @Test fun inactiveAtFinishIsExcludedFromOutcomeAndLifetimeStatistics() = runBlocking {
+        val id = create(3)
+        val inactive = snapshot(id).participants[0].id
+        repo.deactivateParticipant(DeactivateParticipant(id, inactive))
+        val round = start(id)
+        submit(id, round, 1, 101)
+        val result = snapshot(id)
+        assertTrue(result.isFinished)
+        assertFalse(inactive in result.outcome!!.winners)
+        assertEquals(setOf(result.participants[2].id), result.outcome.winners)
+        assertEquals(listOf("Player 2", "Player 3"), repo.observeLifetimeStatistics().first().map { it.displayName })
+        rejected { repo.reactivateParticipant(ReactivateParticipant(id, inactive)) }
+    }
+
+    @Test fun reenabledAtFinishCountsScoresFromBeforeDeparture() = runBlocking {
+        val id = create(3)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        val participant = snapshot(id).participants[0].id
+        repo.deactivateParticipant(DeactivateParticipant(id, participant))
+        repo.reactivateParticipant(ReactivateParticipant(id, participant))
+        submit(id, round, 1, 101)
+        val stats = repo.observeLifetimeStatistics().first().single { it.displayName == "Player 1" }
+        assertEquals(1, stats.completedMatches)
+        assertEquals(10L, stats.points)
+    }
+
+    @Test fun lateJoinCountsPersistedMembersIncludingWithdrawn() = runBlocking {
+        val id = create(4)
+        val round = start(id)
+        submit(id, round, 0, 10)
+        repo.deactivateParticipant(DeactivateParticipant(id, snapshot(id).participants[1].id))
+        repo.addPlayerToMatch(AddPlayerToMatch(id, "late", "Late player"))
+        assertEquals(5, db.roundDao().get(round.value)!!.eligibleParticipantCount)
+        assertEquals(5, snapshot(id).openRound!!.draft.eligibleParticipants.size)
+    }
+
+    @Test fun leavingSelectedDealerBetweenRoundsAdvancesFromSelection() = runBlocking {
+        val id = create(4)
+        val roster = snapshot(id).participants
+        val round = start(id)
+        submit(id, round, 0, 1); submit(id, round, 1, 2); submit(id, round, 2, 3)
+        assertEquals(roster[1].id, snapshot(id).dealerParticipantId)
+        repo.changeDealer(ChangeDealer(id, roster[2].id))
+        repo.deactivateParticipant(DeactivateParticipant(id, roster[2].id))
+        assertEquals(roster[3].id, snapshot(id).dealerParticipantId)
+    }
+
+    @Test fun inactiveWithdrawalCannotBeRemovedAsCorrection() = runBlocking {
+        val id = create(4)
+        val roster = snapshot(id).participants
+        val round = start(id)
+        submit(id, round, 0, 1)
+        repo.deactivateParticipant(DeactivateParticipant(id, roster[1].id))
+        val before = snapshot(id)
+        rejected { repo.removeRoundEntry(RemoveRoundEntry(id, round, roster[1].id)) }
+        assertEquals(before, snapshot(id))
+        submit(id, round, 2, 2)
+        assertNotEquals(roster[1].id, snapshot(id).rounds.single().draft.designatedWinner)
+    }
+
+    @Test fun departureDuringCorrectionResolvesPausedLiveRoundBeforeResume() = runBlocking {
+        val id = create(4)
+        val roster = snapshot(id).participants
+        val first = start(id)
+        submit(id, first, 0, 1); submit(id, first, 1, 2); submit(id, first, 2, 3)
+        val later = start(id)
+        submit(id, later, 0, 4)
+        repo.removeRoundEntry(RemoveRoundEntry(id, first, roster[1].id))
+        repo.deactivateParticipant(DeactivateParticipant(id, roster[2].id))
+        submit(id, first, 1, 2)
+        val resumed = snapshot(id).openRound!!
+        assertEquals(later, resumed.id)
+        assertEquals(RoundEntryOrigin.WITHDRAWN, resumed.draft.entries.getValue(roster[2].id).origin)
+        submit(id, later, 1, 5)
+        assertNotEquals(roster[2].id, snapshot(id).rounds.last().draft.designatedWinner)
+    }
+
     @Test fun manualScoreCreatesRoundWithoutIndicator() = runBlocking {
         val id = create()
         val prepared = repo.prepareRound(PrepareRound(id))
@@ -1299,12 +1468,10 @@ class RoomMatchRepositoryTest {
         val older = create(2)
         val olderRound = start(older)
         submit(older, olderRound, 0, 101)
-        submit(older, olderRound, 1, 0)
 
         clock.time = Instant.parse("2026-10-14T12:00:00Z")
         val newer = create(2)
         val newerRound = start(newer)
-        submit(newer, newerRound, 0, 0)
         submit(newer, newerRound, 1, 101)
 
         assertEquals(listOf(

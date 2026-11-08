@@ -247,6 +247,46 @@ class RoundEngineTest {
         )
     }
 
+    @Test
+    fun `withdrawal resolves obligation and never wins`() {
+        val withdrawn = RoundEngine.withdrawParticipant(round(ana, bia, caio), ana).applied().state
+        val completed = RoundEngine.submitScore(withdrawn, bia, 5).applied().state
+        assertTrue(completed.isComplete)
+        assertEquals(caio, completed.designatedWinner)
+        assertEquals(RoundEntryOrigin.WITHDRAWN, completed.entries.getValue(ana).origin)
+        assertEquals(listOf(ana, bia, caio), completed.eligibleParticipants)
+    }
+
+    @Test
+    fun `withdrawal preserves an existing winner`() {
+        val designated = RoundEngine.designateWinner(round(ana, bia, caio), ana)
+        val withdrawn = RoundEngine.withdrawParticipant(designated, bia).applied().state
+        val completed = RoundEngine.submitScore(withdrawn, caio, 3).applied().state
+        assertEquals(ana, completed.designatedWinner)
+        assertTrue(completed.isComplete)
+    }
+
+    @Test
+    fun `withdrawing a designated winner preserves the designation and automatic zero`() {
+        val manual = RoundEngine.designateWinner(round(ana, bia, caio), ana)
+        val afterManual = RoundEngine.withdrawParticipant(manual, ana).applied().state
+        assertEquals(manual, afterManual)
+        val inferred = RoundEngine.submitScore(round(ana, bia), ana, 4).applied().state
+        val afterInferred = RoundEngine.withdrawParticipant(inferred, bia).applied().state
+        assertEquals(inferred, afterInferred)
+        assertEquals(RoundEntryOrigin.AUTOMATIC_WINNER, afterInferred.entries.getValue(bia).origin)
+    }
+
+    @Test
+    fun `withdrawal can only be restored while incomplete`() {
+        val withdrawn = RoundEngine.withdrawParticipant(round(ana, bia, caio), ana).applied().state
+        val restored = RoundEngine.restoreWithdrawnParticipant(withdrawn, ana).applied().state
+        assertFalse(restored.entries.containsKey(ana))
+        val completed = RoundEngine.submitScore(withdrawn, bia, 3).applied().state
+        assertEquals(RoundFailure.RoundAlreadyComplete, RoundEngine.restoreWithdrawnParticipant(completed, ana).rejected().failure)
+        assertEquals(RoundFailure.RoundAlreadyComplete, RoundEngine.removeEntry(completed, ana).rejected().failure)
+    }
+
     private fun round(
         first: ParticipantId,
         second: ParticipantId,

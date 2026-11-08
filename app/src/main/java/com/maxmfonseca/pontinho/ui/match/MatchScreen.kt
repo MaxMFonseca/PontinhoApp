@@ -1,12 +1,11 @@
 package com.maxmfonseca.pontinho.ui.match
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,6 +54,8 @@ fun MatchScreen(
     onRemoveIndicator: () -> Unit = {},
     onBeginDealerSelection: () -> Unit = {},
     onSelectDealer: (ParticipantId) -> Unit = {},
+    onManagePlayers: () -> Unit = {}, onRequestReactivation: (ParticipantId) -> Unit = {},
+    onCancelReactivation: () -> Unit = {}, onConfirmReactivation: () -> Unit = {},
 ) {
     val historyScroll = rememberScrollState()
     val textMeasurer = rememberTextMeasurer()
@@ -66,13 +67,13 @@ fun MatchScreen(
     var listTop by remember { mutableFloatStateOf(0f) }
     val canMove = state.canReorderPlayers && !state.isSelectingDealer && !state.isFinished && !state.isCorrectingRound &&
         state.pausedRoundNumbers.isEmpty() && !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
-    val reorderState = rememberReorderableListState(listState, state.players.map { it.id },
+    val reorderState = rememberReorderableListState(listState, state.players.filter { it.isActive }.map { it.id },
         enabled = canMove, itemKey = { it.value }, onReorder = onReorderPlayers)
     val playersById = state.players.associateBy { it.id }
-    val visualPlayers = reorderState.previewOrder?.mapNotNull { playersById[it] } ?: state.players
+    val visualPlayers = reorderState.previewOrder?.let { order -> order.mapNotNull { playersById[it] } + state.players.filter { !it.isActive } } ?: state.players
     fun movePlayer(id: ParticipantId, direction: Int) {
         if (!canMove) return
-        val order = state.players.map { it.id }.toMutableList()
+        val order = state.players.filter { it.isActive }.map { it.id }.toMutableList()
         val from = order.indexOf(id)
         val to = (from + direction).coerceIn(order.indices)
         if (from >= 0 && from != to) onReorderPlayers(order.apply { add(to, removeAt(from)) })
@@ -120,28 +121,30 @@ fun MatchScreen(
                     val dragging = reorderState.draggedKey == player.id
                     var handleTop by remember(player.id) { mutableFloatStateOf(0f) }
                     PlayerCard(player.name, player.total, player.isDealer, player.history,
-                        onAddScore = if (player.canAddScore && !state.isSaving && !state.isSelectingDealer)
+                        onAddScore = if (player.isActive && player.canAddScore && !state.isSaving && !state.isSelectingDealer)
                             ({ onAddScore(player.id) }) else null,
                         modifier = Modifier.fillMaxWidth().testTag("match_player_${player.id.value}")
                             .zIndex(if (dragging) 1f else 0f)
                             .graphicsLayer {
                                 translationY = reorderState.translationY(player.id)
                             }
-                            .semantics { customActions = if (canMove) buildList {
+                            .semantics { customActions = if (canMove && player.isActive) buildList {
                                 if (index > 0) add(CustomAccessibilityAction(up) { movePlayer(player.id, -1); true })
-                                if (index < state.players.lastIndex) add(CustomAccessibilityAction(down) { movePlayer(player.id, 1); true })
+                                if (index < state.players.count { it.isActive } - 1) add(CustomAccessibilityAction(down) { movePlayer(player.id, 1); true })
                             } else emptyList() },
                         historyScrollState = historyScroll, showScoreAction = !state.isFinished,
                         historyColumnWidth = columnWidth,
-                        onEditScore = if (!state.isSaving) ({ onEditScore(player.id, it) }) else null,
-                        dealerSelectionActive = state.isSelectingDealer,
+                        onEditScore = if (!state.isSaving && player.isActive) ({ onEditScore(player.id, it) }) else null,
+                        dealerSelectionActive = state.isSelectingDealer && player.isActive,
+                        isActive = player.isActive,
+                        onInactiveClick = if (!player.isActive && state.canManagePlayers) ({ onRequestReactivation(player.id) }) else null,
                         onDealerClick = when {
-                            state.isSelectingDealer -> ({ onSelectDealer(player.id) })
-                            player.isDealer && state.canChangeDealer -> onBeginDealerSelection
+                            state.isSelectingDealer && player.isActive -> ({ onSelectDealer(player.id) })
+                            player.isActive && player.isDealer && state.canChangeDealer -> onBeginDealerSelection
                             else -> null
                         },
                         dragHandle = {
-                            ImmediateDragHandle(canMove, dragLabel,
+                            if (!player.isActive) Spacer(Modifier.size(48.dp)) else ImmediateDragHandle(canMove, dragLabel,
                                 onDragStart = { offset ->
                                     reorderState.startDrag(player.id, handleTop + offset.y)
                                 },
@@ -152,15 +155,37 @@ fun MatchScreen(
                                     .onGloballyPositioned { handleTop = it.positionInRoot().y - listTop })
                         })
                 }
-                if (!state.isFinished) item(key = "add_player") {
-                    OutlinedButton(onClick = onAddPlayer, enabled = state.canAddPlayer && !state.isSelectingDealer,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("match_add_player")) {
-                        Icon(Icons.Filled.Add, null, Modifier.padding(end = 8.dp))
-                        Text(stringResource(R.string.setup_add_player))
+                if (!state.isFinished) item(key = "player_actions") {
+                    val addEnabled = state.canAddPlayer && !state.isSelectingDealer
+                    val addColor = MaterialTheme.colorScheme.primary
+                    val removeColor = MaterialTheme.colorScheme.error
+                    Row(Modifier.fillMaxWidth().testTag("match_player_actions"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onAddPlayer, enabled = addEnabled,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = addColor,
+                                disabledContentColor = addColor.copy(alpha = 0.38f)),
+                            border = BorderStroke(1.dp, addColor.copy(alpha = if (addEnabled) 1f else 0.38f)),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("match_add_player")) {
+                            Text(stringResource(R.string.setup_add_player), maxLines = 1)
+                        }
+                        OutlinedButton(onClick = onManagePlayers, enabled = state.canManagePlayers,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = removeColor,
+                                disabledContentColor = removeColor.copy(alpha = 0.38f)),
+                            border = BorderStroke(1.dp, removeColor.copy(alpha = if (state.canManagePlayers) 1f else 0.38f)),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("match_remove_player")) {
+                            Text(stringResource(R.string.match_remove_player), maxLines = 1)
+                        }
                     }
                 }
             }
         }
+    }
+    state.reactivationTarget?.let { player ->
+        AlertDialog(onDismissRequest = onCancelReactivation,
+            title = { Text(stringResource(R.string.match_reactivate_title)) },
+            text = { Column { Text(stringResource(R.string.match_reactivate_message, player.name)); if (state.hasError) Text(stringResource(R.string.match_save_error), color = MaterialTheme.colorScheme.error) } },
+            confirmButton = { TextButton(onClick = onConfirmReactivation, enabled = !state.isSaving) { Text(stringResource(R.string.match_reactivate_confirm)) } },
+            dismissButton = { TextButton(onClick = onCancelReactivation, enabled = !state.isSaving) { Text(stringResource(R.string.cancel)) } })
     }
     state.picker?.let { picker ->
         JokerPicker(picker.selectedRank, picker.selectedColor, state.isSaving, state.hasError,

@@ -18,6 +18,20 @@ import java.time.LocalDate
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ResultsViewModelTest {
+    @Test fun inactivePlayersAreExcludedBeforeRankingActivePlayers() = runTest {
+        val original = finishedSnapshot(listOf(0, 10, 101, 200))
+        val participants = original.participants.mapIndexed { i, p -> p.copy(isActive = i != 0 && i != 3) }
+        val active = original.copy(participants = participants, outcome = MatchOutcome(
+            setOf(participants[1].id), setOf(participants[2].id), 10, 101))
+        val vm = ResultsViewModel(active.id, ResultRepository(active), StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertEquals(listOf("Bruno", "Diego"), vm.uiState.value.players.map { it.displayName })
+        assertEquals(listOf(10, 101), vm.uiState.value.players.map { it.total })
+        assertEquals(listOf(1, 2), vm.uiState.value.players.map { it.rank })
+        assertTrue(vm.uiState.value.players[0].isWinner)
+        assertTrue(vm.uiState.value.players[1].isHighestPenalty)
+    }
+
     @Test fun fixedFixtureRanksAscendingAndNeverCelebratesHighestPenalty() = runTest {
         val repo = ResultRepository(finishedSnapshot())
         val vm = ResultsViewModel(MatchId("result"), repo, StandardTestDispatcher(testScheduler))

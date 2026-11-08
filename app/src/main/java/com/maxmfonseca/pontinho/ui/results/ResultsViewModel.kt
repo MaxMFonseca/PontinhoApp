@@ -32,7 +32,7 @@ class ResultsViewModel(
                 if (match == null) {
                     mutableUiState.value = mutableUiState.value.copy(isLoading = false, isFinished = false)
                 } else {
-                    val ordered = match.participants.map { participant ->
+                    val ordered = match.participants.filter { it.isActive }.map { participant ->
                         participant to match.totals.getValue(participant.id)
                     }.sortedWith(compareBy<Pair<com.maxmfonseca.pontinho.domain.model.MatchParticipant, Int>> { it.second }
                         .thenBy { it.first.rosterOrder })

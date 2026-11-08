@@ -70,7 +70,7 @@ class MatchViewModel(
 
     fun addScore(participantId: ParticipantId) {
         val state = uiState.value
-        if (state.isSaving || state.picker != null || state.scoreDialog != null || state.playerName != null ||
+        if (state.isSaving || state.picker != null || state.scoreDialog != null || state.playerName != null || state.reactivationTarget != null ||
             state.players.none { it.id == participantId && it.canAddScore }) return
         val match = snapshot ?: return
         val round = match.openRound
@@ -141,7 +141,7 @@ class MatchViewModel(
 
     fun selectDealer(participantId: ParticipantId) {
         val state = uiState.value
-        if (!state.canChangeDealer || !state.isSelectingDealer || state.players.none { it.id == participantId }) return
+        if (!state.canChangeDealer || !state.isSelectingDealer || state.players.none { it.id == participantId && it.isActive }) return
         updateState { it.copy(isSelectingDealer = false, hasError = false) }
         if (state.players.singleOrNull { it.isDealer }?.id == participantId) return
         scope.launch {
@@ -239,7 +239,7 @@ class MatchViewModel(
 
     fun editJoker(roundNumber: Int) {
         val state = uiState.value
-        if (state.isSaving || state.picker != null || state.scoreDialog != null || state.playerName != null) return
+        if (state.isSaving || state.picker != null || state.scoreDialog != null || state.playerName != null || state.reactivationTarget != null) return
         val slot = state.jokers.singleOrNull { it.roundNumber == roundNumber } ?: return
         if (slot.roundId == null) {
             prepareCurrentRound { openPicker(it.id, it.ordinal, it.indicator, PickerPurpose.EDIT) }
@@ -337,6 +337,24 @@ class MatchViewModel(
         if (uiState.value.isFinished) eventChannel.trySend(MatchEvent.OpenResults(matchId))
     }
 
+    fun requestReactivation(id: ParticipantId) {
+        val state = uiState.value
+        if (!state.canManagePlayers) return
+        val player = state.players.singleOrNull { it.id == id && !it.isActive } ?: return
+        updateState { it.copy(reactivationTarget = player, hasError = false) }
+    }
+
+    fun cancelReactivation() {
+        if (!uiState.value.isSaving) updateState { it.copy(reactivationTarget = null, hasError = false) }
+    }
+
+    fun confirmReactivation() {
+        val state = uiState.value
+        val target = state.reactivationTarget ?: return
+        if (state.isSaving || !canManageMatch() || state.players.none { it.id == target.id && !it.isActive }) return
+        mutate(preservePrepared = true) { repository.reactivateParticipant(ReactivateParticipant(matchId, target.id)) }
+    }
+
     fun openAddPlayer() {
         val state = uiState.value
         if (!state.canAddPlayer) return
@@ -376,7 +394,7 @@ class MatchViewModel(
     fun movePlayer(id: ParticipantId, direction: Int) {
         val state = uiState.value
         if (!state.canReorderPlayers || direction == 0) return
-        val order = state.players.map { it.id }.toMutableList()
+        val order = state.players.filter { it.isActive }.map { it.id }.toMutableList()
         val from = order.indexOf(id)
         if (from < 0) return
         val to = (from.toLong() + direction).coerceIn(0, order.lastIndex.toLong()).toInt()
@@ -388,17 +406,18 @@ class MatchViewModel(
     fun reorderPlayers(orderedParticipantIds: List<ParticipantId>) {
         val state = uiState.value
         if (!state.canReorderPlayers) return
-        val committed = state.players.map { it.id }
+        val committed = state.players.filter { it.isActive }.map { it.id }
         if (orderedParticipantIds.size != committed.size || orderedParticipantIds.toSet() != committed.toSet() || orderedParticipantIds == committed) return
         mutate(preservePrepared = true) { repository.reorderParticipants(ReorderParticipants(matchId, orderedParticipantIds.toList())) }
     }
 
     fun editScore(id: ParticipantId, ordinal: Int) {
         val state = uiState.value
-        if (state.isSaving || state.picker != null || state.scoreDialog != null || state.playerName != null) return
+        if (state.isSaving || state.picker != null || state.scoreDialog != null || state.playerName != null || state.reactivationTarget != null) return
         val round = snapshot?.rounds?.singleOrNull { it.ordinal == ordinal } ?: return
-        if (id !in round.draft.eligibleParticipants) return
+        if (state.players.none { it.id == id && it.isActive } || id !in round.draft.eligibleParticipants) return
         val entry = round.draft.entries[id]
+        if (entry?.origin == RoundEntryOrigin.WITHDRAWN) return
         if (entry == null && (round.status != RoundStatus.OPEN || state.isFinished)) return
         prepared = null
         openDialog(id, round.id, ordinal, round.indicator, entry == null && round.draft.winner == null)
@@ -423,7 +442,7 @@ class MatchViewModel(
                 if (!preservePrepared) prepared = null
                 addPlayerToken = null
                 submittedPlayerName = null
-                updateState { it.copy(playerName = null, scoreDialog = null, picker = null, duplicateNameError = false) }
+                updateState { it.copy(playerName = null, scoreDialog = null, picker = null, reactivationTarget = null, duplicateNameError = false) }
                 render()
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: DuplicatePlayerNameException) {
@@ -486,7 +505,7 @@ class MatchViewModel(
             if (betweenRounds && !match.isFinished) it + RoundJokerUi(prepared?.id, prepared?.ordinal ?: nextOrdinal, prepared?.indicator)
             else it
         }
-        val players = match.participants.sortedBy { it.rosterOrder }.map { participant ->
+        val players = match.participants.sortedWith(compareBy<MatchParticipant> { !it.isActive }.thenBy { it.rosterOrder }).map { participant ->
             val history = match.rounds.sortedBy { it.ordinal }.map { round ->
                 val entry = round.draft.entries[participant.id]
                 val status = when {
@@ -497,7 +516,7 @@ class MatchViewModel(
                     else -> RoundStatusKind.PENDING
                 }
                 PlayerRoundHistory(round.ordinal, status, entry?.points,
-                    participant.id in round.draft.eligibleParticipants &&
+                    participant.isActive && entry?.origin != RoundEntryOrigin.WITHDRAWN && participant.id in round.draft.eligibleParticipants &&
                         (entry != null || round.status == RoundStatus.OPEN && !match.isFinished))
             }.let { history ->
                 if (betweenRounds && !match.isFinished) history + PlayerRoundHistory(nextOrdinal, RoundStatusKind.EMPTY, null)
@@ -507,19 +526,25 @@ class MatchViewModel(
                 else participant.eligibleFromRoundOrdinal <= ordinal
             MatchPlayer(participant.id, participant.displayName, match.totals[participant.id] ?: 0,
                 participant.id == match.dealerParticipantId, history,
-                !match.isFinished && eligible && (open != null || betweenRounds) &&
-                    open?.draft?.entries?.containsKey(participant.id) != true && open?.draft?.designatedWinner != participant.id)
+                participant.isActive && !match.isFinished && eligible && (open != null || betweenRounds) &&
+                    open?.draft?.entries?.containsKey(participant.id) != true && open?.draft?.designatedWinner != participant.id, participant.isActive)
         }
         updateState { old -> old.copy(isLoading = false, isMissing = false,
             players = players, roundNumber = ordinal, indicator = open?.indicator ?: prepared?.indicator,
             isFinished = match.isFinished, phase = phase, jokers = jokers,
             pausedRoundNumbers = match.pausedRounds.map { it.ordinal }, isCorrectingRound = open?.isCorrection == true,
             playerName = old.playerName.takeIf { canJoinMatch() },
+            reactivationTarget = old.reactivationTarget?.takeIf { target -> canManageMatch() && match.participants.any { it.id == target.id && !it.isActive } },
             picker = old.picker.takeUnless { match.isFinished && it?.purpose == PickerPurpose.CAMERA },
-            scoreDialog = old.scoreDialog?.takeUnless { match.isFinished && !it.isCorrection && activeScanToken == null }?.let { dialog ->
+            scoreDialog = old.scoreDialog?.takeUnless { dialog ->
+                match.isFinished && !dialog.isCorrection && activeScanToken == null ||
+                    match.rounds.singleOrNull { it.id == dialog.roundId }?.draft?.entries?.get(dialog.participantId)?.origin == RoundEntryOrigin.WITHDRAWN
+            }?.let { dialog ->
                 dialog.copy(wentOutEnabled = !dialog.isCorrection && if (dialog.roundId == open?.id) open.draft.winner == null else dialog.wentOutEnabled)
             }) }
     }
+
+    private fun canManageMatch(): Boolean = snapshot?.let { !it.isFinished && it.openRound?.isCorrection != true } == true
 
     private fun canJoinMatch(): Boolean = snapshot?.let { match ->
         !match.isFinished && match.pausedRounds.isEmpty() && match.openRound?.isCorrection != true
@@ -528,12 +553,13 @@ class MatchViewModel(
     private fun updateState(transform: (MatchUiState) -> MatchUiState) {
         mutableUiState.update { old ->
             val state = transform(old)
-            val idle = !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null
+            val idle = !state.isSaving && state.playerName == null && state.picker == null && state.scoreDialog == null && state.reactivationTarget == null
             val canChangeDealer = canJoinMatch() && snapshot?.openRound == null && idle
             state.copy(
                 scoreDialog = state.scoreDialog?.let { dialog -> dialog.copy(canScan = recognitionEnabled() &&
                     !dialog.readOnly && (dialog.indicator == null || scannerContext(dialog)?.resolve(snapshot) != null)) },
                 canAddPlayer = canJoinMatch() && idle,
+                canManagePlayers = canManageMatch() && idle && !state.isSelectingDealer,
                 canReorderPlayers = canJoinMatch() && snapshot?.openRound == null && idle,
                 canChangeDealer = canChangeDealer,
                 isSelectingDealer = state.isSelectingDealer && canChangeDealer,

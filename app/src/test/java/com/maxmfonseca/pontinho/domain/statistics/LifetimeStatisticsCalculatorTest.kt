@@ -93,6 +93,18 @@ class LifetimeStatisticsCalculatorTest {
         ), result)
     }
 
+    @Test fun excludesInactiveAtFinishAndCountsActiveParticipantWholeMatch() {
+        val original = match("activity", "2026-10-14T12:00:00Z", listOf("Ana" to 25, "Bruno" to 110, "Carla" to 15), setOf(2))
+        val final = original.copy(participants = original.participants.mapIndexed { index, player ->
+            player.copy(isActive = index != 0)
+        })
+
+        assertEquals(listOf(
+            LifetimePlayerStatistics(PlayerNameKey("bruno"), "Bruno", 1, 0, 110L),
+            LifetimePlayerStatistics(PlayerNameKey("carla"), "Carla", 1, 1, 15L),
+        ), calculateLifetimeStatistics(listOf(final)))
+    }
+
     private fun match(
         id: String,
         createdAt: String,

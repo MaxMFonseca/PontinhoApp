@@ -32,6 +32,7 @@ class FakeMatchRepository(
     private val updateScanBlock: (suspend (UpdateScannedScore) -> Unit)? = null,
     val lifetimeStatistics: MutableStateFlow<List<LifetimePlayerStatistics>> = MutableStateFlow(emptyList()),
 ) : MatchRepository {
+    val match = MutableStateFlow<MatchSnapshot?>(null)
     val createdCommands = mutableListOf<CreateMatch>()
     val submittedScans = mutableListOf<SubmitScannedScore>()
     val updatedScans = mutableListOf<UpdateScannedScore>()
@@ -39,10 +40,22 @@ class FakeMatchRepository(
     override fun observeHome(): Flow<List<DaySummary>> = home
     override fun observeLifetimeStatistics(completedDateRange: CompletedDateRange): Flow<List<LifetimePlayerStatistics>> = lifetimeStatistics
     override fun observeDay(localDate: LocalDate): Flow<DayHistory> = MutableStateFlow(DayHistory(localDate, emptyList(), emptyList(), emptyList()))
-    override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = MutableStateFlow(null)
+    override fun observeMatch(matchId: MatchId): Flow<MatchSnapshot?> = match
     override suspend fun createMatch(command: CreateMatch): MatchId {
         createdCommands += command
         return createBlock?.invoke(command) ?: createdMatchId
+    }
+    override suspend fun deactivateParticipant(command: DeactivateParticipant) {
+        val current = requireNotNull(match.value)
+        require(current.id == command.matchId && !current.isFinished && current.participants.count { it.isActive } > 2)
+        require(current.participants.any { it.id == command.participantId && it.isActive })
+        match.value = current.copy(participants = current.participants.map { if (it.id == command.participantId) it.copy(isActive = false) else it })
+    }
+    override suspend fun reactivateParticipant(command: ReactivateParticipant) {
+        val current = requireNotNull(match.value)
+        require(current.id == command.matchId && !current.isFinished)
+        require(current.participants.any { it.id == command.participantId && !it.isActive })
+        match.value = current.copy(participants = current.participants.map { if (it.id == command.participantId) it.copy(isActive = true) else it })
     }
     override suspend fun addParticipant(command: AddParticipant) = unsupported()
     override suspend fun deleteMatch(matchId: MatchId) = unsupported()

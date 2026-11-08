@@ -7,6 +7,7 @@ import androidx.room.Room
 import com.maxmfonseca.pontinho.data.local.PontinhoDatabase
 import com.maxmfonseca.pontinho.data.local.MIGRATION_1_2
 import com.maxmfonseca.pontinho.data.local.MIGRATION_2_3
+import com.maxmfonseca.pontinho.data.local.MIGRATION_3_4
 import com.maxmfonseca.pontinho.data.repository.RoomMatchRepository
 import com.maxmfonseca.pontinho.data.repository.RoomPlayerRepository
 import com.maxmfonseca.pontinho.domain.repository.MatchRepository
@@ -36,7 +37,7 @@ class DefaultAppContainer internal constructor(
         applicationContext,
         PontinhoDatabase::class.java,
         "pontinho.db",
-    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
 
     private val preferencesDataStore = PreferenceDataStoreFactory.create {
         applicationContext.preferencesDataStoreFile("app_preferences")

@@ -8,20 +8,29 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import com.maxmfonseca.pontinho.PontinhoApplication
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.di.AppContainer
-import com.maxmfonseca.pontinho.domain.model.PlayerNameKey
+import com.maxmfonseca.pontinho.domain.model.*
+import java.time.Instant
+import java.time.LocalDate
+import com.maxmfonseca.pontinho.domain.repository.MatchSnapshot
 import com.maxmfonseca.pontinho.domain.repository.MatchRepository
+import com.maxmfonseca.pontinho.domain.repository.DeactivateParticipant
 import com.maxmfonseca.pontinho.domain.statistics.CompletedDateRange
 import com.maxmfonseca.pontinho.domain.statistics.LifetimePlayerStatistics
 import com.maxmfonseca.pontinho.ui.theme.PontinhoTheme
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -29,6 +38,46 @@ import org.junit.Rule
 import org.junit.Test
 
 class NavigationMotionTest {
+    @Test fun matchManagementRouteRoundTripsIdAndReturnsToMatch() {
+        lateinit var controller: NavHostController
+        val id = "m/a +%25"
+        val players = listOf("Ana", "Bruno", "Carla").mapIndexed { i, name ->
+            MatchParticipant(ParticipantId("p$i"), PlayerId("u$i"), name, i, 1)
+        }
+        val snapshot = MatchSnapshot(MatchId(id), LocalDate.of(2026, 10, 14), "America/Sao_Paulo",
+            Instant.EPOCH, Instant.EPOCH, players, emptyList(), players.associate { it.id to 0 },
+            players[0].id, false, null, null, 0, 0)
+        val match = MutableStateFlow(snapshot)
+        val applicationContainer = (compose.activity.application as PontinhoApplication).container
+        val repo = object : MatchRepository by applicationContainer.matchRepository {
+            override fun observeMatch(matchId: MatchId) = match
+            override suspend fun deactivateParticipant(command: DeactivateParticipant) {
+                match.update { current -> current.copy(participants = current.participants.map { participant ->
+                    if (participant.id == command.participantId) participant.copy(isActive = false) else participant
+                }) }
+            }
+        }
+        val container = object : AppContainer by applicationContainer { override val matchRepository = repo }
+        compose.setContent { PontinhoTheme(reducedMotion = true) {
+            controller = rememberNavController()
+            PontinhoNavHost(container, navController = controller)
+        } }
+        compose.runOnUiThread { controller.navigate(Destination.Match.createRoute(id)) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("match_player_p0").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("match_players").performScrollToNode(hasTestTag("match_remove_player"))
+        compose.onNodeWithTag("match_remove_player").performClick()
+        compose.waitUntil(5_000) { controller.currentDestination?.route == Destination.ManagePlayers.route }
+        compose.runOnUiThread {
+            assertEquals(id, controller.currentBackStackEntry?.arguments?.getString(Destination.ManagePlayers.MATCH_ID))
+        }
+        compose.onNodeWithTag("remove_player_p0").assertIsDisplayed()
+        compose.onNodeWithTag("remove_player_p0").performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.match_remove_confirm)).performClick()
+        compose.waitUntil(5_000) { controller.currentDestination?.route == Destination.Match.route }
+        compose.runOnUiThread { assertEquals(Destination.Match.route, controller.currentDestination?.route) }
+        compose.onNodeWithTag("match_root").assertIsDisplayed()
+    }
+
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun homeLearnBackFadesThroughWithin150msWithoutDuplicateDestinations() {
