@@ -22,7 +22,18 @@ not require an account, ads, analytics, or an internet connection.
 
 ## Camera-assisted scoring
 
-The scanner is the project's main feature. From a player's score dialog, tap
+Card scanning is experimental and disabled by default. To enable it:
+
+1. Open **Settings** from the home screen.
+2. Select **About**, then **How card scanning works**.
+3. Read the experimental-use notice and enable **Experimental card scanning**.
+
+The camera action will then appear in the score dialog during a match. You can
+disable it again from the same screen at any time.
+
+The scanner is the project's main feature, but it remains disabled by default
+for now because the current model was trained on a limited range of decks and
+is not yet reliable enough for general use. From a player's score dialog, tap
 the camera action, choose the round's wildcard, and photograph every card left
 in the hand. Pontinho runs the bundled 52-class detector locally with LiteRT,
 maps the detections back to the photo, removes duplicate boxes, applies the
