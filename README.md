@@ -10,9 +10,14 @@ not require an account, ads, analytics, or an internet connection.
 
 <p align="center">
   <img src="docs/images/camera-card-scan.jpeg" alt="Pontinho scanning playing cards on a real device" width="220">
-  <img src="docs/images/round-scoring.jpeg" alt="Pontinho round scoring screen" width="220">
-  <img src="docs/images/match-results.jpeg" alt="Pontinho final match results" width="220">
-  <img src="docs/images/daily-history.jpeg" alt="Pontinho daily match history" width="220">
+  <img src="docs/images/home.png" alt="Pontinho home screen with recent matches" width="220">
+  <img src="docs/images/statistics.png" alt="Pontinho lifetime player statistics in dark mode" width="220">
+</p>
+
+<p align="center">
+  <img src="docs/images/day-history.png" alt="Pontinho daily match history" width="220">
+  <img src="docs/images/match-details.png" alt="Pontinho finished match details" width="220">
+  <img src="docs/images/match-result.png" alt="Pontinho final match result" width="220">
 </p>
 
 ## Camera-assisted scoring
