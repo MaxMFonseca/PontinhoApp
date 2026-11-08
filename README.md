@@ -20,6 +20,13 @@ not require an account, ads, analytics, or an internet connection.
   <img src="docs/images/match-result.png" alt="Pontinho final match result" width="220">
 </p>
 
+## Availability
+
+Pontinho is currently in closed testing and is not yet available to the
+general public. A public release is planned. Once available, you will be able
+to download it from
+[Google Play](https://play.google.com/store/apps/details?id=com.maxmfonseca.pontinho).
+
 ## Camera-assisted scoring
 
 Card scanning is experimental and disabled by default. To enable it:
