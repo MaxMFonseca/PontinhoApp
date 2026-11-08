@@ -31,6 +31,35 @@ import java.util.Locale
 class ResultsScreenTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun resultCardPlacesRankAndNameLeftAndRawScoreRight() {
+        composeRule.setContent {
+            ResultsScreen(
+                state = ResultsUiState(
+                    matchId = MatchId("result"),
+                    players = listOf(ResultPlayer(PlayerId("ana"), "Ana", 42, 1, true, false)),
+                    isFinished = true,
+                    isLoading = false,
+                ),
+                onNewMatch = {}, onOpenMatch = {}, onOpenHistory = {},
+            )
+        }
+
+        val cardBounds = composeRule.onNodeWithTag("result_player_ana").fetchSemanticsNode().boundsInRoot
+        val identityBounds = composeRule.onNode(
+            hasText("1. Ana") and hasAnyAncestor(hasTestTag("result_player_ana")),
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val scoreBounds = composeRule.onNode(
+            hasText("42") and hasAnyAncestor(hasTestTag("result_player_ana")),
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val inset = with(composeRule.density) { 16.dp.toPx() }
+
+        assertEquals(cardBounds.left + inset, identityBounds.left, 1f)
+        assertEquals(cardBounds.right - inset, scoreBounds.right, 1f)
+        assertEquals(identityBounds.center.y, scoreBounds.center.y, 1f)
+    }
+
     @Test fun tiedExtremesAndAllActionsRemainReachableAcrossLocalesThemesAndFontScales() {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         var scenario by mutableStateOf(Triple("pt-BR", ThemePreference.LIGHT, 1f))

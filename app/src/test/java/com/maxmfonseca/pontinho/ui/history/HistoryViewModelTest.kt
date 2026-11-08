@@ -61,7 +61,7 @@ class HistoryViewModelTest {
         assertEquals(MatchId("delete"), vm.uiState.value.pendingDeleteMatchId)
 
         // Projection updates during the write must not be overwritten by local state changes.
-        day.value = day.value.copy(penalties = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 220)))
+        day.value = day.value.copy(penalties = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 220, 2)))
         runCurrent()
         commit.complete(Unit)
         runCurrent()
@@ -131,8 +131,8 @@ class HistoryViewModelTest {
                 HistoryMatch(MatchId("new"), 200L, true, listOf(HistoryPlayer(PlayerId("shared"), "Julia2", 110, false, true))),
                 HistoryMatch(MatchId("old"), 100L, true, listOf(HistoryPlayer(PlayerId("shared"), "Julia", 33, true, false))),
             ),
-            wins = listOf(DailyStanding(PlayerNameKey("julia"), "Julia", 1), DailyStanding(PlayerNameKey("max"), "Max", 1), DailyStanding(PlayerNameKey("julia2"), "Julia2", 0)),
-            penalties = listOf(DailyStanding(PlayerNameKey("julia2"), "Julia2", 110), DailyStanding(PlayerNameKey("max"), "Max", 110), DailyStanding(PlayerNameKey("julia"), "Julia", 33)),
+            wins = listOf(DailyStanding(PlayerNameKey("julia"), "Julia", 1, 1), DailyStanding(PlayerNameKey("max"), "Max", 1, 1), DailyStanding(PlayerNameKey("julia2"), "Julia2", 0, 1)),
+            penalties = listOf(DailyStanding(PlayerNameKey("julia2"), "Julia2", 110, 1), DailyStanding(PlayerNameKey("max"), "Max", 110, 1), DailyStanding(PlayerNameKey("julia"), "Julia", 33, 1)),
         ))
         val vm = HistoryViewModel(date, HistoryRepository(day), StandardTestDispatcher(testScheduler))
         runCurrent()
@@ -158,8 +158,8 @@ class HistoryViewModelTest {
                 HistoryMatch(MatchId("new"), 200L, true, listOf(HistoryPlayer(PlayerId("a"), "Ana", 48, true, false))),
                 HistoryMatch(MatchId("old"), 100L, false, listOf(HistoryPlayer(PlayerId("b"), "Bruno", 12, false, false))),
             ),
-            wins = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 2)),
-            penalties = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 112)),
+            wins = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 2, 2)),
+            penalties = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 112, 2)),
         )
         val repo = HistoryRepository(MutableStateFlow(projection))
         val vm = HistoryViewModel(date, repo, StandardTestDispatcher(testScheduler))
@@ -180,8 +180,8 @@ private fun deletionDay() = DayHistory(
         HistoryMatch(MatchId("delete"), 200L, true, listOf(HistoryPlayer(PlayerId("a"), "Ana", 110, true, true))),
         HistoryMatch(MatchId("keep"), 100L, false, listOf(HistoryPlayer(PlayerId("b"), "Bruno", 0, false, false))),
     ),
-    listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 1)),
-    listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 110)),
+    listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 1, 1)),
+    listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 110, 1)),
 )
 
 private class HistoryRepository(

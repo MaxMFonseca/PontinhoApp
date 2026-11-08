@@ -784,20 +784,23 @@ class RoomMatchRepository(
             )
         }
         val completed = historyMatches.filter { it.isFinished }
+        val completedPlayers = completed.flatMap { it.players }
         val names = buildMap {
             // Matches are newest first, so the first snapshot is the player's latest display name.
-            completed.flatMap { it.players }.forEach { putIfAbsent(PlayerNameKey.from(it.displayName), it.displayName) }
+            completedPlayers.forEach { putIfAbsent(PlayerNameKey.from(it.displayName), it.displayName) }
         }
+        val matchesByPlayer = completedPlayers.map { PlayerNameKey.from(it.displayName) }
+            .groupingBy { it }.eachCount()
         val winsByPlayer = completed.flatMap { match -> match.players.filter { it.isWinner }.map { PlayerNameKey.from(it.displayName) } }
             .groupingBy { it }.eachCount()
         val wins = names.map { (id, displayName) ->
-            DailyStanding(id, displayName, winsByPlayer[id] ?: 0)
+            DailyStanding(id, displayName, winsByPlayer[id] ?: 0, matchesByPlayer.getValue(id))
         }
             .sortedWith(compareByDescending<DailyStanding> { it.value }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
                 .thenBy { it.displayName }.thenBy { it.playerKey.value })
-        val penalties = completed.flatMap { it.players }.groupBy { PlayerNameKey.from(it.displayName) }
-            .map { (id, entries) -> DailyStanding(id, names.getValue(id), entries.sumOf { it.total }) }
+        val penalties = completedPlayers.groupBy { PlayerNameKey.from(it.displayName) }
+            .map { (id, entries) -> DailyStanding(id, names.getValue(id), entries.sumOf { it.total }, entries.size) }
             .sortedWith(compareByDescending<DailyStanding> { it.value }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
                 .thenBy { it.displayName }.thenBy { it.playerKey.value })

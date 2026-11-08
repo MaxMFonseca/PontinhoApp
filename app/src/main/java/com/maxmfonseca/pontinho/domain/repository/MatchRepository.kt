@@ -109,7 +109,14 @@ data class HistoryMatch(
     val timeZoneId: String = "UTC",
 )
 
-data class DailyStanding(val playerKey: PlayerNameKey, val displayName: String, val value: Int)
+data class DailyStanding(
+    val playerKey: PlayerNameKey,
+    val displayName: String,
+    val value: Int,
+    val completedMatches: Int,
+) {
+    init { require(completedMatches > 0) { "Daily standings require at least one completed match" } }
+}
 
 data class DayHistory(
     val localDate: LocalDate,

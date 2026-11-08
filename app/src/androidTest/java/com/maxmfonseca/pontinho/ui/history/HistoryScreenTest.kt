@@ -38,6 +38,78 @@ import java.util.Locale
 class HistoryScreenTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun matchCardPlacesPlayerNameLeftAndScoreRight() {
+        composeRule.setContent {
+            HistoryScreen(
+                state = HistoryUiState(
+                    localDate = LocalDate.parse("2026-10-14"),
+                    matches = listOf(HistoryMatch(MatchId("match"), 0, true, listOf(
+                        HistoryPlayer(PlayerId("ana"), "Ana", 42, true, false),
+                    ))),
+                    isLoading = false,
+                ),
+                onBack = {}, onSettings = {}, onNewMatch = {}, onOpenMatch = {}, onToggleSummary = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_0"))
+        val cardBounds = composeRule.onNodeWithTag("history_match_0").fetchSemanticsNode().boundsInRoot
+        val nameBounds = composeRule.onNode(
+            hasText("Ana") and hasAnyAncestor(hasTestTag("history_match_0")),
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val scoreBounds = composeRule.onNode(
+            hasText("42") and hasAnyAncestor(hasTestTag("history_match_0")),
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val inset = with(composeRule.density) { 16.dp.toPx() }
+
+        assertEquals(cardBounds.left + inset, nameBounds.left, 1f)
+        assertEquals(cardBounds.right - inset, scoreBounds.right, 1f)
+        assertEquals(nameBounds.center.y, scoreBounds.center.y, 1f)
+    }
+
+    @SuppressLint("RestrictedApi")
+    @Test fun dailySummaryFormatsWinsAndTotalPointsAcrossLocales() {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        var locale by mutableStateOf("pt-BR")
+        composeRule.setContent {
+            val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
+                setLocale(Locale.forLanguageTag(locale))
+            })
+            CompositionLocalProvider(LocalContext provides localized, LocalResources provides localized.resources,
+                LocalProvidableLocaleList provides androidx.compose.ui.text.intl.LocaleList(locale)) {
+                PontinhoTheme { HistoryScreen(HistoryUiState(LocalDate.parse("2026-10-14"),
+                    wins = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 1, 2)),
+                    penalties = listOf(DailyStanding(PlayerNameKey("ana"), "Ana", 111, 2)),
+                    summaryExpanded = true, isLoading = false), {}, {}, {}, {}, {}) }
+            }
+        }
+        for ((tag, wins, points, label) in listOf(
+            listOf("pt-BR", "1/2 (50,0%)", "111 (55,5)", "Pontos totais"),
+            listOf("en-US", "1/2 (50.0%)", "111 (55.5)", "Total points"),
+        )) {
+            composeRule.runOnIdle { locale = tag }
+            composeRule.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+            composeRule.onNodeWithTag("daily_wins_ana").performScrollTo().assertTextEquals(wins, "Ana")
+            composeRule.onNodeWithTag("daily_points_ana").performScrollTo().assertTextEquals(points, "Ana")
+            for ((rowTag, value) in listOf("daily_wins_ana" to wins, "daily_points_ana" to points)) {
+                val rowBounds = composeRule.onNodeWithTag(rowTag).fetchSemanticsNode().boundsInRoot
+                val nameBounds = composeRule.onNode(
+                    hasText("Ana") and hasAnyAncestor(hasTestTag(rowTag)),
+                    useUnmergedTree = true,
+                ).fetchSemanticsNode().boundsInRoot
+                val valueBounds = composeRule.onNode(
+                    hasText(value) and hasAnyAncestor(hasTestTag(rowTag)),
+                    useUnmergedTree = true,
+                ).fetchSemanticsNode().boundsInRoot
+                assertEquals("$rowTag should anchor the name to the left", rowBounds.left, nameBounds.left, 1f)
+                assertEquals("$rowTag should anchor the value to the right", rowBounds.right, valueBounds.right, 1f)
+                assertTrue("$rowTag should place the name before the value", nameBounds.left < valueBounds.left)
+            }
+        }
+    }
+
     @SuppressLint("RestrictedApi") // Compose explicitly exposes this locale provider for tests.
     @Test fun metricsSnapshotsAndActionsAreReachableAcrossLocalesThemesAndFontScales() {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
@@ -56,8 +128,8 @@ class HistoryScreenTest {
                             HistoryMatch(MatchId("first"), 2, true, listOf(HistoryPlayer(PlayerId("a"), "Julia", 33, true, false))),
                             HistoryMatch(MatchId("second"), 1, true, listOf(HistoryPlayer(PlayerId("a"), "Julia2", 110, false, true))),
                         ),
-                        wins = listOf(DailyStanding(PlayerNameKey("julia"), "Julia", 1), DailyStanding(PlayerNameKey("max"), "Max", 1), DailyStanding(PlayerNameKey("julia2"), "Julia2", 0)),
-                        penalties = listOf(DailyStanding(PlayerNameKey("julia2"), "Julia2", 110), DailyStanding(PlayerNameKey("max"), "Max", 110), DailyStanding(PlayerNameKey("julia"), "Julia", 33)),
+                        wins = listOf(DailyStanding(PlayerNameKey("julia"), "Julia", 1, 1), DailyStanding(PlayerNameKey("max"), "Max", 1, 1), DailyStanding(PlayerNameKey("julia2"), "Julia2", 0, 1)),
+                        penalties = listOf(DailyStanding(PlayerNameKey("julia2"), "Julia2", 110, 1), DailyStanding(PlayerNameKey("max"), "Max", 110, 1), DailyStanding(PlayerNameKey("julia"), "Julia", 33, 1)),
                         summaryExpanded = true, isLoading = false),
                         { calls += "back" }, { calls += "settings" }, { calls += "new" }, { calls += it.value }, { calls += "toggle" })
                 } } }
@@ -85,7 +157,9 @@ class HistoryScreenTest {
             root.performScrollToNode(hasTestTag("history_match_0"))
             val time = LocalTime.MIDNIGHT.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(Locale.forLanguageTag(locale)))
             composeRule.onNodeWithTag("history_match_0").assertTextContains("$time · ${localized.getString(R.string.history_in_progress)}")
-            composeRule.onNodeWithText("Julia2 999").performScrollTo().assertIsDisplayed()
+            composeRule.onNode(
+                hasTestTag("history_player_a") and hasAnyAncestor(hasTestTag("history_match_0")),
+            ).performScrollTo().assertIsDisplayed().assertTextEquals("Julia2", "999")
             composeRule.onNodeWithTag("history_delete_active").assertContentDescriptionEquals(localized.getString(R.string.history_delete_description, time))
             composeRule.onNodeWithText(localized.getString(R.string.history_provisional), useUnmergedTree = true).assertDoesNotExist()
             if (locale == "en-US" && theme == ThemePreference.DARK && scale == 2f) capture("task6-history-compact-en-dark-200.png")
@@ -112,14 +186,14 @@ class HistoryScreenTest {
                 state = HistoryUiState(
                     localDate = LocalDate.parse("2026-10-14"), summaryExpanded = true, isLoading = false,
                     wins = listOf(
-                        DailyStanding(PlayerNameKey("julia"), "Julia", 1),
-                        DailyStanding(PlayerNameKey("max"), "Max", 1),
-                        DailyStanding(PlayerNameKey("julia2"), "Julia2", 0),
+                        DailyStanding(PlayerNameKey("julia"), "Julia", 1, 1),
+                        DailyStanding(PlayerNameKey("max"), "Max", 1, 1),
+                        DailyStanding(PlayerNameKey("julia2"), "Julia2", 0, 1),
                     ),
                     penalties = listOf(
-                        DailyStanding(PlayerNameKey("julia2"), "Julia2", 110),
-                        DailyStanding(PlayerNameKey("max"), "Max", 110),
-                        DailyStanding(PlayerNameKey("julia"), "Julia", 33),
+                        DailyStanding(PlayerNameKey("julia2"), "Julia2", 110, 1),
+                        DailyStanding(PlayerNameKey("max"), "Max", 110, 1),
+                        DailyStanding(PlayerNameKey("julia"), "Julia", 33, 1),
                     ),
                 ), {}, {}, {}, {}, {},
             )
@@ -131,7 +205,11 @@ class HistoryScreenTest {
             composeRule.onNodeWithTag("daily_${metric}_card").performScrollTo().assertExists()
             for ((key, name, value) in rows) {
                 val row = composeRule.onNode(hasTestTag("daily_${metric}_$key") and hasAnyAncestor(hasTestTag("daily_${metric}_card")))
-                row.performScrollTo().assertIsDisplayed().assertTextEquals(value.toString(), name)
+                row.performScrollTo().assertIsDisplayed()
+                val texts = row.fetchSemanticsNode().config[SemanticsProperties.Text].map { it.text }
+                assertTrue("$key should retain its display name", name in texts)
+                val valuePrefix = if (metric == "wins") "$value/" else "$value ("
+                assertTrue("$key should retain its $metric value", texts.any { it.startsWith(valuePrefix) })
             }
         }
     }
@@ -152,8 +230,8 @@ class HistoryScreenTest {
                             HistoryPlayer(PlayerId("e"), "Eva", 48, true, false),
                         )),
                     ),
-                    wins = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 1)),
-                    penalties = listOf(DailyStanding(PlayerNameKey("carla"), "Carla", 112)),
+                    wins = listOf(DailyStanding(PlayerNameKey("bruno"), "Bruno", 1, 1)),
+                    penalties = listOf(DailyStanding(PlayerNameKey("carla"), "Carla", 112, 1)),
                     summaryExpanded = true,
                     isLoading = false,
                 ),
@@ -163,18 +241,21 @@ class HistoryScreenTest {
         }
         composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_0"))
         composeRule.onNodeWithText(context.getString(R.string.history_provisional), useUnmergedTree = true).assertDoesNotExist()
-        composeRule.onNodeWithText("Ana 112", useUnmergedTree = true).assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+        composeRule.onNodeWithTag("history_player_a").assertTextEquals("Ana", "112")
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
         composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_1"))
-        for (name in listOf("Carla 112", "Dora 112")) {
-            composeRule.onNodeWithText(name).performScrollTo().assertIsDisplayed().assert(
+        for ((id, name) in listOf("c" to "Carla", "d" to "Dora")) {
+            composeRule.onNodeWithTag("history_player_$id").performScrollTo().assertIsDisplayed()
+                .assertTextEquals(name, "112").assert(
                 SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_highest_penalty)))
         }
-        for (name in listOf("Bruno 48", "Eva 48")) {
-            composeRule.onNodeWithText(name).performScrollTo().assertIsDisplayed().assert(
+        for ((id, name) in listOf("b" to "Bruno", "e" to "Eva")) {
+            composeRule.onNodeWithTag("history_player_$id").performScrollTo().assertIsDisplayed()
+                .assertTextEquals(name, "48").assert(
                 SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_winner)))
         }
-        val positions = listOf("Carla 112", "Dora 112", "Bruno 48", "Eva 48").map {
-            composeRule.onNodeWithText(it, useUnmergedTree = true).fetchSemanticsNode().positionInRoot.y
+        val positions = listOf("c", "d", "b", "e").map {
+            composeRule.onNodeWithTag("history_player_$it").fetchSemanticsNode().positionInRoot.y
         }
         assertTrue(positions.zipWithNext().all { (first, second) -> first < second })
         for (label in listOf(R.string.results_winner, R.string.results_highest_penalty)) {
@@ -198,8 +279,10 @@ class HistoryScreenTest {
                 )))), {}, {}, {}, {}, {})
         }
         composeRule.onNodeWithTag("history_root").performScrollToNode(hasTestTag("history_match_0"))
-        for (name in listOf("Ana 110", "Bia 110")) composeRule.onNodeWithText(name).assert(
-            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_winner)))
+        for ((id, name) in listOf("a" to "Ana", "b" to "Bia")) {
+            composeRule.onNodeWithTag("history_player_$id").assertTextEquals(name, "110").assert(
+                SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, context.getString(R.string.results_winner)))
+        }
     }
 
     @Test fun pendingDeletionShowsConfirmationAndSavingDisablesActions() {

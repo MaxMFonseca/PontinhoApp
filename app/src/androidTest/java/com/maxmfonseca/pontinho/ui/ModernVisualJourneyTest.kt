@@ -197,7 +197,7 @@ class ModernVisualJourneyTest {
                 {}, {}, {}, {}, {}, {}, {}, {}, {})
             "results" -> ResultsScreen(ResultsUiState(MatchId("match"), today, listOf(ResultPlayer(PlayerId("julia"), "Julia", 33, 1, true, false), ResultPlayer(PlayerId("max"), "Max", 110, 2, false, true)), isFinished = true, isLoading = false), {}, {}, {})
             "history" -> HistoryScreen(HistoryUiState(today, matches = listOf(HistoryMatch(MatchId("match"), 0, true, listOf(HistoryPlayer(PlayerId("julia"), "Julia", 33, true, false), HistoryPlayer(PlayerId("max"), "Max", 110, false, true)))),
-                wins = listOf(DailyStanding(PlayerNameKey.from("Julia"), "Julia", 1)), penalties = listOf(DailyStanding(PlayerNameKey.from("Max"), "Max", 110)), summaryExpanded = true, isLoading = false), {}, {}, {}, {}, {})
+                wins = listOf(DailyStanding(PlayerNameKey.from("Julia"), "Julia", 1, 1)), penalties = listOf(DailyStanding(PlayerNameKey.from("Max"), "Max", 110, 1)), summaryExpanded = true, isLoading = false), {}, {}, {}, {}, {})
             "settings" -> SettingsScreen({}, {}, {}, {}, {})
             "appearance" -> AppearanceScreen(AppPreferences(), {}, {})
             "language" -> LanguageScreen(LanguagePreference.SYSTEM, {}, {})

@@ -15,7 +15,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.maxmfonseca.pontinho.R
 import com.maxmfonseca.pontinho.ui.components.PontinhoTopBar
@@ -52,12 +55,13 @@ fun ResultsScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 border = BorderStroke(1.dp, if (player.isWinner || player.isHighestPenalty) accent else MaterialTheme.colorScheme.outlineVariant),
                 shape = MaterialTheme.shapes.large) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                        Text(player.rank.toString(), style = MaterialTheme.typography.titleMedium, color = accent)
-                        Text(player.displayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    }
-                    Text(stringResource(R.string.results_total, player.total), style = MaterialTheme.typography.titleLarge,
+                Row(Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(buildAnnotatedString {
+                        withStyle(SpanStyle(color = accent)) { append("${player.rank}. ") }
+                        append(player.displayName)
+                    }, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Text(player.total.toString(), style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold, color = accent)
                 }
             }

@@ -1368,7 +1368,9 @@ class RoomMatchRepositoryTest {
             day.wins.map { it.playerKey },
         )
         assertEquals(listOf(2, 2, 0, 0), day.wins.map { it.value })
+        assertEquals(listOf(2, 2, 2, 2), day.wins.map { it.completedMatches })
         assertEquals(listOf(213, 168, 58, 58), day.penalties.map { it.value })
+        assertEquals(listOf(2, 2, 2, 2), day.penalties.map { it.completedMatches })
         assertEquals(PlayerNameKey("carla"), day.penalties.first().playerKey)
         assertEquals("America/Sao_Paulo", day.matches[1].timeZoneId)
         assertTrue(repo.observeDay(LocalDate.parse("2026-10-14")).first().matches.isEmpty())

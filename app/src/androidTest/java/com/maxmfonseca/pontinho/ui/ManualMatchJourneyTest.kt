@@ -24,6 +24,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import java.io.FileInputStream
+import java.text.NumberFormat
 
 /** Real navigation + file-backed repositories. Literal totals catch historical identity relabeling. */
 class ManualMatchJourneyTest {
@@ -142,9 +143,28 @@ class ManualMatchJourneyTest {
         compose.onNodeWithText(text(R.string.results_back_history)).performScrollTo().performClick()
         await("history_root")
         compose.onNodeWithTag("daily_summary_toggle").performScrollTo().performClick()
-        for ((name, wins, points) in listOf(Triple("julia", 1, 33), Triple("max", 1, 110), Triple("julia2", 0, 110))) {
-            compose.onNodeWithTag("daily_wins_$name").performScrollTo().assertTextContains(text(R.string.history_metric_value, text(R.string.history_wins), wins))
-            compose.onNodeWithTag("daily_points_$name").performScrollTo().assertTextContains(text(R.string.history_metric_value, text(R.string.history_penalties), points))
+        val locale = compose.activity.resources.configuration.locales[0]
+        val percentFormat = NumberFormat.getPercentInstance(locale).apply {
+            minimumFractionDigits = 1
+            maximumFractionDigits = 1
+        }
+        val averageFormat = NumberFormat.getNumberInstance(locale).apply {
+            minimumFractionDigits = 1
+            maximumFractionDigits = 1
+            isGroupingUsed = false
+        }
+        data class ExpectedDailyStanding(val name: String, val wins: Int, val games: Int, val points: Int)
+        for ((name, wins, games, points) in listOf(
+            ExpectedDailyStanding("julia", 1, 1, 33),
+            ExpectedDailyStanding("max", 1, 2, 110),
+            ExpectedDailyStanding("julia2", 0, 1, 110),
+        )) {
+            val winRate = percentFormat.format(wins.toDouble() / games)
+            val averagePoints = averageFormat.format(points.toDouble() / games)
+            compose.onNodeWithTag("daily_wins_$name").performScrollTo()
+                .assertTextContains(text(R.string.history_wins_value, wins, games, winRate))
+            compose.onNodeWithTag("daily_points_$name").performScrollTo()
+                .assertTextContains(text(R.string.history_points_value, points, averagePoints))
         }
         capture("journey-daily-summary")
         compose.activityRule.scenario.recreate()
@@ -258,17 +278,22 @@ class ManualMatchJourneyTest {
         waitForScoreDialogToClose()
     }
     private fun openScore(name: String, indicator: Boolean) {
-        val action = hasContentDescription(text(R.string.match_add_score, name)) and isEnabled()
-        // A restored/new destination can exist before its repository-backed controls are ready.
-        compose.waitUntil(10_000) { compose.onAllNodes(action).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNode(action).performScrollTo().performClick()
         if (indicator) {
+            val currentJokerTag = compose.onAllNodes(hasTestTagPrefix("joker_round_"), true)
+                .fetchSemanticsNodes()
+                .mapNotNull { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag) }
+                .maxBy { it.removePrefix("joker_round_").toInt() }
+            compose.onNodeWithTag(currentJokerTag, true).performClick()
             compose.onAllNodes(hasTestTagPrefix("indicator_rank_"), true).assertCountEquals(13)
             compose.onAllNodes(hasTestTagPrefix("indicator_color_"), true).assertCountEquals(2)
             compose.onNodeWithTag("indicator_rank_ACE").performClick()
             compose.onNodeWithTag("indicator_color_RED").performClick()
             compose.onNodeWithText(text(R.string.confirm)).performClick()
         }
+        val action = hasContentDescription(text(R.string.match_add_score, name)) and isEnabled()
+        // A restored/new destination can exist before its repository-backed controls are ready.
+        compose.waitUntil(10_000) { compose.onAllNodes(action).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(action).performScrollTo().performClick()
         await("score_input")
         compose.onNodeWithTag("score_input").assertIsFocused()
     }

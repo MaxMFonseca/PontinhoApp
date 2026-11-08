@@ -69,8 +69,9 @@
     <string name="history_daily_summary">Daily summary</string>
     <string name="history_wins">Victories</string>
     <string name="history_metric_value">%1$s: %2$d</string>
-    <string name="results_total">Points: %1$d</string>
-    <string name="history_penalties">Accumulated points</string>
+    <string name="history_penalties">Total points</string>
+    <string name="history_wins_value">%1$d/%2$d (%3$s)</string>
+    <string name="history_points_value">%1$d (%2$s)</string>
     <string name="history_summary_empty">No matches have finished yet.</string>
     <string name="history_empty">No matches on this day.</string>
     <string name="history_completed">Finished</string>

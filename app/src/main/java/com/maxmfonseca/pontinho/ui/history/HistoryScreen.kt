@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLocale
@@ -21,10 +22,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.maxmfonseca.pontinho.R
@@ -37,6 +35,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.text.NumberFormat
 import java.util.Locale
 
 @Composable
@@ -139,6 +138,16 @@ fun HistoryScreen(
 private fun DailyMetricCard(rows: List<DailyStanding>, victories: Boolean) {
     val metric = if (victories) "wins" else "points"
     val label = stringResource(if (victories) R.string.history_wins else R.string.history_penalties)
+    val locale = Locale.forLanguageTag(LocalLocale.current.toLanguageTag())
+    val percentFormat = remember(locale) { NumberFormat.getPercentInstance(locale).apply {
+        minimumFractionDigits = 1
+        maximumFractionDigits = 1
+    } }
+    val averageFormat = remember(locale) { NumberFormat.getNumberInstance(locale).apply {
+        minimumFractionDigits = 1
+        maximumFractionDigits = 1
+        isGroupingUsed = false
+    } }
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth().testTag("daily_${metric}_card"),
         colors = CardDefaults.cardColors(
             containerColor = if (victories) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer,
@@ -150,11 +159,15 @@ private fun DailyMetricCard(rows: List<DailyStanding>, victories: Boolean) {
                 Text(label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
             }
             rows.forEach { row ->
+                val value = if (victories) stringResource(R.string.history_wins_value, row.value,
+                    row.completedMatches, percentFormat.format(row.value.toDouble() / row.completedMatches))
+                else stringResource(R.string.history_points_value, row.value,
+                    averageFormat.format(row.value.toDouble() / row.completedMatches))
                 Row(Modifier.fillMaxWidth().testTag("daily_${metric}_${row.playerKey.value}").semantics(mergeDescendants = true) {},
                     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.value.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.widthIn(min = 24.dp))
                     Text(row.displayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.widthIn(min = 24.dp))
                 }
             }
         }
@@ -200,14 +213,19 @@ private fun HistoryMatchCard(
                     R.string.results_highest_penalty -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurface
                 }
-                Text(buildAnnotatedString {
-                    withStyle(SpanStyle(color = nameColor)) { append(player.displayName) }
-                    append(" ")
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(player.total.toString()) }
-                }, style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().testTag("history_player_${player.playerId.value}")
+                        .semantics(mergeDescendants = true) {
                         if (resultDescription != null) stateDescription = resultDescription
-                    })
+                    },
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(player.displayName, style = MaterialTheme.typography.titleLarge, color = nameColor,
+                        modifier = Modifier.weight(1f))
+                    Text(player.total.toString(), style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

@@ -68,8 +68,9 @@
     <string name="history_daily_summary">Resumo do dia</string>
     <string name="history_wins">Vitórias</string>
     <string name="history_metric_value">%1$s: %2$d</string>
-    <string name="results_total">Pontos: %1$d</string>
-    <string name="history_penalties">Pontos acumulados</string>
+    <string name="history_penalties">Pontos totais</string>
+    <string name="history_wins_value">%1$d/%2$d (%3$s)</string>
+    <string name="history_points_value">%1$d (%2$s)</string>
     <string name="history_summary_empty">Nenhuma partida foi encerrada ainda.</string>
     <string name="history_empty">Nenhuma partida neste dia.</string>
     <string name="history_completed">Encerrada</string>
